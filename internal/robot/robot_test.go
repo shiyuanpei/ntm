@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Dicklesworthstone/ntm/internal/config"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
 )
 
@@ -804,7 +805,7 @@ func TestPrintTailWithPaneFilter(t *testing.T) {
 // ====================
 
 func TestPrintSnapshot(t *testing.T) {
-	output, err := captureStdout(t, PrintSnapshot)
+	output, err := captureStdout(t, func() error { return PrintSnapshot(config.Default()) })
 	if err != nil {
 		t.Fatalf("PrintSnapshot failed: %v", err)
 	}
@@ -841,7 +842,7 @@ func TestPrintSnapshotWithSession(t *testing.T) {
 	}
 	defer tmux.KillSession(sessionName)
 
-	output, err := captureStdout(t, PrintSnapshot)
+	output, err := captureStdout(t, func() error { return PrintSnapshot(config.Default()) })
 	if err != nil {
 		t.Fatalf("PrintSnapshot failed: %v", err)
 	}
