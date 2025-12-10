@@ -160,6 +160,8 @@ release:
 
 brews:
   - name: ntm
+    ids:
+      - default  # Use only the tarball archives, not the binary archives
     repository:
       owner: Dicklesworthstone
       name: homebrew-tap
