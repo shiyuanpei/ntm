@@ -23,6 +23,10 @@ func IsInstalled() bool {
 	return err == nil
 }
 
+// WorkDir is the working directory for bv commands.
+// If empty, uses current directory.
+var WorkDir string
+
 // run executes bv with given args and returns stdout
 func run(args ...string) (string, error) {
 	if !IsInstalled() {
@@ -30,6 +34,9 @@ func run(args ...string) (string, error) {
 	}
 
 	cmd := exec.Command("bv", args...)
+	if WorkDir != "" {
+		cmd.Dir = WorkDir
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -118,6 +125,9 @@ func CheckDrift() DriftResult {
 	}
 
 	cmd := exec.Command("bv", "-check-drift")
+	if WorkDir != "" {
+		cmd.Dir = WorkDir
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

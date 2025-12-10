@@ -1,8 +1,22 @@
 package bv
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+func init() {
+	// Find project root (walk up until we find .beads)
+	dir, _ := os.Getwd()
+	for dir != "/" {
+		if _, err := os.Stat(filepath.Join(dir, ".beads")); err == nil {
+			WorkDir = dir
+			break
+		}
+		dir = filepath.Dir(dir)
+	}
+}
 
 func TestIsInstalled(t *testing.T) {
 	// This test verifies the function works - actual result depends on environment
