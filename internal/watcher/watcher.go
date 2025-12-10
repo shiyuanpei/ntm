@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,6 +72,14 @@ type Handler func(events []Event)
 // ErrorHandler is called when a watch error occurs.
 type ErrorHandler func(err error)
 
+// fileMeta stores file metadata for poll-based change detection.
+type fileMeta struct {
+	ModTime time.Time
+	Size    int64
+	Mode    os.FileMode
+	IsDir   bool
+}
+
 // Watcher watches files and directories for changes.
 type Watcher struct {
 	fsWatcher    *fsnotify.Watcher
@@ -79,6 +88,12 @@ type Watcher struct {
 	errorHandler ErrorHandler
 	eventFilter  EventType
 	recursive    bool
+
+	// Poll mode fields (for environments where fsnotify is unavailable)
+	polling      bool
+	pollInterval time.Duration
+	closeCh      chan struct{}
+	snapshots    map[string]fileMeta
 
 	mu            sync.Mutex
 	watchedPaths  map[string]bool
@@ -152,6 +167,24 @@ func WithRecursive(recursive bool) Option {
 func WithErrorHandler(handler ErrorHandler) Option {
 	return func(w *Watcher) {
 		w.errorHandler = handler
+	}
+}
+
+// WithPolling enables poll-based watching instead of fsnotify.
+// Useful for environments where fsnotify is unavailable (network filesystems, etc).
+func WithPolling(enabled bool) Option {
+	return func(w *Watcher) {
+		w.polling = enabled
+	}
+}
+
+// WithPollInterval sets the interval between polls when polling mode is enabled.
+// Default is 500ms if not specified.
+func WithPollInterval(d time.Duration) Option {
+	return func(w *Watcher) {
+		if d > 0 {
+			w.pollInterval = d
+		}
 	}
 }
 
@@ -294,6 +327,21 @@ func (w *Watcher) run() {
 	}
 }
 
+// runPoll processes events by periodically scanning watched paths when fsnotify is unavailable.
+func (w *Watcher) runPoll() {
+	ticker := time.NewTicker(w.pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			w.pollOnce()
+		case <-w.closeCh:
+			return
+		}
+	}
+}
+
 // handleEvent processes a single fsnotify event.
 func (w *Watcher) handleEvent(fsEvent fsnotify.Event) {
 	eventType := eventTypeFromFsnotify(fsEvent.Op)
@@ -354,4 +402,169 @@ func (w *Watcher) handleEvent(fsEvent fsnotify.Event) {
 			w.handler(toDeliver)
 		}
 	})
+}
+
+// pollOnce scans watched paths and emits events for changes since the last scan.
+func (w *Watcher) pollOnce() {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return
+	}
+	paths := make([]string, 0, len(w.watchedPaths))
+	for p := range w.watchedPaths {
+		paths = append(paths, p)
+	}
+	snapshots := make(map[string]fileMeta, len(w.snapshots))
+	for k, v := range w.snapshots {
+		snapshots[k] = v
+	}
+	w.mu.Unlock()
+
+	var events []Event
+
+	for _, root := range paths {
+		current, err := snapshotEntries(root, w.recursive)
+		if err != nil {
+			if w.errorHandler != nil {
+				w.errorHandler(err)
+			}
+			continue
+		}
+
+		// Detect creates and updates
+		for path, meta := range current {
+			prev, ok := snapshots[path]
+			if !ok {
+				if Create&w.eventFilter != 0 {
+					events = append(events, Event{Path: path, Type: Create, IsDir: meta.IsDir})
+				}
+				snapshots[path] = meta
+				continue
+			}
+
+			eventType := EventType(0)
+			if meta.ModTime != prev.ModTime || meta.Size != prev.Size {
+				eventType |= Write
+			}
+			if meta.Mode != prev.Mode {
+				eventType |= Chmod
+			}
+			if eventType != 0 {
+				if eventType&w.eventFilter != 0 {
+					events = append(events, Event{Path: path, Type: eventType, IsDir: meta.IsDir})
+				}
+				snapshots[path] = meta
+			}
+		}
+
+		// Detect removals
+		for path, prev := range snapshots {
+			if !(path == root || strings.HasPrefix(path, root+string(os.PathSeparator))) {
+				continue
+			}
+			if _, ok := current[path]; !ok {
+				if Remove&w.eventFilter != 0 {
+					events = append(events, Event{Path: path, Type: Remove, IsDir: prev.IsDir})
+				}
+				delete(snapshots, path)
+			}
+		}
+	}
+
+	if len(events) == 0 {
+		return
+	}
+
+	w.mu.Lock()
+	// Persist updated snapshots
+	w.snapshots = snapshots
+	w.pendingEvents = append(w.pendingEvents, events...)
+	w.mu.Unlock()
+
+	w.debouncer.Trigger(func() {
+		w.mu.Lock()
+		toDeliver := w.pendingEvents
+		w.pendingEvents = nil
+		w.mu.Unlock()
+
+		if len(toDeliver) > 0 && w.handler != nil {
+			w.handler(toDeliver)
+		}
+	})
+}
+
+// snapshotPath seeds the snapshot map for a newly added path in polling mode.
+func (w *Watcher) snapshotPath(path string, info os.FileInfo) error {
+	entries, err := entriesForPath(path, info, w.recursive)
+	if err != nil {
+		return err
+	}
+	for p, meta := range entries {
+		w.snapshots[p] = meta
+	}
+	return nil
+}
+
+// snapshotEntries returns the current metadata for the watched root (and children if recursive).
+func snapshotEntries(root string, recursive bool) (map[string]fileMeta, error) {
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	return entriesForPath(root, info, recursive)
+}
+
+func entriesForPath(root string, info os.FileInfo, recursive bool) (map[string]fileMeta, error) {
+	entries := make(map[string]fileMeta)
+
+	add := func(path string, fi os.FileInfo) {
+		entries[path] = fileMeta{
+			ModTime: fi.ModTime(),
+			Size:    fi.Size(),
+			Mode:    fi.Mode(),
+			IsDir:   fi.IsDir(),
+		}
+	}
+
+	add(root, info)
+
+	if !info.IsDir() {
+		return entries, nil
+	}
+
+	if recursive {
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if path == root {
+				return nil
+			}
+			fi, statErr := d.Info()
+			if statErr != nil {
+				return statErr
+			}
+			add(path, fi)
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return entries, nil
+	}
+
+	// Non-recursive: include immediate children
+	dirEntries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range dirEntries {
+		fi, statErr := d.Info()
+		if statErr != nil {
+			return nil, statErr
+		}
+		add(filepath.Join(root, d.Name()), fi)
+	}
+	return entries, nil
 }
