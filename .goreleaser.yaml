@@ -217,16 +217,7 @@ nfpms:
         file_info:
           mode: 0644
     scripts:
-      postinstall: |
-        echo ""
-        echo "NTM installed successfully!"
-        echo ""
-        echo "Add to your shell rc file:"
-        echo '  eval "$(ntm init bash)"  # for bash'
-        echo '  eval "$(ntm init zsh)"   # for zsh'
-        echo ""
-        echo "Run 'ntm tutorial' to get started!"
-        echo ""
+      postinstall: scripts/postinstall.sh
 
 # Scoop manifest for Windows users (via WSL)
 scoops:
