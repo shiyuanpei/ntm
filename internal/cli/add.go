@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Dicklesworthstone/ntm/internal/checkpoint"
+	"github.com/Dicklesworthstone/ntm/internal/config"
 	"github.com/Dicklesworthstone/ntm/internal/output"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
 	"github.com/spf13/cobra"

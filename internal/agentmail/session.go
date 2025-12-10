@@ -58,12 +58,32 @@ func LoadSessionAgent(sessionName, projectKey string) (*SessionAgentInfo, error)
 		if os.IsNotExist(err) {
 			// Legacy fallback (pre-namespacing)
 			legacyPath := sessionAgentPath(sessionName, "")
-			data, err = os.ReadFile(legacyPath)
-			if err != nil {
-				if os.IsNotExist(err) {
-					return nil, nil // No agent registered yet
+			if data, err = os.ReadFile(legacyPath); err != nil {
+				if !os.IsNotExist(err) {
+					return nil, fmt.Errorf("reading session agent: %w", err)
 				}
-				return nil, fmt.Errorf("reading session agent: %w", err)
+				// Search for any project-scoped agent.json under the session dir
+				configDir, cfgErr := os.UserConfigDir()
+				if cfgErr != nil {
+					configDir = filepath.Join(os.Getenv("HOME"), ".config")
+				}
+				sessionDir := filepath.Join(configDir, "ntm", "sessions", sessionName)
+				entries, _ := os.ReadDir(sessionDir)
+				for _, entry := range entries {
+					if !entry.IsDir() {
+						continue
+					}
+					candidate := filepath.Join(sessionDir, entry.Name(), "agent.json")
+					if candidateData, readErr := os.ReadFile(candidate); readErr == nil {
+						data = candidateData
+						path = candidate
+						break
+					}
+				}
+				// Still not found
+				if data == nil {
+					return nil, nil
+				}
 			}
 			path = legacyPath
 		} else {
