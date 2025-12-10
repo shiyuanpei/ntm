@@ -13,7 +13,7 @@ func (c *Client) Search(ctx context.Context, opts SearchOptions) (*SearchRespons
 
 	// Build arguments for: cass robot search <query> [flags]
 	args := []string{"robot", "search", opts.Query}
-	
+
 	if opts.Limit > 0 {
 		args = append(args, fmt.Sprintf("--limit=%d", opts.Limit))
 	}
@@ -29,7 +29,28 @@ func (c *Client) Search(ctx context.Context, opts SearchOptions) (*SearchRespons
 	if opts.Since != "" {
 		args = append(args, fmt.Sprintf("--since=%s", opts.Since))
 	}
-	
+	if opts.Until != "" {
+		args = append(args, fmt.Sprintf("--until=%s", opts.Until))
+	}
+	if opts.Cursor != "" {
+		args = append(args, fmt.Sprintf("--cursor=%s", opts.Cursor))
+	}
+	if opts.Fields != "" {
+		args = append(args, fmt.Sprintf("--fields=%s", opts.Fields))
+	}
+	if opts.MaxTokens > 0 {
+		args = append(args, fmt.Sprintf("--max-tokens=%d", opts.MaxTokens))
+	}
+	if opts.Aggregate != "" {
+		args = append(args, fmt.Sprintf("--aggregate=%s", opts.Aggregate))
+	}
+	if opts.Explain {
+		args = append(args, "--explain")
+	}
+	if opts.Highlight {
+		args = append(args, "--highlight")
+	}
+
 	output, err := c.executor.Run(ctx, args...)
 	if err != nil {
 		return nil, err
@@ -41,4 +62,24 @@ func (c *Client) Search(ctx context.Context, opts SearchOptions) (*SearchRespons
 	}
 
 	return &response, nil
+}
+
+// SearchQuick performs a simple search with defaults
+func (c *Client) SearchQuick(ctx context.Context, query string) (*SearchResponse, error) {
+	return c.Search(ctx, SearchOptions{
+		Query:  query,
+		Limit:  10,
+		Fields: "summary",
+	})
+}
+
+// SearchForContext searches for relevant past context
+func (c *Client) SearchForContext(ctx context.Context, query, workspace string) (*SearchResponse, error) {
+	return c.Search(ctx, SearchOptions{
+		Query:     query,
+		Workspace: workspace,
+		Since:     "30d",
+		Limit:     5,
+		Fields:    "summary",
+	})
 }

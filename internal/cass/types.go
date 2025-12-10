@@ -226,5 +226,12 @@ type SearchOptions struct {
 	Agent     string
 	Workspace string
 	Since     string // e.g., "7d", "24h"
-	Json      bool   // Always true for robot mode interactions
+	Until     string // e.g., "now", "2025-01-01"
+	Cursor    string
+	Fields    string
+	MaxTokens int
+	Aggregate string
+	Explain   bool
+	Highlight bool
+	Json      bool // Always true for robot mode interactions
 }
