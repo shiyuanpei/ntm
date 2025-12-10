@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/Dicklesworthstone/ntm/internal/agentmail"
@@ -167,12 +168,12 @@ Examples:
   ntm status myproject`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatus(args[0])
+			return runStatus(cmd.OutOrStdout(), args[0])
 		},
 	}
 }
 
-func runStatus(session string) error {
+func runStatus(w io.Writer, session string) error {
 	// Helper for JSON error output
 	outputError := func(err error) error {
 		if IsJSONOutput() {
@@ -290,21 +291,21 @@ func runStatus(session string) error {
 	const reset = "\033[0m"
 	const bold = "\033[1m"
 
-	fmt.Println()
+	fmt.Fprintln(w)
 
 	// Header with icon
-	fmt.Printf("  %s%s%s %s%s%s%s\n", primary, ic.Session, reset, bold, session, reset, text)
-	fmt.Printf("  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
-	fmt.Println()
+	fmt.Fprintf(w, "  %s%s%s %s%s%s%s\n", primary, ic.Session, reset, bold, session, reset, text)
+	fmt.Fprintf(w, "  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
+	fmt.Fprintln(w)
 
 	// Directory info
-	fmt.Printf("  %s%s Directory:%s %s%s%s\n", subtext, ic.Folder, reset, text, dir, reset)
-	fmt.Printf("  %s%s Panes:%s    %s%d%s\n", subtext, ic.Pane, reset, text, len(panes), reset)
-	fmt.Println()
+	fmt.Fprintf(w, "  %s%s Directory:%s %s%s%s\n", subtext, ic.Folder, reset, text, dir, reset)
+	fmt.Fprintf(w, "  %s%s Panes:%s    %s%d%s\n", subtext, ic.Pane, reset, text, len(panes), reset)
+	fmt.Fprintln(w)
 
 	// Panes section
-	fmt.Printf("  %sPanes%s\n", bold, reset)
-	fmt.Printf("  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
+	fmt.Fprintf(w, "  %sPanes%s\n", bold, reset)
+	fmt.Fprintf(w, "  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
 
 	ccCount, codCount, gmiCount, otherCount := 0, 0, 0, 0
 
@@ -367,7 +368,7 @@ func runStatus(session string) error {
 		}
 
 		// Pane info with status
-		fmt.Printf("  %s%s %s%s %-18s%s %s│%s %s%-10s%s %s│%s %s%-8s%s\n",
+		fmt.Fprintf(w, "  %s%s %s%s %-18s%s %s│%s %s%-10s%s %s│%s %s%-8s%s\n",
 			num,
 			stateIcon,
 			typeColor, typeIcon, p.Title, reset,
@@ -377,31 +378,31 @@ func runStatus(session string) error {
 			stateColor, stateText, reset)
 	}
 
-	fmt.Printf("  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
-	fmt.Println()
+	fmt.Fprintf(w, "  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
+	fmt.Fprintln(w)
 
 	// Agent summary with icons
-	fmt.Printf("  %sAgents%s\n", bold, reset)
+	fmt.Fprintf(w, "  %sAgents%s\n", bold, reset)
 
 	if ccCount > 0 {
-		fmt.Printf("    %s%s Claude%s  %s%d instance(s)%s\n", claude, ic.Claude, reset, text, ccCount, reset)
+		fmt.Fprintf(w, "    %s%s Claude%s  %s%d instance(s)%s\n", claude, ic.Claude, reset, text, ccCount, reset)
 	}
 	if codCount > 0 {
-		fmt.Printf("    %s%s Codex%s   %s%d instance(s)%s\n", codex, ic.Codex, reset, text, codCount, reset)
+		fmt.Fprintf(w, "    %s%s Codex%s   %s%d instance(s)%s\n", codex, ic.Codex, reset, text, codCount, reset)
 	}
 	if gmiCount > 0 {
-		fmt.Printf("    %s%s Gemini%s  %s%d instance(s)%s\n", gemini, ic.Gemini, reset, text, gmiCount, reset)
+		fmt.Fprintf(w, "    %s%s Gemini%s  %s%d instance(s)%s\n", gemini, ic.Gemini, reset, text, gmiCount, reset)
 	}
 	if otherCount > 0 {
-		fmt.Printf("    %s%s User%s    %s%d pane(s)%s\n", success, ic.User, reset, text, otherCount, reset)
+		fmt.Fprintf(w, "    %s%s User%s    %s%d pane(s)%s\n", success, ic.User, reset, text, otherCount, reset)
 	}
 
 	totalAgents := ccCount + codCount + gmiCount
 	if totalAgents == 0 {
-		fmt.Printf("    %sNo agents running%s\n", overlay, reset)
+		fmt.Fprintf(w, "    %sNo agents running%s\n", overlay, reset)
 	}
 
-	fmt.Println()
+	fmt.Fprintln(w)
 
 	// Agent Mail section
 	agentMailStatus := fetchAgentMailStatus(dir)
@@ -409,42 +410,42 @@ func runStatus(session string) error {
 		mailColor := colorize(t.Lavender)
 		lockIcon := "🔒"
 
-		fmt.Printf("  %sAgent Mail%s\n", bold, reset)
-		fmt.Printf("  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
+		fmt.Fprintf(w, "  %sAgent Mail%s\n", bold, reset)
+		fmt.Fprintf(w, "  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
 
 		if agentMailStatus.Connected {
-			fmt.Printf("    %s✓ Connected%s to %s%s%s\n", success, reset, subtext, agentMailStatus.ServerURL, reset)
+			fmt.Fprintf(w, "    %s✓ Connected%s to %s%s%s\n", success, reset, subtext, agentMailStatus.ServerURL, reset)
 		} else {
-			fmt.Printf("    %s○ Available%s at %s%s%s\n", overlay, reset, subtext, agentMailStatus.ServerURL, reset)
+			fmt.Fprintf(w, "    %s○ Available%s at %s%s%s\n", overlay, reset, subtext, agentMailStatus.ServerURL, reset)
 		}
 
 		if agentMailStatus.ActiveLocks > 0 {
-			fmt.Printf("    %s%s Active Locks:%s %s%d reservation(s)%s\n",
+			fmt.Fprintf(w, "    %s%s Active Locks:%s %s%d reservation(s)%s\n",
 				mailColor, lockIcon, reset, text, agentMailStatus.ActiveLocks, reset)
 			for _, r := range agentMailStatus.Reservations {
 				lockType := "shared"
 				if r.Exclusive {
 					lockType = "exclusive"
 				}
-				fmt.Printf("      %s• %s%s  %s%s%s (%s, %s)\n",
+				fmt.Fprintf(w, "      %s• %s%s  %s%s%s (%s, %s)\n",
 					subtext, text, r.PathPattern, overlay, r.AgentName, reset, lockType, r.ExpiresIn)
 			}
 		} else {
-			fmt.Printf("    %s%s No active file locks%s\n", overlay, lockIcon, reset)
+			fmt.Fprintf(w, "    %s%s No active file locks%s\n", overlay, lockIcon, reset)
 		}
 
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
 
 	// Quick actions hint
-	fmt.Printf("  %sQuick actions:%s\n", overlay, reset)
-	fmt.Printf("    %sntm send %s --all \"prompt\"%s  %s# Broadcast to all agents%s\n",
+	fmt.Fprintf(w, "  %sQuick actions:%s\n", overlay, reset)
+	fmt.Fprintf(w, "    %sntm send %s --all \"prompt\"%s  %s# Broadcast to all agents%s\n",
 		subtext, session, reset, overlay, reset)
-	fmt.Printf("    %sntm view %s%s                 %s# Tile all panes%s\n",
+	fmt.Fprintf(w, "    %sntm view %s%s                 %s# Tile all panes%s\n",
 		subtext, session, reset, overlay, reset)
-	fmt.Printf("    %sntm zoom %s <n>%s             %s# Zoom pane n%s\n",
+	fmt.Fprintf(w, "    %sntm zoom %s <n>%s             %s# Zoom pane n%s\n",
 		subtext, session, reset, overlay, reset)
-	fmt.Println()
+	fmt.Fprintln(w)
 
 	return nil
 }
