@@ -30,6 +30,7 @@ func newScanCmd() *cobra.Command {
 		minSeverity    string
 		dryRun         bool
 		watch          bool
+		notifyAgents   bool
 	)
 
 	cmd := &cobra.Command{
@@ -55,7 +56,8 @@ Examples:
   ntm scan --json            # Output JSON for automation
   ntm scan --fail-on-warning # Exit non-zero on warnings
   ntm scan --create-beads    # Auto-create beads from findings
-  ntm scan --update-beads    # Close beads for fixed issues`,
+  ntm scan --update-beads    # Close beads for fixed issues
+  ntm scan --notify          # Notify agents via Agent Mail`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := "."
@@ -87,10 +89,10 @@ Examples:
 			}
 
 			if watch {
-				return runScanWatch(absPath, opts, createBeads, updateBeads, bridgeCfg)
+				return runScanWatch(absPath, opts, createBeads, updateBeads, notifyAgents, bridgeCfg)
 			}
 
-			return runScan(absPath, opts, createBeads, updateBeads, bridgeCfg)
+			return runScan(absPath, opts, createBeads, updateBeads, notifyAgents, bridgeCfg)
 		},
 	}
 
@@ -103,6 +105,7 @@ Examples:
 	cmd.Flags().BoolVar(&stagedOnly, "staged", false, "Scan only staged files")
 	cmd.Flags().BoolVar(&diffOnly, "diff", false, "Scan only modified files")
 	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "Watch for file changes and re-scan")
+	cmd.Flags().BoolVar(&notifyAgents, "notify", false, "Notify agents via Agent Mail about findings")
 
 	// Beads integration flags
 	cmd.Flags().BoolVar(&createBeads, "create-beads", false, "Auto-create beads from scan findings")
@@ -127,7 +130,7 @@ func parseSeverity(s string) scanner.Severity {
 	}
 }
 
-func runScan(path string, opts scanner.ScanOptions, createBeads, updateBeads bool, bridgeCfg scanner.BridgeConfig) error {
+func runScan(path string, opts scanner.ScanOptions, createBeads, updateBeads, notifyAgents bool, bridgeCfg scanner.BridgeConfig) error {
 	t := theme.Current()
 
 	// Check if UBS is available
@@ -183,6 +186,17 @@ func runScan(path string, opts scanner.ScanOptions, createBeads, updateBeads boo
 			if !jsonOutput {
 				fmt.Printf("%s✗%s Beads update failed: %v\n", colorize(t.Error), "\033[0m", err)
 			}
+		}
+	}
+
+	// Notify agents if requested
+	if notifyAgents && (result.HasCritical() || result.HasWarning()) {
+		if err := scanner.NotifyScanResults(ctx, result, path); err != nil {
+			if !jsonOutput {
+				fmt.Printf("⚠ Notification failed: %v\n", err)
+			}
+		} else if !jsonOutput {
+			fmt.Println("✓ Notified agents")
 		}
 	}
 
@@ -346,7 +360,7 @@ func printBeadsUpdateResults(t theme.Theme, br *scanner.BridgeResult, dryRun boo
 	fmt.Println()
 }
 
-func runScanWatch(path string, opts scanner.ScanOptions, createBeads, updateBeads bool, bridgeCfg scanner.BridgeConfig) error {
+func runScanWatch(path string, opts scanner.ScanOptions, createBeads, updateBeads, notifyAgents bool, bridgeCfg scanner.BridgeConfig) error {
 	// Create watcher with debouncing (500ms)
 	w, err := watcher.New(func(events []watcher.Event) {
 		// Clear screen
@@ -355,7 +369,7 @@ func runScanWatch(path string, opts scanner.ScanOptions, createBeads, updateBead
 
 		// Run scan
 		// Note: We ignore error here to keep watching
-		if err := runScan(path, opts, createBeads, updateBeads, bridgeCfg); err != nil {
+		if err := runScan(path, opts, createBeads, updateBeads, notifyAgents, bridgeCfg); err != nil {
 			fmt.Printf("\nError running scan: %v\n", err)
 		}
 		fmt.Println("\nWaiting for changes... (Ctrl+C to stop)")
@@ -377,7 +391,7 @@ func runScanWatch(path string, opts scanner.ScanOptions, createBeads, updateBead
 	// Run initial scan
 	fmt.Print("\033[H\033[2J")
 	fmt.Printf("Initial scan of %s...\n", path)
-	if err := runScan(path, opts, createBeads, updateBeads, bridgeCfg); err != nil {
+	if err := runScan(path, opts, createBeads, updateBeads, notifyAgents, bridgeCfg); err != nil {
 		fmt.Printf("\nError running scan: %v\n", err)
 	}
 	fmt.Println("\nWaiting for changes... (Ctrl+C to stop)")
