@@ -12,6 +12,7 @@ import (
 
 	"github.com/Dicklesworthstone/ntm/internal/checkpoint"
 	"github.com/Dicklesworthstone/ntm/internal/events"
+	"github.com/Dicklesworthstone/ntm/internal/history"
 	"github.com/Dicklesworthstone/ntm/internal/hooks"
 	"github.com/Dicklesworthstone/ntm/internal/prompt"
 	"github.com/Dicklesworthstone/ntm/internal/templates"
@@ -145,6 +146,14 @@ func matchesSendTarget(pane tmux.Pane, target SendTarget) bool {
 	return true
 }
 
+func intsToStrings(ints []int) []string {
+	out := make([]string, 0, len(ints))
+	for _, v := range ints {
+		out = append(out, fmt.Sprintf("%d", v))
+	}
+	return out
+}
+
 func newSendCmd() *cobra.Command {
 	var targets SendTargets
 	var targetAll, skipFirst bool
@@ -202,9 +211,9 @@ Examples:
 			session := args[0]
 
 			// Handle template-based prompts
-				if templateName != "" {
-					return runSendWithTemplate(session, templateName, templateVars, promptFile, contextFiles, targets, targetAll, skipFirst, paneIndex)
-				}
+			if templateName != "" {
+				return runSendWithTemplate(session, templateName, templateVars, promptFile, contextFiles, targets, targetAll, skipFirst, paneIndex)
+			}
 
 			promptText, err := getPromptContent(args[1:], promptFile, prefix, suffix)
 			if err != nil {
@@ -228,9 +237,9 @@ Examples:
 				}
 			}
 
-				return runSendWithTargets(session, promptText, targets, targetAll, skipFirst, paneIndex, "")
-			},
-		}
+			return runSendWithTargets(session, promptText, targets, targetAll, skipFirst, paneIndex, "")
+		},
+	}
 
 	// Use custom flag values that support --cc or --cc=variant syntax
 	cmd.Flags().Var(newSendTargetValue(AgentTypeClaude, &targets), "cc", "send to Claude agents (optional :variant filter)")
@@ -382,22 +391,41 @@ func runSendWithTemplate(session, templateName string, templateVars []string, pr
 		}
 	}
 
-	return runSendWithTargets(session, promptText, targets, targetAll, skipFirst, paneIndex)
+	return runSendWithTargets(session, promptText, targets, targetAll, skipFirst, paneIndex, templateName)
 }
 
 // runSendWithTargets sends prompts using the new SendTargets filtering
-func runSendWithTargets(session, prompt string, targets SendTargets, targetAll, skipFirst bool, paneIndex int) error {
+func runSendWithTargets(session, prompt string, targets SendTargets, targetAll, skipFirst bool, paneIndex int, templateName string) error {
 	// Convert to the old signature for backwards compatibility
 	targetCC := targets.HasTargetsForType(AgentTypeClaude)
 	targetCod := targets.HasTargetsForType(AgentTypeCodex)
 	targetGmi := targets.HasTargetsForType(AgentTypeGemini)
 
-	return runSendInternal(session, prompt, targets, targetCC, targetCod, targetGmi, targetAll, skipFirst, paneIndex)
+	return runSendInternal(session, prompt, templateName, targets, targetCC, targetCod, targetGmi, targetAll, skipFirst, paneIndex)
 }
 
-func runSendInternal(session, prompt string, targets SendTargets, targetCC, targetCod, targetGmi, targetAll, skipFirst bool, paneIndex int) error {
+func runSendInternal(session, prompt, templateName string, targets SendTargets, targetCC, targetCod, targetGmi, targetAll, skipFirst bool, paneIndex int) error {
+	start := time.Now()
+	var (
+		histTargets []int
+		histErr     error
+		histSuccess bool
+	)
+	defer func() {
+		entry := history.NewEntry(session, intsToStrings(histTargets), prompt, history.SourceCLI)
+		entry.Template = templateName
+		entry.DurationMs = int(time.Since(start) / time.Millisecond)
+		if histSuccess {
+			entry.SetSuccess()
+		} else {
+			entry.SetError(histErr)
+		}
+		_ = history.Append(entry)
+	}()
+
 	// Helper for JSON error output
 	outputError := func(err error) error {
+		histErr = err
 		if jsonOutput {
 			result := SendResult{
 				Success: false,
@@ -521,8 +549,10 @@ func runSendInternal(session, prompt string, targets SendTargets, targetCC, targ
 		for _, p := range panes {
 			if p.Index == paneIndex {
 				targetPanes = append(targetPanes, paneIndex)
+				histTargets = targetPanes
 				if err := tmux.SendKeys(p.ID, prompt, true); err != nil {
 					failed++
+					histErr = err
 					if jsonOutput {
 						result := SendResult{
 							Success:       false,
@@ -538,6 +568,7 @@ func runSendInternal(session, prompt string, targets SendTargets, targetCC, targ
 					return err
 				}
 				delivered++
+				histSuccess = true
 
 				if jsonOutput {
 					result := SendResult{
@@ -605,6 +636,7 @@ func runSendInternal(session, prompt string, targets SendTargets, targetCC, targ
 		trackAgents = append(trackAgents, p.Title)
 		if err := tmux.SendKeys(p.ID, prompt, true); err != nil {
 			failed++
+			histErr = err
 			if !jsonOutput {
 				return fmt.Errorf("sending to pane %d: %w", p.Index, err)
 			}
@@ -617,6 +649,7 @@ func runSendInternal(session, prompt string, targets SendTargets, targetCC, targ
 	hookCtx.AdditionalEnv["NTM_DELIVERED_COUNT"] = fmt.Sprintf("%d", delivered)
 	hookCtx.AdditionalEnv["NTM_FAILED_COUNT"] = fmt.Sprintf("%d", failed)
 	hookCtx.AdditionalEnv["NTM_TARGET_PANES"] = fmt.Sprintf("%v", targetPanes)
+	histTargets = targetPanes
 
 	if len(targetPanes) > 0 && len(fileBaseline) > 0 && workDir != "" {
 		tracker.RecordFileChanges(session, workDir, trackAgents, fileBaseline, fileChangeScanDelay)
@@ -663,14 +696,24 @@ func runSendInternal(session, prompt string, targets SendTargets, targetCC, targ
 		}
 		if failed > 0 {
 			result.Error = fmt.Sprintf("%d pane(s) failed", failed)
+			if histErr == nil {
+				histErr = errors.New(result.Error)
+			}
+		} else {
+			histSuccess = true
 		}
 		return json.NewEncoder(os.Stdout).Encode(result)
 	}
 
 	if len(targetPanes) == 0 {
+		histErr = errors.New("no matching panes found")
 		fmt.Println("No matching panes found")
 	} else {
 		fmt.Printf("Sent to %d pane(s)\n", delivered)
+		histSuccess = failed == 0 && delivered > 0
+		if failed > 0 && histErr == nil {
+			histErr = fmt.Errorf("%d pane(s) failed", failed)
+		}
 	}
 
 	return nil
