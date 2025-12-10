@@ -51,6 +51,7 @@ var promptPatterns = []PromptPattern{
 
 	// Generic patterns (apply to all types as fallback)
 	{AgentType: "", Regex: regexp.MustCompile(`>\s*$`), Description: "Generic > prompt"},
+	{AgentType: "", Regex: regexp.MustCompile(`[$%]\s*$`), Description: "Generic shell prompt"},
 }
 
 // StripANSI removes ANSI escape sequences from a string
@@ -80,6 +81,13 @@ func IsPromptLine(line string, agentType string) bool {
 			return true
 		}
 		if p.Literal != "" && strings.HasSuffix(line, p.Literal) {
+			return true
+		}
+	}
+
+	// Fallback: for user/unknown agent types, treat any line containing a '$' as a prompt.
+	if agentType == "" || agentType == "user" {
+		if strings.Contains(line, "$") {
 			return true
 		}
 	}
