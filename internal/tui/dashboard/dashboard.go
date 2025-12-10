@@ -302,6 +302,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Schedule next refresh
 		return m, m.refresh()
 
+	case HealthCheckMsg:
+		m.healthStatus = msg.Status
+		m.healthMessage = msg.Message
+		return m, nil
+
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, dashKeys.Quit):
@@ -443,6 +448,12 @@ func (m Model) renderStatsBar() string {
 
 	var parts []string
 
+	// Health badge (bv drift status)
+	healthBadge := m.renderHealthBadge()
+	if healthBadge != "" {
+		parts = append(parts, healthBadge)
+	}
+
 	// Total panes
 	totalBadge := lipgloss.NewStyle().
 		Background(t.Surface0).
@@ -496,6 +507,52 @@ func (m Model) renderStatsBar() string {
 	}
 
 	return strings.Join(parts, "  ")
+}
+
+// renderHealthBadge renders the health badge based on bv drift status
+func (m Model) renderHealthBadge() string {
+	t := m.theme
+
+	if m.healthStatus == "" || m.healthStatus == "unknown" {
+		return ""
+	}
+
+	var bgColor, fgColor lipgloss.Color
+	var icon, label string
+
+	switch m.healthStatus {
+	case "ok":
+		bgColor = t.Green
+		fgColor = t.Base
+		icon = "✓"
+		label = "healthy"
+	case "warning":
+		bgColor = t.Yellow
+		fgColor = t.Base
+		icon = "⚠"
+		label = "drift"
+	case "critical":
+		bgColor = t.Red
+		fgColor = t.Base
+		icon = "✗"
+		label = "critical"
+	case "no_baseline":
+		bgColor = t.Surface1
+		fgColor = t.Overlay
+		icon = "?"
+		label = "no baseline"
+	case "unavailable":
+		return "" // Don't show badge if bv not installed
+	default:
+		return ""
+	}
+
+	return lipgloss.NewStyle().
+		Background(bgColor).
+		Foreground(fgColor).
+		Bold(true).
+		Padding(0, 1).
+		Render(fmt.Sprintf("%s %s", icon, label))
 }
 
 func (m Model) renderPaneGrid() string {
