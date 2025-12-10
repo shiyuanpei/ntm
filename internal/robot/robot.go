@@ -3,6 +3,7 @@
 package robot
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Dicklesworthstone/ntm/internal/agentmail"
 	"github.com/Dicklesworthstone/ntm/internal/alerts"
 	"github.com/Dicklesworthstone/ntm/internal/bv"
 	"github.com/Dicklesworthstone/ntm/internal/config"
@@ -63,12 +65,25 @@ type SystemInfo struct {
 
 // StatusOutput is the structured output for robot-status
 type StatusOutput struct {
-	GeneratedAt  time.Time        `json:"generated_at"`
-	System       SystemInfo       `json:"system"`
-	Sessions     []SessionInfo    `json:"sessions"`
-	Summary      StatusSummary    `json:"summary"`
-	Beads        *bv.BeadsSummary `json:"beads,omitempty"`
-	GraphMetrics *GraphMetrics    `json:"graph_metrics,omitempty"`
+	GeneratedAt  time.Time         `json:"generated_at"`
+	System       SystemInfo        `json:"system"`
+	Sessions     []SessionInfo     `json:"sessions"`
+	Summary      StatusSummary     `json:"summary"`
+	Beads        *bv.BeadsSummary  `json:"beads,omitempty"`
+	GraphMetrics *GraphMetrics     `json:"graph_metrics,omitempty"`
+	AgentMail    *AgentMailSummary `json:"agent_mail,omitempty"`
+	FileChanges  []FileChangeInfo  `json:"file_changes,omitempty"`
+}
+
+// AgentMailSummary provides a lightweight Agent Mail state for --robot-status.
+type AgentMailSummary struct {
+	Available          bool   `json:"available"`
+	ServerURL          string `json:"server_url,omitempty"`
+	SessionsRegistered int    `json:"sessions_registered,omitempty"`
+	TotalUnread        int    `json:"total_unread,omitempty"`
+	UrgentMessages     int    `json:"urgent_messages,omitempty"`
+	TotalLocks         int    `json:"total_locks,omitempty"`
+	Error              string `json:"error,omitempty"`
 }
 
 // GraphMetrics provides bv graph analysis metrics for status output
@@ -85,6 +100,20 @@ type BottleneckInfo struct {
 	Title string  `json:"title,omitempty"`
 	Score float64 `json:"score"`
 }
+
+// FileChangeInfo is a sanitized view of recorded file changes.
+type FileChangeInfo struct {
+	Session string    `json:"session"`
+	Path    string    `json:"path"`
+	Type    string    `json:"type"`
+	Agents  []string  `json:"agents,omitempty"`
+	At      time.Time `json:"at"`
+}
+
+const (
+	fileChangeLookback = 30 * time.Minute
+	fileChangeLimit    = 50
+)
 
 // StatusSummary provides aggregate stats
 type StatusSummary struct {
@@ -300,7 +329,127 @@ func PrintStatus() error {
 		output.GraphMetrics = getGraphMetrics()
 	}
 
+	// Enrich with Agent Mail summary (best-effort; degrade gracefully)
+	if summary := getAgentMailSummary(); summary != nil {
+		output.AgentMail = summary
+	}
+
+	// Include recent file changes (best-effort, bounded).
+	appendFileChanges(&output)
+
 	return encodeJSON(output)
+}
+
+func appendFileChanges(output *StatusOutput) {
+	cutoff := time.Now().Add(-fileChangeLookback)
+	changes := tracker.RecordedChangesSince(cutoff)
+	if len(changes) == 0 {
+		return
+	}
+
+	if len(changes) > fileChangeLimit {
+		changes = changes[len(changes)-fileChangeLimit:]
+	}
+
+	wd, _ := os.Getwd()
+	prefix := wd
+	if prefix != "" && !strings.HasSuffix(prefix, string(os.PathSeparator)) {
+		prefix += string(os.PathSeparator)
+	}
+
+	for _, change := range changes {
+		path := change.Change.Path
+		if prefix != "" && strings.HasPrefix(path, prefix) {
+			path = strings.TrimPrefix(path, prefix)
+		}
+
+		output.FileChanges = append(output.FileChanges, FileChangeInfo{
+			Session: change.Session,
+			Path:    path,
+			Type:    string(change.Change.Type),
+			Agents:  change.Agents,
+			At:      change.Timestamp,
+		})
+	}
+}
+
+// PrintMail outputs detailed Agent Mail state for AI orchestrators.
+func PrintMail(projectKey string) error {
+	if projectKey == "" {
+		wd, err := os.Getwd()
+		if err == nil {
+			projectKey = wd
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	client := agentmail.NewClient(agentmail.WithProjectKey(projectKey))
+	serverURL := client.BaseURL()
+
+	output := struct {
+		GeneratedAt time.Time                   `json:"generated_at"`
+		ProjectKey  string                      `json:"project_key"`
+		Available   bool                        `json:"available"`
+		ServerURL   string                      `json:"server_url,omitempty"`
+		Agents      []AgentMailAgent            `json:"agents,omitempty"`
+		Locks       []agentmail.FileReservation `json:"locks,omitempty"`
+		Error       string                      `json:"error,omitempty"`
+	}{
+		GeneratedAt: time.Now().UTC(),
+		ProjectKey:  projectKey,
+		Available:   false,
+		ServerURL:   serverURL,
+	}
+
+	if !client.IsAvailable() {
+		return encodeJSON(output)
+	}
+	output.Available = true
+
+	// Ensure project exists
+	if _, err := client.EnsureProject(ctx, projectKey); err != nil {
+		output.Error = fmt.Sprintf("ensure_project: %v", err)
+		return encodeJSON(output)
+	}
+
+	agents, err := client.ListProjectAgents(ctx, projectKey)
+	if err != nil {
+		output.Error = fmt.Sprintf("list_agents: %v", err)
+		return encodeJSON(output)
+	}
+
+	// Gather per-agent mail counts
+	for _, a := range agents {
+		unread := countInbox(ctx, client, projectKey, a.Name, false)
+		urgent := countInbox(ctx, client, projectKey, a.Name, true)
+		output.Agents = append(output.Agents, AgentMailAgent{
+			Name:         a.Name,
+			Program:      a.Program,
+			Model:        a.Model,
+			UnreadCount:  unread,
+			UrgentCount:  urgent,
+			LastActiveTs: a.LastActiveTS,
+		})
+	}
+
+	locks, err := client.ListReservations(ctx, projectKey, "", true)
+	if err == nil {
+		output.Locks = locks
+	}
+
+	return encodeJSON(output)
+}
+
+// AgentMailAgent is a per-agent view for --robot-mail.
+type AgentMailAgent struct {
+	Name         string    `json:"name"`
+	Program      string    `json:"program,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	UnreadCount  int       `json:"unread_count,omitempty"`
+	UrgentCount  int       `json:"urgent_count,omitempty"`
+	LastActiveTs time.Time `json:"last_active_ts,omitempty"`
 }
 
 // getGraphMetrics returns bv graph analysis metrics
@@ -830,15 +979,90 @@ func detectState(lines []string, title string) string {
 	return "active"
 }
 
+// buildSnapshotAgentMail assembles Agent Mail state for robot snapshot.
+// Best-effort: failures do not fail snapshot generation.
+func buildSnapshotAgentMail() *SnapshotAgentMail {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return &SnapshotAgentMail{Available: false, Reason: "unable to determine working directory"}
+	}
+
+	client := agentmail.NewClient(agentmail.WithProjectKey(cwd))
+
+	// Quick availability check
+	if !client.IsAvailable() {
+		return &SnapshotAgentMail{
+			Available: false,
+			Reason:    fmt.Sprintf("agent mail server not available at %s", agentmail.DefaultBaseURL),
+			Project:   cwd,
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Ensure project exists; if this fails, degrade gracefully.
+	if _, err := client.EnsureProject(ctx, cwd); err != nil {
+		return &SnapshotAgentMail{
+			Available: true,
+			Reason:    fmt.Sprintf("ensure_project failed: %v", err),
+			Project:   cwd,
+		}
+	}
+
+	agents, err := client.ListProjectAgents(ctx, cwd)
+	if err != nil {
+		return &SnapshotAgentMail{
+			Available: true,
+			Reason:    fmt.Sprintf("list_agents failed: %v", err),
+			Project:   cwd,
+		}
+	}
+
+	summary := &SnapshotAgentMail{
+		Available: true,
+		Project:   cwd,
+		Agents:    make(map[string]SnapshotAgentMailStats),
+	}
+
+	// Fetch limited inbox slices to keep the call lightweight.
+	for _, agent := range agents {
+		inbox, err := client.FetchInbox(ctx, agentmail.FetchInboxOptions{
+			ProjectKey:    cwd,
+			AgentName:     agent.Name,
+			Limit:         25,
+			IncludeBodies: false,
+		})
+		if err != nil {
+			continue
+		}
+		unread := len(inbox)
+		pendingAck := 0
+		for _, msg := range inbox {
+			if msg.AckRequired {
+				pendingAck++
+			}
+		}
+		summary.TotalUnread += unread
+		summary.Agents[agent.Name] = SnapshotAgentMailStats{
+			Unread:     unread,
+			PendingAck: pendingAck,
+		}
+	}
+
+	return summary
+}
+
 // SnapshotOutput provides complete system state for AI orchestration
 type SnapshotOutput struct {
-	Timestamp      string            `json:"ts"`
-	Sessions       []SnapshotSession `json:"sessions"`
-	BeadsSummary   *bv.BeadsSummary  `json:"beads_summary,omitempty"`
-	MailUnread     int               `json:"mail_unread,omitempty"`
-	Alerts         []string          `json:"alerts"`                    // Legacy: simple string alerts
-	AlertsDetailed []AlertInfo       `json:"alerts_detailed,omitempty"` // Rich alert objects
-	AlertSummary   *AlertSummaryInfo `json:"alert_summary,omitempty"`
+	Timestamp      string             `json:"ts"`
+	Sessions       []SnapshotSession  `json:"sessions"`
+	BeadsSummary   *bv.BeadsSummary   `json:"beads_summary,omitempty"`
+	AgentMail      *SnapshotAgentMail `json:"agent_mail,omitempty"`
+	MailUnread     int                `json:"mail_unread,omitempty"`
+	Alerts         []string           `json:"alerts"`                    // Legacy: simple string alerts
+	AlertsDetailed []AlertInfo        `json:"alerts_detailed,omitempty"` // Rich alert objects
+	AlertSummary   *AlertSummaryInfo  `json:"alert_summary,omitempty"`
 }
 
 // AlertInfo provides detailed alert information for robot output
@@ -881,6 +1105,22 @@ type SnapshotAgent struct {
 	OutputTailLines  int     `json:"output_tail_lines"`
 	CurrentBead      *string `json:"current_bead"`
 	PendingMail      int     `json:"pending_mail"`
+}
+
+// SnapshotAgentMail represents Agent Mail availability and inbox state.
+type SnapshotAgentMail struct {
+	Available    bool                              `json:"available"`
+	Reason       string                            `json:"reason,omitempty"`
+	Project      string                            `json:"project,omitempty"`
+	TotalUnread  int                               `json:"total_unread,omitempty"`
+	Agents       map[string]SnapshotAgentMailStats `json:"agents,omitempty"`
+	ThreadsKnown int                               `json:"threads_active,omitempty"`
+}
+
+// SnapshotAgentMailStats holds per-agent inbox counts.
+type SnapshotAgentMailStats struct {
+	Unread     int `json:"unread"`
+	PendingAck int `json:"pending_ack"`
 }
 
 // BeadLimit controls how many ready/in-progress beads to include in snapshot
@@ -963,6 +1203,9 @@ func PrintSnapshot(cfg *config.Config) error {
 	if beads != nil {
 		output.BeadsSummary = beads
 	}
+
+	// Agent Mail summary (best-effort, graceful degradation)
+	output.AgentMail = buildSnapshotAgentMail()
 
 	// Add alerts for detected issues (legacy string format)
 	for _, sess := range output.Sessions {
@@ -1621,4 +1864,70 @@ func PrintTerse(cfg *config.Config) error {
 	// Output all sessions separated by semicolons
 	fmt.Println(strings.Join(results, ";"))
 	return nil
+}
+
+// getAgentMailSummary returns a best-effort Agent Mail summary for --robot-status.
+func getAgentMailSummary() *AgentMailSummary {
+	projectKey, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	client := agentmail.NewClient(agentmail.WithProjectKey(projectKey))
+	summary := &AgentMailSummary{
+		Available: false,
+		ServerURL: client.BaseURL(),
+	}
+
+	if !client.IsAvailable() {
+		return summary
+	}
+	summary.Available = true
+
+	// Ensure project exists
+	if _, err := client.EnsureProject(ctx, projectKey); err != nil {
+		summary.Error = fmt.Sprintf("ensure_project: %v", err)
+		return summary
+	}
+
+	agents, err := client.ListProjectAgents(ctx, projectKey)
+	if err != nil {
+		summary.Error = fmt.Sprintf("list_agents: %v", err)
+		return summary
+	}
+	summary.SessionsRegistered = len(agents)
+
+	// Aggregate unread/urgent counts
+	for _, a := range agents {
+		summary.TotalUnread += countInbox(ctx, client, projectKey, a.Name, false)
+		summary.UrgentMessages += countInbox(ctx, client, projectKey, a.Name, true)
+	}
+
+	// Locks (best-effort)
+	if locks, err := client.ListReservations(ctx, projectKey, "", true); err == nil {
+		summary.TotalLocks = len(locks)
+	}
+
+	return summary
+}
+
+// countInbox returns the count of inbox entries for an agent.
+// If urgentOnly is true, only urgent messages are counted.
+func countInbox(ctx context.Context, client *agentmail.Client, projectKey, agentName string, urgentOnly bool) int {
+	limit := 50
+	opts := agentmail.FetchInboxOptions{
+		ProjectKey:    projectKey,
+		AgentName:     agentName,
+		UrgentOnly:    urgentOnly,
+		Limit:         limit,
+		IncludeBodies: false,
+	}
+	msgs, err := client.FetchInbox(ctx, opts)
+	if err != nil {
+		return 0
+	}
+	return len(msgs)
 }
