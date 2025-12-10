@@ -394,8 +394,14 @@ const DefaultAgentMailURL = "http://127.0.0.1:8765/mcp/"
 // Default returns the default configuration.
 // It tries to load the palette from a markdown file first, falling back to hardcoded defaults.
 func Default() *Config {
+	// Determine projects base: env var takes precedence
+	projectsBase := DefaultProjectsBase()
+	if envBase := os.Getenv("NTM_PROJECTS_BASE"); envBase != "" {
+		projectsBase = envBase
+	}
+
 	cfg := &Config{
-		ProjectsBase: DefaultProjectsBase(),
+		ProjectsBase: projectsBase,
 		Agents: AgentConfig{
 			Claude: `NODE_OPTIONS="--max-old-space-size=32768" ENABLE_BACKGROUND_TASKS=1 claude --dangerously-skip-permissions`,
 			Codex:  `codex --dangerously-bypass-approvals-and-sandbox -m gpt-5.1-codex-max -c model_reasoning_effort="high" -c model_reasoning_summary_format=experimental --enable web_search_request`,
@@ -571,6 +577,10 @@ func Load(path string) (*Config, error) {
 	// Apply defaults for missing values
 	if cfg.ProjectsBase == "" {
 		cfg.ProjectsBase = DefaultProjectsBase()
+	}
+	// Environment variable override for projects base directory
+	if envBase := os.Getenv("NTM_PROJECTS_BASE"); envBase != "" {
+		cfg.ProjectsBase = envBase
 	}
 	if cfg.Agents.Claude == "" {
 		cfg.Agents.Claude = Default().Agents.Claude

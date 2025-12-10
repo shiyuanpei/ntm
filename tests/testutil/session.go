@@ -2,7 +2,9 @@ package testutil
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,24 +19,45 @@ type AgentConfig struct {
 
 // SessionConfig holds configuration for creating a test session.
 type SessionConfig struct {
-	Agents   AgentConfig
-	WorkDir  string // Working directory for the session
+	Agents    AgentConfig
+	WorkDir   string   // Working directory for the session (used as NTM_PROJECTS_BASE)
 	ExtraArgs []string // Additional arguments to pass to ntm spawn
 }
 
 // CreateTestSession creates a new ntm session for testing.
 // It automatically registers cleanup to kill the session when the test completes.
 // Returns the session name.
+//
+// Note: ntm spawn derives the project directory from NTM_PROJECTS_BASE + session name.
+// This function sets NTM_PROJECTS_BASE to a temp directory and creates the project
+// directory within it, named after the session.
 func CreateTestSession(t *testing.T, logger *TestLogger, config SessionConfig) string {
 	t.Helper()
 
-	// Generate unique session name
+	// Generate unique session/project name
 	name := fmt.Sprintf("ntm_test_%d", time.Now().UnixNano())
 	logger.LogSection("Creating Test Session")
 	logger.Log("Session name: %s", name)
 
+	// Set up the projects base directory
+	// NTM uses NTM_PROJECTS_BASE + session_name as the project directory
+	projectsBase := config.WorkDir
+	if projectsBase == "" {
+		projectsBase = t.TempDir()
+	}
+
+	// Create the actual project directory (session name = project name)
+	projectDir := filepath.Join(projectsBase, name)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("failed to create project directory %s: %v", projectDir, err)
+	}
+	logger.Log("Project directory: %s", projectDir)
+
+	logger.Log("NTM_PROJECTS_BASE: %s", projectsBase)
+
 	// Build spawn command arguments
-	args := []string{"spawn", name}
+	// Use --json flag to avoid interactive prompts and terminal attachment
+	args := []string{"spawn", name, "--json"}
 	if config.Agents.Claude > 0 {
 		args = append(args, fmt.Sprintf("--cc=%d", config.Agents.Claude))
 	}
@@ -42,18 +65,26 @@ func CreateTestSession(t *testing.T, logger *TestLogger, config SessionConfig) s
 		args = append(args, fmt.Sprintf("--cod=%d", config.Agents.Codex))
 	}
 	if config.Agents.Gemini > 0 {
-		args = append(args, fmt.Sprintf("--gem=%d", config.Agents.Gemini))
-	}
-	if config.WorkDir != "" {
-		args = append(args, "--dir="+config.WorkDir)
+		args = append(args, fmt.Sprintf("--gmi=%d", config.Agents.Gemini))
 	}
 	args = append(args, config.ExtraArgs...)
 
+	// Create command with NTM_PROJECTS_BASE properly set
+	// We need to filter out any existing NTM_PROJECTS_BASE and add our own
+	cmd := exec.Command("ntm", args...)
+	env := filterEnv(os.Environ(), "NTM_PROJECTS_BASE")
+	env = append(env, "NTM_PROJECTS_BASE="+projectsBase)
+	cmd.Env = env
+
 	// Create the session
-	out, err := logger.Exec("ntm", args...)
+	out, err := cmd.CombinedOutput()
+	logger.Log("EXEC: ntm %s", strings.Join(args, " "))
+	logger.Log("OUTPUT: %s", string(out))
 	if err != nil {
+		logger.Log("EXIT: error: %v", err)
 		t.Fatalf("failed to create session %s: %v\nOutput: %s", name, err, string(out))
 	}
+	logger.Log("EXIT: success")
 
 	// Register cleanup to kill the session
 	t.Cleanup(func() {
@@ -166,4 +197,16 @@ func CapturePane(name string, paneIndex int) (string, error) {
 		return "", fmt.Errorf("failed to capture pane %s: %w", target, err)
 	}
 	return string(out), nil
+}
+
+// filterEnv filters out environment variables with the given prefix.
+func filterEnv(env []string, prefix string) []string {
+	result := make([]string, 0, len(env))
+	prefix = prefix + "="
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			result = append(result, e)
+		}
+	}
+	return result
 }
