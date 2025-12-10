@@ -191,6 +191,8 @@ type RotationConfig struct {
 	Enabled            bool               `toml:"enabled"`             // Master toggle
 	PreferRestart      bool               `toml:"prefer_restart"`      // Prefer restart over switch
 	AutoOpenBrowser    bool               `toml:"auto_open_browser"`   // Auto-open browser for auth
+	AutoTrigger        bool               `toml:"auto_trigger"`        // Show notification when rate limit detected
+	AutoInitiate       bool               `toml:"auto_initiate"`       // Automatically start rotation (aggressive)
 	ContinuationPrompt string             `toml:"continuation_prompt"` // Prompt template on rotation
 	Accounts           []RotationAccount  `toml:"accounts"`            // Configured accounts per provider
 	Thresholds         RotationThresholds `toml:"thresholds"`

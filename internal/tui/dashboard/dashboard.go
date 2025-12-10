@@ -537,8 +537,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ps := m.paneStatus[idx]
 			state := string(st.State)
 
-			// Compaction warning should override idle/working but not errors
-			if ps.LastCompaction != nil && state != string(status.StateError) {
+			// Rate limit should be shown with special indicator
+			if st.State == status.StateError && st.ErrorType == status.ErrorRateLimit {
+				state = "rate_limited"
+			} else if ps.LastCompaction != nil && state != string(status.StateError) {
+				// Compaction warning should override idle/working but not errors
 				state = "compacted"
 			}
 			ps.State = state
@@ -690,6 +693,13 @@ func (m Model) View() string {
 	// ═══════════════════════════════════════════════════════════════
 	statsBar := m.renderStatsBar()
 	b.WriteString("  " + statsBar + "\n\n")
+
+	// ═══════════════════════════════════════════════════════════════
+	// RATE LIMIT ALERT (if any agent is rate limited)
+	// ═══════════════════════════════════════════════════════════════
+	if alert := m.renderRateLimitAlert(); alert != "" {
+		b.WriteString(alert + "\n\n")
+	}
 
 	// ═══════════════════════════════════════════════════════════════
 	// PANE GRID VISUALIZATION
@@ -927,6 +937,43 @@ func (m Model) renderAgentMailBadge() string {
 		Bold(true).
 		Padding(0, 1).
 		Render(fmt.Sprintf("%s %s", icon, label))
+}
+
+// renderRateLimitAlert renders a prominent alert banner if any agent is rate limited
+func (m Model) renderRateLimitAlert() string {
+	t := m.theme
+
+	// Check if any pane is rate limited
+	var rateLimitedPanes []int
+	for _, p := range m.panes {
+		if ps, ok := m.paneStatus[p.Index]; ok && ps.State == "rate_limited" {
+			rateLimitedPanes = append(rateLimitedPanes, p.Index)
+		}
+	}
+
+	if len(rateLimitedPanes) == 0 {
+		return ""
+	}
+
+	// Build alert message
+	var msg string
+	if len(rateLimitedPanes) == 1 {
+		msg = fmt.Sprintf("⏳ Rate limit hit on pane %d! Run: ntm rotate %s --pane=%d",
+			rateLimitedPanes[0], m.session, rateLimitedPanes[0])
+	} else {
+		paneList := fmt.Sprintf("%v", rateLimitedPanes)
+		msg = fmt.Sprintf("⏳ Rate limit hit on panes %s! Press 'r' to rotate", paneList)
+	}
+
+	// Render as a prominent alert box
+	alertStyle := lipgloss.NewStyle().
+		Background(t.Maroon).
+		Foreground(t.Base).
+		Bold(true).
+		Padding(0, 2).
+		Width(m.width - 6)
+
+	return "  " + alertStyle.Render(msg)
 }
 
 // renderContextBar renders a progress bar showing context usage percentage
@@ -1279,6 +1326,9 @@ func (m Model) renderPaneRow(p tmux.Pane, _ int, selected bool, width int) strin
 	case "error":
 		statusIcon = "✗"
 		statusStyle = statusStyle.Foreground(t.Red)
+	case "rate_limited":
+		statusIcon = "⏳"
+		statusStyle = statusStyle.Foreground(t.Maroon).Bold(true)
 	case "compacted":
 		statusIcon = "⚠"
 		statusStyle = statusStyle.Foreground(t.Peach).Bold(true)

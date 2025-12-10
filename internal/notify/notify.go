@@ -27,6 +27,7 @@ const (
 	EventAgentRestarted EventType = "agent.restarted" // Agent was auto-restarted
 	EventAgentIdle      EventType = "agent.idle"      // Agent waiting for input
 	EventRateLimit      EventType = "agent.rate_limit" // Agent hit rate limit
+	EventRotationNeeded EventType = "rotation.needed" // Account rotation recommended
 	EventSessionCreated EventType = "session.created" // New session spawned
 	EventSessionKilled  EventType = "session.killed"  // Session terminated
 	EventHealthDegraded EventType = "health.degraded" // Overall health dropped
@@ -394,6 +395,20 @@ func NewRateLimitEvent(session, pane, agent string, waitSeconds int) Event {
 		Message: fmt.Sprintf("Agent %s hit rate limit (wait %ds)", agent, waitSeconds),
 		Details: map[string]string{
 			"wait_seconds": fmt.Sprintf("%d", waitSeconds),
+		},
+	}
+}
+
+// NewRotationNeededEvent creates a rotation needed notification event
+func NewRotationNeededEvent(session string, paneIndex int, agent, command string) Event {
+	return Event{
+		Type:    EventRotationNeeded,
+		Session: session,
+		Agent:   agent,
+		Message: fmt.Sprintf("Rate limit hit! Run: %s", command),
+		Details: map[string]string{
+			"pane_index": fmt.Sprintf("%d", paneIndex),
+			"command":    command,
 		},
 	}
 }

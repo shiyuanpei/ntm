@@ -481,6 +481,11 @@ func SendInterrupt(target string) error {
 	return runSilent("send-keys", "-t", target, "C-c")
 }
 
+// DisplayMessage shows a message in the tmux status line
+func DisplayMessage(session, msg string, durationMs int) error {
+	return runSilent("display-message", "-t", session, "-d", fmt.Sprintf("%d", durationMs), msg)
+}
+
 // SanitizePaneCommand rejects control characters that could inject unintended
 // key sequences (e.g., newlines, carriage returns, escapes) when sending
 // commands into tmux panes.
@@ -522,6 +527,11 @@ func AttachOrSwitch(session string) error {
 // KillSession kills a tmux session
 func KillSession(session string) error {
 	return runSilent("kill-session", "-t", session)
+}
+
+// KillPane kills a tmux pane
+func KillPane(paneID string) error {
+	return runSilent("kill-pane", "-t", paneID)
 }
 
 // ApplyTiledLayout applies tiled layout to all windows

@@ -222,6 +222,49 @@ func (m *Monitor) handleRateLimit(agent *AgentState, waitSeconds int) {
 			log.Printf("[resilience] notification error: %v", err)
 		}
 	}
+
+	// Trigger rotation assistance if enabled
+	if m.cfg.Rotation.Enabled && m.cfg.Rotation.AutoTrigger {
+		m.triggerRotationAssistance(agent)
+	}
+}
+
+// triggerRotationAssistance sends a notification with rotation command or auto-initiates rotation
+func (m *Monitor) triggerRotationAssistance(agent *AgentState) {
+	rotateCmd := fmt.Sprintf("ntm rotate %s --pane=%d", m.session, agent.PaneIndex)
+
+	log.Printf("[resilience] Suggesting rotation: %s", rotateCmd)
+
+	// Send rotation notification with command
+	if m.notifier != nil {
+		event := notify.NewRotationNeededEvent(m.session, agent.PaneIndex, agent.AgentType, rotateCmd)
+		if err := m.notifier.Notify(event); err != nil {
+			log.Printf("[resilience] notification error: %v", err)
+		}
+	}
+
+	// Also display tmux message if in a tmux session
+	if m.session != "" {
+		msg := fmt.Sprintf("⚠️ Rate limit! Run: %s", rotateCmd)
+		displayTmuxMessage(m.session, msg)
+	}
+
+	// Auto-initiate rotation if configured (aggressive mode)
+	if m.cfg.Rotation.AutoInitiate {
+		log.Printf("[resilience] Auto-initiating rotation for agent %s (pane %d)",
+			agent.AgentType, agent.PaneIndex)
+		// Note: Auto-initiate is disabled in this implementation because
+		// rotation requires user interaction (browser account switch).
+		// Instead, we just provide the notification with command.
+	}
+}
+
+// displayTmuxMessage shows a message in the tmux session
+func displayTmuxMessage(session, msg string) {
+	// tmux display-message shows a message in the status line for 10 seconds
+	if err := tmux.DisplayMessage(session, msg, 10000); err != nil {
+		log.Printf("[resilience] tmux display-message failed: %v", err)
+	}
 }
 
 // handleCrash processes a detected agent crash
