@@ -124,9 +124,9 @@ func DefaultResilienceConfig() ResilienceConfig {
 		NotifyOnCrash:       true,  // Notify on crash by default
 		NotifyOnMaxRestarts: true,  // Notify when max restarts exceeded
 		RateLimit: RateLimitConfig{
-			Detect:   true,  // Detect rate limits by default
-			Notify:   true,  // Notify on rate limit by default
-			Patterns: nil,   // Use default patterns (rate limit, 429, too many requests, quota exceeded)
+			Detect:   true, // Detect rate limits by default
+			Notify:   true, // Notify on rate limit by default
+			Patterns: nil,  // Use default patterns (rate limit, 429, too many requests, quota exceeded)
 		},
 	}
 }
@@ -285,6 +285,18 @@ func findPaletteMarkdown() string {
 	}
 
 	return ""
+}
+
+// DetectPalettePath returns the palette markdown path to use, if any.
+// Precedence: explicit cfg.PaletteFile, then auto-discovered markdown.
+func DetectPalettePath(cfg *Config) string {
+	if cfg == nil {
+		return ""
+	}
+	if cfg.PaletteFile != "" {
+		return cfg.PaletteFile
+	}
+	return findPaletteMarkdown()
 }
 
 // LoadPaletteFromMarkdown parses a command palette from markdown format.

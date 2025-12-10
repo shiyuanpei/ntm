@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Dicklesworthstone/ntm/internal/config"
+	"github.com/Dicklesworthstone/ntm/internal/history"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
 	"github.com/Dicklesworthstone/ntm/internal/tui/components"
 	"github.com/Dicklesworthstone/ntm/internal/tui/icons"
@@ -41,6 +42,11 @@ const (
 	TargetGemini
 )
 
+// ReloadMsg is emitted when palette commands are reloaded from config changes.
+type ReloadMsg struct {
+	Commands []config.PaletteCmd
+}
+
 // Model is the Bubble Tea model for the palette
 type Model struct {
 	session   string
@@ -74,6 +80,9 @@ type Model struct {
 	// Computed gradient colors
 	headerGradient []string
 	listGradient   []string
+
+	// Layout tier (narrow/split/wide/ultra)
+	tier layout.Tier
 }
 
 // KeyMap defines the keybindings
@@ -165,6 +174,7 @@ func New(session string, commands []config.PaletteCmd) Model {
 		theme:       t,
 		styles:      s,
 		icons:       ic,
+		tier:        layout.TierForWidth(80),
 		headerGradient: []string{
 			string(t.Blue),
 			string(t.Lavender),
@@ -202,12 +212,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.tier = layout.TierForWidth(msg.Width)
 		m.filter.Width = m.width/2 - 10
+		if m.filter.Width < 20 {
+			m.filter.Width = 20
+		}
 		return m, nil
 
 	case AnimationTickMsg:
 		m.animTick++
 		return m, m.tick()
+
+	case ReloadMsg:
+		if len(msg.Commands) > 0 {
+			m.commands = msg.Commands
+			m.updateFiltered()
+		}
+		return m, nil
 
 	case tea.KeyMsg:
 		switch m.phase {
@@ -404,6 +425,7 @@ func (m *Model) buildVisualOrder() {
 }
 
 func (m *Model) send() (tea.Model, tea.Cmd) {
+	start := time.Now()
 	if m.selected == nil {
 		return *m, nil
 	}
@@ -411,11 +433,13 @@ func (m *Model) send() (tea.Model, tea.Cmd) {
 	panes, err := tmux.GetPanes(m.session)
 	if err != nil {
 		m.err = err
+		m.recordHistory(nil, start, err)
 		return *m, tea.Quit
 	}
 
 	prompt := m.selected.Prompt
 	count := 0
+	var targetPanes []int
 
 	for _, p := range panes {
 		var shouldSend bool
@@ -435,16 +459,39 @@ func (m *Model) send() (tea.Model, tea.Cmd) {
 		if shouldSend {
 			if err := tmux.SendKeys(p.ID, prompt, true); err != nil {
 				m.err = err
+				m.recordHistory(targetPanes, start, err)
 				return *m, tea.Quit
 			}
 			count++
+			targetPanes = append(targetPanes, p.Index)
 		}
 	}
 
+	m.recordHistory(targetPanes, start, nil)
 	m.sent = true
 	m.sentCount = count
 	m.quitting = true
 	return *m, tea.Quit
+}
+
+func (m *Model) recordHistory(targetPanes []int, start time.Time, err error) {
+	entry := history.NewEntry(m.session, intsToStrings(targetPanes), m.selected.Prompt, history.SourcePalette)
+	entry.Template = m.selected.Key
+	entry.DurationMs = int(time.Since(start) / time.Millisecond)
+	if err == nil {
+		entry.SetSuccess()
+	} else {
+		entry.SetError(err)
+	}
+	_ = history.Append(entry)
+}
+
+func intsToStrings(ints []int) []string {
+	out := make([]string, 0, len(ints))
+	for _, v := range ints {
+		out = append(out, fmt.Sprintf("%d", v))
+	}
+	return out
 }
 
 // View implements tea.Model
@@ -515,41 +562,30 @@ func (m Model) viewCommandPhase() string {
 
 	var b strings.Builder
 
-	// Calculate layout dimensions with responsive breakpoints
-	// Inspired by beads_viewer's adaptive layout system
+	// Calculate layout dimensions using shared tiers and split proportions
 	const (
 		minColumnWidth  = 35  // Minimum column width
 		maxListWidth    = 70  // Maximum list width
 		maxPreviewWidth = 100 // Maximum preview width
 	)
 
-	tier := layout.TierForWidth(m.width)
-	layoutMode := styles.GetLayoutMode(m.width)
-	showSplitView := tier >= layout.TierSplit
-
+	showSplitView := m.tier >= layout.TierSplit
 	var listWidth, previewWidth int
+
 	if !showSplitView {
-		// Narrow display: full width for list only
 		listWidth = m.width - 4
 		previewWidth = 0
-	} else if tier == layout.TierUltra || layoutMode == styles.LayoutUltraWide {
-		// Ultra-wide: generous proportions with max limits
-		listWidth = m.width * 35 / 100 // 35% for list
+	} else {
+		left, right := layout.SplitProportions(m.width)
+		listWidth = left - 2 // borders/padding allowance
+		previewWidth = right - 2
+
 		if listWidth > maxListWidth {
 			listWidth = maxListWidth
 		}
-		previewWidth = m.width - listWidth - 8 // Rest for preview
 		if previewWidth > maxPreviewWidth {
 			previewWidth = maxPreviewWidth
 		}
-	} else if tier >= layout.TierWide || layoutMode == styles.LayoutSpacious {
-		// Wide display: ~40/60 split
-		listWidth = m.width * 40 / 100
-		previewWidth = m.width - listWidth - 8
-	} else {
-		// Standard display: 50/50 split
-		listWidth = m.width/2 - 2
-		previewWidth = m.width/2 - 2
 	}
 
 	// Ensure minimums
@@ -707,10 +743,7 @@ func (m Model) renderCommandList(width int) string {
 			}
 
 			// Item label with selection highlight
-			label := cmd.Label
-			if len(label) > width-8 {
-				label = label[:width-11] + "..."
-			}
+			label := layout.TruncateRunes(cmd.Label, width-8, "…")
 
 			if isSelected {
 				// Gradient highlight for selected item
