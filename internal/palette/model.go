@@ -232,11 +232,11 @@ func (m *Model) updateCommandPhase(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		m.quitting = true
-		return m, tea.Quit
+		return *m, tea.Quit
 
 	case key.Matches(msg, keys.Back):
 		m.quitting = true
-		return m, tea.Quit
+		return *m, tea.Quit
 
 	case key.Matches(msg, keys.Up):
 		if m.cursor > 0 {
@@ -297,10 +297,10 @@ func (m *Model) updateCommandPhase(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.filter, cmd = m.filter.Update(msg)
 		m.updateFiltered()
-		return m, cmd
+		return *m, cmd
 	}
 
-	return m, nil
+	return *m, nil
 }
 
 func (m *Model) selectByNumber(n int) bool {
@@ -323,7 +323,7 @@ func (m *Model) updateTargetPhase(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, keys.Quit):
 		m.quitting = true
-		return m, tea.Quit
+		return *m, tea.Quit
 
 	case key.Matches(msg, keys.Target1):
 		m.target = TargetAll
@@ -342,7 +342,7 @@ func (m *Model) updateTargetPhase(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.send()
 	}
 
-	return m, nil
+	return *m, nil
 }
 
 func (m *Model) updateFiltered() {
@@ -404,13 +404,13 @@ func (m *Model) buildVisualOrder() {
 
 func (m *Model) send() (tea.Model, tea.Cmd) {
 	if m.selected == nil {
-		return m, nil
+		return *m, nil
 	}
 
 	panes, err := tmux.GetPanes(m.session)
 	if err != nil {
 		m.err = err
-		return m, tea.Quit
+		return *m, tea.Quit
 	}
 
 	prompt := m.selected.Prompt
@@ -434,7 +434,7 @@ func (m *Model) send() (tea.Model, tea.Cmd) {
 		if shouldSend {
 			if err := tmux.SendKeys(p.ID, prompt, true); err != nil {
 				m.err = err
-				return m, tea.Quit
+				return *m, tea.Quit
 			}
 			count++
 		}
@@ -443,7 +443,7 @@ func (m *Model) send() (tea.Model, tea.Cmd) {
 	m.sent = true
 	m.sentCount = count
 	m.quitting = true
-	return m, tea.Quit
+	return *m, tea.Quit
 }
 
 // View implements tea.Model

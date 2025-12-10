@@ -164,7 +164,7 @@ brews:
       owner: Dicklesworthstone
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    folder: Formula
+    directory: Formula
     homepage: "https://github.com/Dicklesworthstone/ntm"
     description: "Named Tmux Manager - Orchestrate AI coding agents in tmux sessions"
     license: "MIT"

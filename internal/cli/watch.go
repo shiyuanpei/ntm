@@ -168,7 +168,7 @@ func watchLoop(ctx context.Context, session string, opts watchOptions, t theme.T
 		fmt.Println(lipgloss.NewStyle().Foreground(t.Overlay).Render("Press Ctrl+C to stop\n"))
 	} else {
 		fmt.Printf("\nWatching session: %s\n", session)
-		fmt.Println("Press Ctrl+C to stop\n")
+		fmt.Println("Press Ctrl+C to stop")
 	}
 
 	for {
