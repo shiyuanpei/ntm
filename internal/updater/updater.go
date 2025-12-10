@@ -65,7 +65,9 @@ func checkForUpdates(client *http.Client, url, currentVersion string) (*UpdateIn
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil
+		// Gracefully report "no update info" instead of returning nil, nil which
+		// forces callers to nil-check. This keeps the API predictable.
+		return &UpdateInfo{Available: false, CurrentVer: currentVersion}, nil
 	}
 
 	var rel Release
