@@ -555,3 +555,24 @@ func (c *Client) ListProjectAgents(ctx context.Context, projectKey string) ([]Ag
 
 	return agents, nil
 }
+
+// InstallPrecommitGuard installs the Agent Mail pre-commit guard for a repo.
+func (c *Client) InstallPrecommitGuard(ctx context.Context, projectKey, repoPath string) error {
+	args := map[string]interface{}{
+		"project_key":    projectKey,
+		"code_repo_path": repoPath,
+	}
+
+	_, err := c.callTool(ctx, "install_precommit_guard", args)
+	return err
+}
+
+// UninstallPrecommitGuard removes the Agent Mail pre-commit guard from a repo.
+func (c *Client) UninstallPrecommitGuard(ctx context.Context, repoPath string) error {
+	args := map[string]interface{}{
+		"code_repo_path": repoPath,
+	}
+
+	_, err := c.callTool(ctx, "uninstall_precommit_guard", args)
+	return err
+}

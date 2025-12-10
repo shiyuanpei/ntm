@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/Dicklesworthstone/ntm/internal/agentmail"
 	"github.com/Dicklesworthstone/ntm/internal/hooks"
 	"github.com/Dicklesworthstone/ntm/internal/tui/theme"
 	"github.com/spf13/cobra"
@@ -36,6 +38,7 @@ Examples:
 		newHooksUninstallCmd(),
 		newHooksStatusCmd(),
 		newHooksRunCmd(),
+		newHooksGuardCmd(),
 	)
 
 	return cmd
@@ -333,5 +336,116 @@ func runPreCommitHook(verbose, failOnWarning bool, timeout int) error {
 
 	hooks.PrintPreCommitResult(result)
 	result.Exit()
+	return nil
+}
+
+func newHooksGuardCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "guard",
+		Short: "Manage Agent Mail pre-commit guard",
+	}
+
+	cmd.AddCommand(
+		newHooksGuardInstallCmd(),
+		newHooksGuardUninstallCmd(),
+	)
+
+	return cmd
+}
+
+func newHooksGuardInstallCmd() *cobra.Command {
+	var warnOnly bool
+
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install Agent Mail pre-commit guard",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runHooksGuardInstall(warnOnly)
+		},
+	}
+
+	cmd.Flags().BoolVar(&warnOnly, "warn-only", false, "Warn instead of blocking (export AGENT_MAIL_GUARD_MODE=warn)")
+	return cmd
+}
+
+func runHooksGuardInstall(warnOnly bool) error {
+	t := theme.Current()
+	repoPath, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	client := agentmail.NewClient(agentmail.WithProjectKey(repoPath))
+	if !client.IsAvailable() {
+		return fmt.Errorf("agent mail server not available at %s\nstart the server with: mcp-agent-mail serve", agentmail.DefaultBaseURL)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := client.EnsureProject(ctx, repoPath); err != nil {
+		return fmt.Errorf("ensuring project: %w", err)
+	}
+
+	if err := client.InstallPrecommitGuard(ctx, repoPath, repoPath); err != nil {
+		return fmt.Errorf("installing guard: %w", err)
+	}
+
+	if jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(map[string]interface{}{
+			"success":   true,
+			"warn_only": warnOnly,
+			"repo":      repoPath,
+		})
+	}
+
+	fmt.Printf("%s✓%s Installed Agent Mail pre-commit guard\n", colorize(t.Success), "\033[0m")
+	fmt.Printf("  Repo: %s\n", repoPath)
+	if warnOnly {
+		fmt.Println("  Warn-only: export AGENT_MAIL_GUARD_MODE=warn before committing.")
+	} else {
+		fmt.Println("  To use warn-only mode, export AGENT_MAIL_GUARD_MODE=warn.")
+	}
+	return nil
+}
+
+func newHooksGuardUninstallCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "uninstall",
+		Short: "Remove Agent Mail pre-commit guard",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runHooksGuardUninstall()
+		},
+	}
+}
+
+func runHooksGuardUninstall() error {
+	t := theme.Current()
+	repoPath, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	client := agentmail.NewClient(agentmail.WithProjectKey(repoPath))
+	if !client.IsAvailable() {
+		return fmt.Errorf("agent mail server not available at %s\nstart the server with: mcp-agent-mail serve", agentmail.DefaultBaseURL)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := client.UninstallPrecommitGuard(ctx, repoPath); err != nil {
+		return fmt.Errorf("uninstalling guard: %w", err)
+	}
+
+	if jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(map[string]interface{}{
+			"success": true,
+			"repo":    repoPath,
+		})
+	}
+
+	fmt.Printf("%s✓%s Removed Agent Mail pre-commit guard\n", colorize(t.Success), "\033[0m")
+	fmt.Printf("  Repo: %s\n", repoPath)
 	return nil
 }
