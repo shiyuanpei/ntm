@@ -88,7 +88,8 @@ func IsPromptLine(line string, agentType string) bool {
 }
 
 // DetectIdleFromOutput analyzes output to determine if agent is idle.
-// It checks the last non-empty line for prompt patterns.
+// It checks up to 3 non-empty lines from the end for prompt patterns.
+// This window allows detecting idle state even when there's trailing output.
 func DetectIdleFromOutput(output string, agentType string) bool {
 	// Strip ANSI first for cleaner processing
 	clean := StripANSI(output)
@@ -103,18 +104,23 @@ func DetectIdleFromOutput(output string, agentType string) bool {
 		return false
 	}
 
-	// Only consider the last non-empty line to avoid stale prompts earlier in history.
-	foundLine := false
-	for i := len(lines) - 1; i >= 0; i-- {
+	// Check up to 3 non-empty lines from the end for prompt patterns.
+	// This window allows detecting idle state even with some trailing output.
+	const maxLinesToCheck = 3
+	linesChecked := 0
+	for i := len(lines) - 1; i >= 0 && linesChecked < maxLinesToCheck; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line == "" {
 			continue
 		}
-		foundLine = true
-		return IsPromptLine(line, agentType)
+		linesChecked++
+		if IsPromptLine(line, agentType) {
+			return true
+		}
 	}
+
 	// If there was no output at all, treat user panes as idle (empty buffer, likely waiting at prompt)
-	if !foundLine && (agentType == "" || agentType == "user") {
+	if linesChecked == 0 && (agentType == "" || agentType == "user") {
 		return true
 	}
 	return false
