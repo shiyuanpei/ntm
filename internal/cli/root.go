@@ -179,6 +179,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&robotStatus, "robot-status", false, "Output session status as JSON for AI agents")
 	rootCmd.Flags().BoolVar(&robotVersion, "robot-version", false, "Output version info as JSON")
 	rootCmd.Flags().BoolVar(&robotPlan, "robot-plan", false, "Output execution plan as JSON for AI agents")
+	rootCmd.Flags().BoolVar(&robotSnapshot, "robot-snapshot", false, "Output unified system state snapshot (JSON)")
 	rootCmd.Flags().StringVar(&robotTail, "robot-tail", "", "Tail pane output for session (JSON)")
 	rootCmd.Flags().IntVar(&robotLines, "lines", 20, "Number of lines to capture (used with --robot-tail)")
 	rootCmd.Flags().StringVar(&robotPanes, "panes", "", "Comma-separated pane indices to filter (used with --robot-tail/--robot-send)")
