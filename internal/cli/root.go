@@ -44,10 +44,17 @@ Shell Integration:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// Enable profiling if requested
+		EnableProfilingIfRequested()
+
 		// Skip config loading for init, completion, version, and upgrade commands
 		if cmd.Name() == "init" || cmd.Name() == "completion" || cmd.Name() == "version" || cmd.Name() == "upgrade" {
 			return nil
 		}
+
+		// Profile config loading
+		endProfile := ProfileConfigLoad()
+		defer endProfile()
 
 		var err error
 		cfg, err = config.Load(cfgFile)
@@ -56,6 +63,10 @@ Shell Integration:
 			cfg = config.Default()
 		}
 		return nil
+	},
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		// Print profiling output if enabled
+		PrintProfilingIfEnabled()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		// Handle robot flags for AI agent integration
@@ -162,6 +173,18 @@ Shell Integration:
 			}
 			return
 		}
+		if robotHealth {
+			if err := robot.PrintHealth(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		// TODO(ntm-20n): --robot-assign is in development
+		if robotAssign != "" {
+			fmt.Fprintf(os.Stderr, "Error: --robot-assign is not yet implemented\n")
+			os.Exit(1)
+		}
 
 		// Show stunning help with gradients when run without subcommand
 		PrintStunningHelp()
@@ -193,6 +216,14 @@ var (
 	robotSendType    string // filter by agent type (e.g., "claude")
 	robotSendExclude string // comma-separated panes to exclude
 	robotSendDelay   int    // delay between sends in ms
+
+	// Robot-assign flags for work distribution
+	robotAssign         string // session name for work assignment
+	robotAssignBeads    string // comma-separated bead IDs to assign
+	robotAssignStrategy string // assignment strategy: balanced, speed, quality, dependency
+
+	// Robot-health flag
+	robotHealth bool // project health summary
 )
 
 func init() {
@@ -200,6 +231,9 @@ func init() {
 
 	// Global JSON output flag - applies to all commands
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format (machine-readable)")
+
+	// Profiling flag for startup timing analysis
+	rootCmd.PersistentFlags().BoolVar(&profileStartup, "profile-startup", false, "Enable startup profiling (outputs timing data)")
 
 	// Robot flags for AI agents
 	rootCmd.Flags().BoolVar(&robotHelp, "robot-help", false, "Show AI agent help documentation (JSON)")
@@ -222,6 +256,14 @@ func init() {
 	rootCmd.Flags().StringVar(&robotSendExclude, "exclude", "", "Comma-separated pane indices to exclude (used with --robot-send)")
 	rootCmd.Flags().IntVar(&robotSendDelay, "delay-ms", 0, "Delay between sends in milliseconds (used with --robot-send)")
 
+	// Robot-assign flags for work distribution
+	rootCmd.Flags().StringVar(&robotAssign, "robot-assign", "", "Get work distribution recommendations for session (JSON)")
+	rootCmd.Flags().StringVar(&robotAssignBeads, "beads", "", "Comma-separated bead IDs to assign (used with --robot-assign)")
+	rootCmd.Flags().StringVar(&robotAssignStrategy, "strategy", "balanced", "Assignment strategy: balanced, speed, quality, dependency (used with --robot-assign)")
+
+	// Robot-health flag for project health summary
+	rootCmd.Flags().BoolVar(&robotHealth, "robot-health", false, "Output project health summary as JSON for AI agents")
+
 	// Sync version info with robot package
 	robot.Version = Version
 	robot.Commit = Commit
@@ -238,7 +280,9 @@ func init() {
 		// Agent management
 		newAddCmd(),
 		newSendCmd(),
+		newReplayCmd(),
 		newInterruptCmd(),
+		newMailCmd(),
 
 		// Session navigation
 		newAttachCmd(),
@@ -252,6 +296,10 @@ func init() {
 		// Output management
 		newCopyCmd(),
 		newSaveCmd(),
+
+		// Session persistence
+		newCheckpointCmd(),
+		newRollbackCmd(),
 
 		// Utilities
 		newPaletteCmd(),
@@ -270,6 +318,12 @@ func init() {
 
 		// Tutorial
 		newTutorialCmd(),
+
+		// Agent Mail & File Reservations
+		newMailCmd(),
+		newLockCmd(),
+		newUnlockCmd(),
+		newLocksCmd(),
 	)
 }
 
