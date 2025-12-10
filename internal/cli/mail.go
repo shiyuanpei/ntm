@@ -304,7 +304,7 @@ func runMailMark(cmd *cobra.Command, session, agent string, action mailAction, i
 // - Bypasses contact policies
 // - Auto-injects a preamble telling agents to prioritize human instructions
 // - Marks all messages as high importance
-func runMailSendOverseer(session string, to []string, subject, body, threadID string, all bool) error {
+func runMailSendOverseer(cmd *cobra.Command, session string, to []string, subject, body, threadID string, all bool) error {
 	// Session check is optional - we primarily care about the project
 	// But it's useful to verify the user is in the right context
 	if session != "" {
@@ -387,7 +387,7 @@ func runMailSendOverseer(session string, to []string, subject, body, threadID st
 
 	// Output result
 	if IsJSONOutput() {
-		return encodeJSONResult(map[string]interface{}{
+		return encodeJSONResult(cmd.OutOrStdout(), map[string]interface{}{
 			"success":    result.Success,
 			"recipients": result.Recipients,
 			"subject":    subject,
@@ -563,11 +563,7 @@ func truncateSubject(body string, maxLen int) string {
 }
 
 // encodeJSONResult is a helper to output JSON.
-func encodeJSONResult(v interface{}) error {
-	w := io.Writer(os.Stdout)
-	if rootCmd != nil && rootCmd.OutOrStdout() != nil {
-		w = rootCmd.OutOrStdout()
-	}
+func encodeJSONResult(w io.Writer, v interface{}) error {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(v)
