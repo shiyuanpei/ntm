@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v0.10.0
 	github.com/muesli/reflow v0.3.0
 	github.com/spf13/cobra v1.8.0
+	golang.org/x/term v0.17.0
 )
 
 require (
@@ -27,6 +28,5 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/sync v0.6.0 // indirect
 	golang.org/x/sys v0.17.0 // indirect
-	golang.org/x/term v0.17.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 )

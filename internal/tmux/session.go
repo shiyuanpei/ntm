@@ -92,8 +92,12 @@ func SessionExists(name string) bool {
 func ListSessions() ([]Session, error) {
 	output, err := run("list-sessions", "-F", "#{session_name}:#{session_windows}:#{session_attached}:#{session_created_string}")
 	if err != nil {
-		// No sessions is not an error
-		if strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "no sessions") {
+		// No sessions is not an error - handle various tmux error messages
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "no server running") ||
+			strings.Contains(errMsg, "no sessions") ||
+			strings.Contains(errMsg, "No such file or directory") ||
+			strings.Contains(errMsg, "error connecting to") {
 			return nil, nil
 		}
 		return nil, err

@@ -417,3 +417,72 @@ func TestRecoveryManager_IncludeBeadContext(t *testing.T) {
 		t.Error("should have includeBeadContext false")
 	}
 }
+
+func TestRecoveryManager_SendRecoveryPromptByID_Cooldown(t *testing.T) {
+	config := RecoveryConfig{
+		Cooldown:      1 * time.Hour, // Long cooldown
+		Prompt:        "test",
+		MaxRecoveries: 5,
+	}
+	rm := NewRecoveryManager(config)
+
+	// Simulate a recent recovery
+	paneID := "test:0"
+	rm.mu.Lock()
+	rm.lastRecovery[paneID] = time.Now()
+	rm.mu.Unlock()
+
+	// Try to send again - should be blocked by cooldown
+	sent, err := rm.SendRecoveryPromptByID("test", 0, paneID, "trigger")
+	if sent {
+		t.Error("should not send when in cooldown")
+	}
+	if err != nil {
+		t.Errorf("should not error when blocked by cooldown: %v", err)
+	}
+}
+
+func TestRecoveryManager_SendRecoveryPromptByID_MaxRecoveries(t *testing.T) {
+	config := RecoveryConfig{
+		Cooldown:      1 * time.Millisecond, // Short cooldown
+		Prompt:        "test",
+		MaxRecoveries: 3,
+	}
+	rm := NewRecoveryManager(config)
+
+	// Simulate max recoveries reached
+	paneID := "test:0"
+	rm.mu.Lock()
+	rm.recoveryCount[paneID] = 3
+	rm.mu.Unlock()
+
+	// Wait for cooldown to pass
+	time.Sleep(5 * time.Millisecond)
+
+	// Try to send - should be blocked by max recoveries
+	sent, err := rm.SendRecoveryPromptByID("test", 0, paneID, "trigger")
+	if sent {
+		t.Error("should not send when max recoveries reached")
+	}
+	if err != nil {
+		t.Errorf("should not error when blocked by max recoveries: %v", err)
+	}
+}
+
+func TestCompactionRecoveryIntegration_CheckAndRecover_WithCompaction(t *testing.T) {
+	cri := NewCompactionRecoveryIntegrationDefault()
+
+	// Test with output containing compaction text
+	output := "Conversation compacted due to context limits"
+
+	event, sent, err := cri.CheckAndRecover(output, "cc", "testsession", 0)
+
+	// Should detect compaction
+	if event == nil {
+		t.Error("should detect compaction in output")
+	}
+
+	// Sent should be false since tmux isn't running
+	// or true if it happens to be available
+	t.Logf("Sent=%v, Error=%v", sent, err)
+}

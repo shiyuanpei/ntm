@@ -247,3 +247,226 @@ func TestNotInstalled(t *testing.T) {
 		t.Error("ErrNoBaseline should not be nil")
 	}
 }
+
+func TestIsKeystone(t *testing.T) {
+	if !IsInstalled() {
+		t.Skip("bv not installed")
+	}
+
+	// Test with a likely non-existent ID
+	isKey, score, err := IsKeystone("nonexistent-issue-xyz")
+	if err != nil {
+		t.Fatalf("IsKeystone() error: %v", err)
+	}
+
+	if isKey {
+		t.Error("Expected nonexistent issue to not be a keystone")
+	}
+	if score != 0 {
+		t.Errorf("Expected score 0 for non-keystone, got %f", score)
+	}
+}
+
+func TestIsHub(t *testing.T) {
+	if !IsInstalled() {
+		t.Skip("bv not installed")
+	}
+
+	// Test with a likely non-existent ID
+	isHub, score, err := IsHub("nonexistent-issue-xyz")
+	if err != nil {
+		t.Fatalf("IsHub() error: %v", err)
+	}
+
+	if isHub {
+		t.Error("Expected nonexistent issue to not be a hub")
+	}
+	if score != 0 {
+		t.Errorf("Expected score 0 for non-hub, got %f", score)
+	}
+}
+
+func TestIsAuthority(t *testing.T) {
+	if !IsInstalled() {
+		t.Skip("bv not installed")
+	}
+
+	// Test with a likely non-existent ID
+	isAuth, score, err := IsAuthority("nonexistent-issue-xyz")
+	if err != nil {
+		t.Fatalf("IsAuthority() error: %v", err)
+	}
+
+	if isAuth {
+		t.Error("Expected nonexistent issue to not be an authority")
+	}
+	if score != 0 {
+		t.Errorf("Expected score 0 for non-authority, got %f", score)
+	}
+}
+
+func TestGetGraphPosition(t *testing.T) {
+	if !IsInstalled() {
+		t.Skip("bv not installed")
+	}
+
+	// Test with a known issue ID (one that exists in the project)
+	// First, get a bottleneck to use as a test case
+	bottlenecks, err := GetTopBottlenecks(1)
+	if err != nil {
+		t.Skipf("Could not get bottlenecks: %v", err)
+	}
+
+	if len(bottlenecks) == 0 {
+		t.Skip("No bottlenecks found to test with")
+	}
+
+	testID := bottlenecks[0].ID
+	pos, err := GetGraphPosition(testID)
+	if err != nil {
+		t.Fatalf("GetGraphPosition() error: %v", err)
+	}
+
+	if pos.IssueID != testID {
+		t.Errorf("IssueID = %s, want %s", pos.IssueID, testID)
+	}
+
+	// Should be a bottleneck since we got it from bottleneck list
+	if !pos.IsBottleneck {
+		t.Errorf("Expected %s to be a bottleneck", testID)
+	}
+
+	if pos.Summary == "" {
+		t.Error("Expected non-empty summary")
+	}
+
+	t.Logf("Graph position for %s: %+v", testID, pos)
+}
+
+func TestGetGraphPositionNonExistent(t *testing.T) {
+	if !IsInstalled() {
+		t.Skip("bv not installed")
+	}
+
+	pos, err := GetGraphPosition("nonexistent-issue-xyz")
+	if err != nil {
+		t.Fatalf("GetGraphPosition() error: %v", err)
+	}
+
+	if pos.IsBottleneck || pos.IsKeystone || pos.IsHub || pos.IsAuthority {
+		t.Error("Expected nonexistent issue to have no graph roles")
+	}
+
+	if pos.Summary != "regular node" {
+		t.Errorf("Summary = %q, want 'regular node'", pos.Summary)
+	}
+}
+
+func TestGetGraphPositionsBatch(t *testing.T) {
+	if !IsInstalled() {
+		t.Skip("bv not installed")
+	}
+
+	// Get some real IDs to test with
+	bottlenecks, err := GetTopBottlenecks(2)
+	if err != nil {
+		t.Skipf("Could not get bottlenecks: %v", err)
+	}
+
+	var ids []string
+	for _, b := range bottlenecks {
+		ids = append(ids, b.ID)
+	}
+	// Add a fake ID too
+	ids = append(ids, "fake-id-xyz")
+
+	positions, err := GetGraphPositionsBatch(ids)
+	if err != nil {
+		t.Fatalf("GetGraphPositionsBatch() error: %v", err)
+	}
+
+	if len(positions) != len(ids) {
+		t.Errorf("Expected %d positions, got %d", len(ids), len(positions))
+	}
+
+	// Verify bottlenecks are marked as such
+	for _, b := range bottlenecks {
+		pos, ok := positions[b.ID]
+		if !ok {
+			t.Errorf("Missing position for %s", b.ID)
+			continue
+		}
+		if !pos.IsBottleneck {
+			t.Errorf("Expected %s to be marked as bottleneck", b.ID)
+		}
+	}
+
+	// Verify fake ID is not a bottleneck
+	fakePos := positions["fake-id-xyz"]
+	if fakePos.IsBottleneck {
+		t.Error("Fake ID should not be a bottleneck")
+	}
+}
+
+func TestGeneratePositionSummary(t *testing.T) {
+	tests := []struct {
+		name     string
+		pos      *GraphPosition
+		contains []string
+	}{
+		{
+			name:     "regular node",
+			pos:      &GraphPosition{},
+			contains: []string{"regular node"},
+		},
+		{
+			name:     "bottleneck only",
+			pos:      &GraphPosition{IsBottleneck: true},
+			contains: []string{"bottleneck"},
+		},
+		{
+			name:     "keystone only",
+			pos:      &GraphPosition{IsKeystone: true},
+			contains: []string{"keystone"},
+		},
+		{
+			name:     "hub only",
+			pos:      &GraphPosition{IsHub: true},
+			contains: []string{"hub"},
+		},
+		{
+			name:     "authority only",
+			pos:      &GraphPosition{IsAuthority: true},
+			contains: []string{"authority"},
+		},
+		{
+			name:     "multiple roles",
+			pos:      &GraphPosition{IsBottleneck: true, IsKeystone: true},
+			contains: []string{"bottleneck", "keystone"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			summary := generatePositionSummary(tt.pos)
+			for _, want := range tt.contains {
+				if !containsSubstring(summary, want) {
+					t.Errorf("Summary %q should contain %q", summary, want)
+				}
+			}
+		})
+	}
+}
+
+func containsSubstring(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
+}
+
+func containsStr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

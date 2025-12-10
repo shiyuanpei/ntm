@@ -90,14 +90,28 @@ type PlanOutput struct {
 
 // BeadAction represents a recommended action based on bead priority analysis
 type BeadAction struct {
-	BeadID     string   `json:"bead_id"`
-	Title      string   `json:"title"`
-	Priority   int      `json:"priority"`
-	Impact     float64  `json:"impact_score"`
-	Reasoning  []string `json:"reasoning"`
-	Command    string   `json:"command"`              // e.g., "bd update ntm-xyz --status in_progress"
-	IsReady    bool     `json:"is_ready"`             // true if no blockers
-	BlockedBy  []string `json:"blocked_by,omitempty"` // blocking bead IDs
+	BeadID        string         `json:"bead_id"`
+	Title         string         `json:"title"`
+	Priority      int            `json:"priority"`
+	Impact        float64        `json:"impact_score"`
+	Reasoning     []string       `json:"reasoning"`
+	Command       string         `json:"command"`              // e.g., "bd update ntm-xyz --status in_progress"
+	IsReady       bool           `json:"is_ready"`             // true if no blockers
+	BlockedBy     []string       `json:"blocked_by,omitempty"` // blocking bead IDs
+	GraphPosition *GraphPosition `json:"graph_position,omitempty"`
+}
+
+// GraphPosition represents the position of an issue in the dependency graph
+type GraphPosition struct {
+	IsBottleneck    bool    `json:"is_bottleneck,omitempty"`
+	BottleneckScore float64 `json:"bottleneck_score,omitempty"`
+	IsKeystone      bool    `json:"is_keystone,omitempty"`
+	KeystoneScore   float64 `json:"keystone_score,omitempty"`
+	IsHub           bool    `json:"is_hub,omitempty"`
+	HubScore        float64 `json:"hub_score,omitempty"`
+	IsAuthority     bool    `json:"is_authority,omitempty"`
+	AuthorityScore  float64 `json:"authority_score,omitempty"`
+	Summary         string  `json:"summary,omitempty"` // Human-readable summary
 }
 
 // PlanAction is a suggested action
@@ -398,6 +412,18 @@ func getBeadRecommendations(limit int) ([]BeadAction, []string) {
 	// Get ready issues to check blockers
 	readyIssues := getReadyIssueIDs()
 
+	// Collect issue IDs for batch graph position lookup
+	var issueIDs []string
+	for _, rec := range recommendations {
+		issueIDs = append(issueIDs, rec.IssueID)
+	}
+
+	// Get graph positions in batch for efficiency
+	graphPositions, graphErr := bv.GetGraphPositionsBatch(issueIDs)
+	if graphErr != nil {
+		warnings = append(warnings, fmt.Sprintf("failed to get graph positions: %v", graphErr))
+	}
+
 	// Convert bv recommendations to BeadActions
 	for _, rec := range recommendations {
 		isReady := readyIssues[rec.IssueID]
@@ -410,6 +436,23 @@ func getBeadRecommendations(limit int) ([]BeadAction, []string) {
 			Reasoning: rec.Reasoning,
 			Command:   fmt.Sprintf("bd update %s --status in_progress", rec.IssueID),
 			IsReady:   isReady,
+		}
+
+		// Add graph position if available
+		if graphPositions != nil {
+			if pos, ok := graphPositions[rec.IssueID]; ok && pos != nil {
+				action.GraphPosition = &GraphPosition{
+					IsBottleneck:    pos.IsBottleneck,
+					BottleneckScore: pos.BottleneckScore,
+					IsKeystone:      pos.IsKeystone,
+					KeystoneScore:   pos.KeystoneScore,
+					IsHub:           pos.IsHub,
+					HubScore:        pos.HubScore,
+					IsAuthority:     pos.IsAuthority,
+					AuthorityScore:  pos.AuthorityScore,
+					Summary:         pos.Summary,
+				}
+			}
 		}
 
 		// If not ready, try to determine blockers

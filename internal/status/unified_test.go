@@ -453,8 +453,9 @@ func createTestSession(t *testing.T) string {
 	sessionName := "ntm_status_test_" + time.Now().Format("150405")
 
 	cmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Failed to create test session: %v", err)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Skipf("Failed to create test session (tmux may be unavailable): %v: %s", err, output)
 	}
 
 	t.Cleanup(func() {

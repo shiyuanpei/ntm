@@ -1278,3 +1278,106 @@ func TestSnapshotSessionMarshal(t *testing.T) {
 		t.Error("Attached should be true")
 	}
 }
+
+func TestBeadActionMarshal(t *testing.T) {
+	action := BeadAction{
+		BeadID:    "ntm-123",
+		Title:     "Test bead",
+		Priority:  1,
+		Impact:    0.85,
+		Reasoning: []string{"High centrality", "Blocks 3 items"},
+		Command:   "bd update ntm-123 --status in_progress",
+		IsReady:   true,
+		BlockedBy: nil,
+	}
+
+	data, err := json.Marshal(action)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var result BeadAction
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if result.BeadID != "ntm-123" {
+		t.Errorf("BeadID = %s, want ntm-123", result.BeadID)
+	}
+	if result.Priority != 1 {
+		t.Errorf("Priority = %d, want 1", result.Priority)
+	}
+	if result.Impact != 0.85 {
+		t.Errorf("Impact = %f, want 0.85", result.Impact)
+	}
+	if !result.IsReady {
+		t.Error("IsReady should be true")
+	}
+	if len(result.Reasoning) != 2 {
+		t.Errorf("Reasoning count = %d, want 2", len(result.Reasoning))
+	}
+}
+
+func TestBeadActionMarshalWithBlockers(t *testing.T) {
+	action := BeadAction{
+		BeadID:    "ntm-456",
+		Title:     "Blocked bead",
+		Priority:  2,
+		Impact:    0.65,
+		Reasoning: []string{"Depends on other tasks"},
+		Command:   "bd update ntm-456 --status in_progress",
+		IsReady:   false,
+		BlockedBy: []string{"ntm-123", "ntm-789"},
+	}
+
+	data, err := json.Marshal(action)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var result BeadAction
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if result.IsReady {
+		t.Error("IsReady should be false")
+	}
+	if len(result.BlockedBy) != 2 {
+		t.Errorf("BlockedBy count = %d, want 2", len(result.BlockedBy))
+	}
+	if result.BlockedBy[0] != "ntm-123" {
+		t.Errorf("BlockedBy[0] = %s, want ntm-123", result.BlockedBy[0])
+	}
+}
+
+func TestPlanOutputWithBeadActions(t *testing.T) {
+	plan := PlanOutput{
+		GeneratedAt:    time.Now().UTC(),
+		Recommendation: "Work on high-impact bead",
+		Actions: []PlanAction{
+			{Priority: 1, Command: "ntm spawn test", Description: "Spawn test session"},
+		},
+		BeadActions: []BeadAction{
+			{BeadID: "ntm-123", Title: "Test task", Priority: 1, Impact: 0.9, IsReady: true},
+		},
+		Warnings: nil,
+	}
+
+	data, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var result PlanOutput
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if len(result.BeadActions) != 1 {
+		t.Errorf("BeadActions count = %d, want 1", len(result.BeadActions))
+	}
+	if result.BeadActions[0].BeadID != "ntm-123" {
+		t.Errorf("BeadActions[0].BeadID = %s, want ntm-123", result.BeadActions[0].BeadID)
+	}
+}

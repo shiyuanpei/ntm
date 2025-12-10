@@ -201,3 +201,108 @@ func TestGetLastNonEmptyLine(t *testing.T) {
 		})
 	}
 }
+
+func TestIsPromptLine_LiteralMatch(t *testing.T) {
+	// Test that literal matching works (for patterns that use Literal instead of Regex)
+	// First add a literal pattern for testing
+	originalLen := len(promptPatterns)
+
+	// Add a test pattern with Literal
+	promptPatterns = append(promptPatterns, PromptPattern{
+		AgentType:   "test",
+		Literal:     "test_prompt$",
+		Description: "test literal prompt",
+	})
+
+	defer func() {
+		// Restore original patterns
+		promptPatterns = promptPatterns[:originalLen]
+	}()
+
+	// Test literal matching
+	if !IsPromptLine("command test_prompt$", "test") {
+		t.Error("should match literal prompt suffix")
+	}
+}
+
+func TestIsPromptLine_AgentTypeFiltering(t *testing.T) {
+	// Test that patterns are filtered by agent type
+	// Note: Generic patterns (empty AgentType) match ALL agent types as fallback
+	tests := []struct {
+		line      string
+		agentType string
+		expected  bool
+	}{
+		// Cursor patterns match cursor agent type
+		{"cursor>", "cursor", true},
+		// Generic pattern ">$" is a fallback that matches any agent type
+		{"cursor>", "cc", true}, // Falls through to generic ">$" pattern
+
+		// Windsurf patterns match windsurf
+		{"windsurf>", "windsurf", true},
+		// Generic fallback pattern matches
+		{"windsurf>", "cod", true}, // Falls through to generic ">$" pattern
+
+		// Aider patterns
+		{"aider>", "aider", true},
+		// Generic fallback pattern matches
+		{"aider>", "gmi", true}, // Falls through to generic ">$" pattern
+
+		// But non-prompt lines don't match
+		{"just some text", "cursor", false},
+		{"running command...", "windsurf", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.line+"_"+tt.agentType, func(t *testing.T) {
+			result := IsPromptLine(tt.line, tt.agentType)
+			if result != tt.expected {
+				t.Errorf("IsPromptLine(%q, %q) = %v, want %v",
+					tt.line, tt.agentType, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDetectIdleFromOutput_MultipleLines(t *testing.T) {
+	// Test that we check multiple lines (up to 3 non-empty lines)
+	tests := []struct {
+		name      string
+		output    string
+		agentType string
+		expected  bool
+	}{
+		{
+			// Prompt in second-to-last non-empty line
+			name:      "prompt in second line from end",
+			output:    "output\nclaude>\n\n",
+			agentType: "cc",
+			expected:  true,
+		},
+		{
+			// Prompt within 3 non-empty lines is still detected
+			// "more" is checked (not prompt), "followup" is checked (not prompt),
+			// "claude>" is checked (is prompt!) -> returns true
+			name:      "prompt in third line from end",
+			output:    "claude>\nfollowup\nmore",
+			agentType: "cc",
+			expected:  true, // Actually true because we check 3 lines
+		},
+		{
+			// Prompt beyond 3 non-empty lines
+			name:      "prompt beyond 3 lines",
+			output:    "claude>\na\nb\nc\nd",
+			agentType: "cc",
+			expected:  false, // Beyond the 3 line check window
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := DetectIdleFromOutput(tt.output, tt.agentType)
+			if result != tt.expected {
+				t.Errorf("DetectIdleFromOutput = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}

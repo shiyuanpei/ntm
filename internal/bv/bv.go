@@ -238,6 +238,202 @@ func IsBottleneck(issueID string) (bool, float64, error) {
 	return false, 0, nil
 }
 
+// IsKeystone checks if an issue ID is in the keystone list
+func IsKeystone(issueID string) (bool, float64, error) {
+	insights, err := GetInsights()
+	if err != nil {
+		return false, 0, err
+	}
+
+	for _, k := range insights.Keystones {
+		if k.ID == issueID {
+			return true, k.Value, nil
+		}
+	}
+
+	return false, 0, nil
+}
+
+// IsHub checks if an issue ID is in the hub list (HITS algorithm)
+func IsHub(issueID string) (bool, float64, error) {
+	insights, err := GetInsights()
+	if err != nil {
+		return false, 0, err
+	}
+
+	for _, h := range insights.Hubs {
+		if h.ID == issueID {
+			return true, h.Value, nil
+		}
+	}
+
+	return false, 0, nil
+}
+
+// IsAuthority checks if an issue ID is in the authority list (HITS algorithm)
+func IsAuthority(issueID string) (bool, float64, error) {
+	insights, err := GetInsights()
+	if err != nil {
+		return false, 0, err
+	}
+
+	for _, a := range insights.Authorities {
+		if a.ID == issueID {
+			return true, a.Value, nil
+		}
+	}
+
+	return false, 0, nil
+}
+
+// GraphPosition represents the position of an issue in the dependency graph
+type GraphPosition struct {
+	IssueID         string  `json:"issue_id"`
+	IsBottleneck    bool    `json:"is_bottleneck"`
+	BottleneckScore float64 `json:"bottleneck_score,omitempty"`
+	IsKeystone      bool    `json:"is_keystone"`
+	KeystoneScore   float64 `json:"keystone_score,omitempty"`
+	IsHub           bool    `json:"is_hub"`
+	HubScore        float64 `json:"hub_score,omitempty"`
+	IsAuthority     bool    `json:"is_authority"`
+	AuthorityScore  float64 `json:"authority_score,omitempty"`
+	Summary         string  `json:"summary"` // Human-readable summary
+}
+
+// GetGraphPosition returns the full graph position context for an issue
+func GetGraphPosition(issueID string) (*GraphPosition, error) {
+	insights, err := GetInsights()
+	if err != nil {
+		return nil, err
+	}
+
+	pos := &GraphPosition{
+		IssueID: issueID,
+	}
+
+	// Check bottleneck status
+	for _, b := range insights.Bottlenecks {
+		if b.ID == issueID {
+			pos.IsBottleneck = true
+			pos.BottleneckScore = b.Value
+			break
+		}
+	}
+
+	// Check keystone status
+	for _, k := range insights.Keystones {
+		if k.ID == issueID {
+			pos.IsKeystone = true
+			pos.KeystoneScore = k.Value
+			break
+		}
+	}
+
+	// Check hub status
+	for _, h := range insights.Hubs {
+		if h.ID == issueID {
+			pos.IsHub = true
+			pos.HubScore = h.Value
+			break
+		}
+	}
+
+	// Check authority status
+	for _, a := range insights.Authorities {
+		if a.ID == issueID {
+			pos.IsAuthority = true
+			pos.AuthorityScore = a.Value
+			break
+		}
+	}
+
+	// Generate summary
+	pos.Summary = generatePositionSummary(pos)
+
+	return pos, nil
+}
+
+// generatePositionSummary creates a human-readable summary of graph position
+func generatePositionSummary(pos *GraphPosition) string {
+	var parts []string
+
+	if pos.IsBottleneck {
+		parts = append(parts, "bottleneck (blocks many paths)")
+	}
+	if pos.IsKeystone {
+		parts = append(parts, "keystone (high centrality)")
+	}
+	if pos.IsHub {
+		parts = append(parts, "hub (links to many authorities)")
+	}
+	if pos.IsAuthority {
+		parts = append(parts, "authority (linked by many hubs)")
+	}
+
+	if len(parts) == 0 {
+		return "regular node"
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// GetGraphPositionsBatch returns graph positions for multiple issues efficiently
+func GetGraphPositionsBatch(issueIDs []string) (map[string]*GraphPosition, error) {
+	insights, err := GetInsights()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build lookup maps for O(1) access
+	bottleneckMap := make(map[string]float64)
+	for _, b := range insights.Bottlenecks {
+		bottleneckMap[b.ID] = b.Value
+	}
+
+	keystoneMap := make(map[string]float64)
+	for _, k := range insights.Keystones {
+		keystoneMap[k.ID] = k.Value
+	}
+
+	hubMap := make(map[string]float64)
+	for _, h := range insights.Hubs {
+		hubMap[h.ID] = h.Value
+	}
+
+	authorityMap := make(map[string]float64)
+	for _, a := range insights.Authorities {
+		authorityMap[a.ID] = a.Value
+	}
+
+	// Build positions for requested issues
+	result := make(map[string]*GraphPosition)
+	for _, id := range issueIDs {
+		pos := &GraphPosition{IssueID: id}
+
+		if score, ok := bottleneckMap[id]; ok {
+			pos.IsBottleneck = true
+			pos.BottleneckScore = score
+		}
+		if score, ok := keystoneMap[id]; ok {
+			pos.IsKeystone = true
+			pos.KeystoneScore = score
+		}
+		if score, ok := hubMap[id]; ok {
+			pos.IsHub = true
+			pos.HubScore = score
+		}
+		if score, ok := authorityMap[id]; ok {
+			pos.IsAuthority = true
+			pos.AuthorityScore = score
+		}
+
+		pos.Summary = generatePositionSummary(pos)
+		result[id] = pos
+	}
+
+	return result, nil
+}
+
 // HealthSummary returns a brief project health summary
 type HealthSummary struct {
 	DriftStatus   DriftStatus
