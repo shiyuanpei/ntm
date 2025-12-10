@@ -23,6 +23,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wordwrap"
 )
 
 // DashboardTickMsg is sent for animation updates
@@ -1478,6 +1479,29 @@ func (m Model) renderPaneDetail(width int) string {
 		statusColor = t.Overlay
 	}
 	lines = append(lines, "  "+lipgloss.NewStyle().Foreground(statusColor).Render(statusIcon+" "+statusText))
+
+	// Project Health (if warning/critical)
+	if m.healthStatus == "warning" || m.healthStatus == "critical" {
+		lines = append(lines, "")
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(t.Yellow).Render("Project Health"))
+		lines = append(lines, "")
+		msg := wordwrap.String(m.healthMessage, width-4)
+		lines = append(lines, "  "+lipgloss.NewStyle().Foreground(t.Warning).Render(msg))
+	}
+
+	// Global Locks (TierWide+)
+	if m.tier >= layout.TierWide && len(m.agentMailLockInfo) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(t.Lavender).Render("Active Locks"))
+		lines = append(lines, "")
+		for i, lock := range m.agentMailLockInfo {
+			if i >= 5 {
+				lines = append(lines, fmt.Sprintf("  ...and %d more", len(m.agentMailLockInfo)-5))
+				break
+			}
+			lines = append(lines, fmt.Sprintf("  🔒 %s (%s)", layout.TruncateRunes(lock.PathPattern, 20, "..."), lock.AgentName))
+		}
+	}
 
 	// Compaction warning
 	if ps.LastCompaction != nil {
