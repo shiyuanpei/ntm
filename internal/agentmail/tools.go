@@ -1,9 +1,12 @@
 package agentmail
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 )
 
 // EnsureProject ensures a project exists for the given path.
@@ -417,4 +420,106 @@ func (c *Client) StartSession(ctx context.Context, projectKey, program, model, t
 	}
 
 	return &sessionResult, nil
+}
+
+// SendOverseerMessage sends a Human Overseer message via the HTTP REST API.
+// This bypasses contact policies and auto-injects a preamble telling agents
+// to prioritize the human's instructions. Messages are automatically marked
+// as high importance.
+//
+// Note: This uses the HTTP REST API, not the MCP tools API, because the
+// overseer functionality is specifically designed for human operators.
+func (c *Client) SendOverseerMessage(ctx context.Context, opts OverseerMessageOptions) (*OverseerSendResult, error) {
+	// Build request body
+	reqBody := map[string]interface{}{
+		"recipients": opts.Recipients,
+		"subject":    opts.Subject,
+		"body_md":    opts.BodyMD,
+	}
+	if opts.ThreadID != "" {
+		reqBody["thread_id"] = opts.ThreadID
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, NewAPIError("overseer_send", 0, err)
+	}
+
+	// Build URL: /mail/{project_slug}/overseer/send
+	httpBaseURL := c.httpBaseURL()
+	url := fmt.Sprintf("%s/mail/%s/overseer/send", httpBaseURL, opts.ProjectSlug)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, NewAPIError("overseer_send", 0, err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, NewAPIError("overseer_send", 0, ErrTimeout)
+		}
+		return nil, NewAPIError("overseer_send", 0, ErrServerUnavailable)
+	}
+	defer resp.Body.Close()
+
+	// Read response body
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, NewAPIError("overseer_send", 0, err)
+	}
+
+	// Check HTTP status
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, NewAPIError("overseer_send", resp.StatusCode, ErrUnauthorized)
+	}
+	if resp.StatusCode == http.StatusBadRequest {
+		// Try to extract error message from response
+		var errResp struct {
+			Detail string `json:"detail"`
+		}
+		if json.Unmarshal(respBody, &errResp) == nil && errResp.Detail != "" {
+			return nil, NewAPIError("overseer_send", resp.StatusCode, fmt.Errorf("%s", errResp.Detail))
+		}
+		return nil, NewAPIError("overseer_send", resp.StatusCode, fmt.Errorf("bad request"))
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, NewAPIError("overseer_send", resp.StatusCode, fmt.Errorf("unexpected status: %s", resp.Status))
+	}
+
+	// Parse response
+	var result OverseerSendResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, NewAPIError("overseer_send", 0, err)
+	}
+
+	return &result, nil
+}
+
+// ListProjectAgents lists all agents registered in a project.
+// This is useful for discovering recipients for overseer messages.
+func (c *Client) ListProjectAgents(ctx context.Context, projectKey string) ([]Agent, error) {
+	// Use the MCP resource to list agents
+	// Resource URI: resource://agents/{project_key}
+	args := map[string]interface{}{
+		"project_key": projectKey,
+	}
+
+	result, err := c.callTool(ctx, "list_agents", args)
+	if err != nil {
+		// Fall back to trying to get agents from project info
+		return nil, err
+	}
+
+	var agents []Agent
+	if err := json.Unmarshal(result, &agents); err != nil {
+		return nil, NewAPIError("list_agents", 0, err)
+	}
+
+	return agents, nil
 }

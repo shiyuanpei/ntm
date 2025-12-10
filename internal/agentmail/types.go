@@ -195,3 +195,21 @@ type SearchResult struct {
 	ThreadID    *string   `json:"thread_id"`
 	From        string    `json:"from"`
 }
+
+// OverseerMessageOptions contains options for sending a Human Overseer message.
+// Human Overseer messages bypass contact policies and are auto-marked as high importance.
+type OverseerMessageOptions struct {
+	ProjectSlug string   // Project slug (derived from project path)
+	Recipients  []string // Agent names to send to
+	Subject     string   // Subject line (max 200 chars)
+	BodyMD      string   // Markdown body (max 49,600 chars)
+	ThreadID    string   // Optional thread ID for conversation continuity
+}
+
+// OverseerSendResult contains the result of sending a Human Overseer message.
+type OverseerSendResult struct {
+	Success    bool      `json:"success"`
+	MessageID  int       `json:"message_id"`
+	Recipients []string  `json:"recipients"`
+	SentAt     time.Time `json:"sent_at"`
+}

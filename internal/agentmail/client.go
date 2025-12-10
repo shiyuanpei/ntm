@@ -268,3 +268,64 @@ func (c *Client) callToolWithTimeout(ctx context.Context, toolName string, args 
 	defer cancel()
 	return c.callTool(ctx, toolName, args)
 }
+
+// httpBaseURL returns the HTTP REST API base URL derived from the MCP base URL.
+// The MCP endpoint is typically at /mcp/ while the HTTP endpoints are at the root.
+// Example: "http://127.0.0.1:8765/mcp/" -> "http://127.0.0.1:8765"
+func (c *Client) httpBaseURL() string {
+	base := c.baseURL
+	// Remove trailing /mcp/ or /mcp if present
+	if len(base) >= 5 && base[len(base)-5:] == "/mcp/" {
+		return base[:len(base)-5]
+	}
+	if len(base) >= 4 && base[len(base)-4:] == "/mcp" {
+		return base[:len(base)-4]
+	}
+	// Remove trailing slash
+	if len(base) > 0 && base[len(base)-1] == '/' {
+		return base[:len(base)-1]
+	}
+	return base
+}
+
+// ProjectSlugFromPath derives a project slug from an absolute path.
+// This matches the logic in the Agent Mail server.
+// Example: "/Users/jemanuel/projects/ntm" -> "ntm"
+func ProjectSlugFromPath(path string) string {
+	// Use the last component of the path, lowercased
+	// and with special characters replaced
+	if path == "" {
+		return ""
+	}
+	// Get the last component
+	lastSlash := -1
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' {
+			if i == len(path)-1 {
+				// Trailing slash, skip it
+				path = path[:i]
+				continue
+			}
+			lastSlash = i
+			break
+		}
+	}
+	slug := path
+	if lastSlash >= 0 {
+		slug = path[lastSlash+1:]
+	}
+	// Lowercase and sanitize
+	result := make([]byte, 0, len(slug))
+	for i := 0; i < len(slug); i++ {
+		ch := slug[i]
+		if ch >= 'A' && ch <= 'Z' {
+			result = append(result, ch+32) // lowercase
+		} else if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
+			result = append(result, ch)
+		} else if ch == ' ' {
+			result = append(result, '_')
+		}
+		// Skip other characters
+	}
+	return string(result)
+}

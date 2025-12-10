@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -16,14 +17,20 @@ import (
 func newMailCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mail",
-		Short: "Agent Mail operations",
-		Long: `Interact with the MCP Agent Mail system for multi-agent coordination.
+		Short: "Human Overseer messaging to agents",
+		Long: `Send Human Overseer messages to AI agents via Agent Mail.
 
-The mail command provides subcommands for sending and reading messages
-between agents in a session.
+This command provides the CLI interface for the Human Overseer functionality
+in Agent Mail. Messages sent this way:
+  - Come from the special "HumanOverseer" identity
+  - Bypass contact policies (humans can always reach agents)
+  - Auto-inject a preamble telling agents to prioritize your instructions
+  - Are marked as high importance
+
+This is the CLI equivalent of the Agent Mail web UI at /mail/{project}/overseer/compose
 
 Examples:
-  ntm mail send myproject --to cc_1 "Please review the API changes"
+  ntm mail send myproject --to GreenCastle "Please review the API changes"
   ntm mail send myproject --all "Checkpoint: sync and report status"`,
 	}
 
@@ -34,37 +41,34 @@ Examples:
 
 func newMailSendCmd() *cobra.Command {
 	var (
-		to          []string
-		ccAddr      []string
-		subject     string
-		urgent      bool
-		important   bool
-		ackRequired bool
-		threadID    string
-		all         bool
-		targetCC    bool // all Claude agents
-		targetCod   bool // all Codex agents
-		targetGmi   bool // all Gemini agents
-		fromFile    string
+		to       []string
+		subject  string
+		threadID string
+		all      bool
+		fromFile string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "send <session> <message>",
-		Short: "Send a message to agents",
-		Long: `Send a message to agents in a session via Agent Mail.
+		Use:   "send <session> [message]",
+		Short: "Send Human Overseer message to agents",
+		Long: `Send a Human Overseer message to agents via Agent Mail.
 
-Recipients can be specified by:
-  - Pane identifiers: cc_1, cod_2 (resolved to agent names)
-  - Agent names: GreenCastle (used directly)
-  - Type filters: --cc, --cod, --gmi (all agents of that type)
-  - All agents: --all
+This uses the Agent Mail Human Overseer functionality, which:
+  - Sends from the special "HumanOverseer" identity
+  - Bypasses contact policies (humans can always reach any agent)
+  - Auto-injects a preamble telling agents to prioritize your instructions
+  - Marks all messages as high importance
+
+Recipients must be Agent Mail agent names (e.g., "GreenCastle", "BlueLake").
+Use --all to send to all registered agents in the project.
+
+If no message body is provided, opens $EDITOR for composition.
 
 Examples:
-  ntm mail send myproject --to cc_1 "Please review the API changes"
-  ntm mail send myproject --to GreenCastle --subject "API Review" "Review needed"
-  ntm mail send myproject --cc "All Claude agents: focus on tests"
-  ntm mail send myproject --all --urgent "Stop and checkpoint now"
-  ntm mail send myproject --to cc_1 --file ./message.md`,
+  ntm mail send myproject --to GreenCastle "Please review the API changes"
+  ntm mail send myproject --all "Stop current work and checkpoint"
+  ntm mail send myproject --to BlueLake --to RedStone --thread FEAT-123 "Status update"
+  ntm mail send myproject --all --file ./instructions.md`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			session := args[0]
@@ -80,44 +84,50 @@ Examples:
 			} else if len(args) > 1 {
 				body = strings.Join(args[1:], " ")
 			} else {
-				return fmt.Errorf("message body required (provide as argument or use --file)")
+				// Open editor for message composition
+				composedBody, composedSubject, err := openEditorForMessage(subject)
+				if err != nil {
+					return fmt.Errorf("composing message: %w", err)
+				}
+				body = composedBody
+				if subject == "" && composedSubject != "" {
+					subject = composedSubject
+				}
 			}
 
-			// Determine importance
-			importance := "normal"
-			if urgent {
-				importance = "urgent"
-			} else if important {
-				importance = "high"
+			// Validate body is not empty
+			if strings.TrimSpace(body) == "" {
+				return fmt.Errorf("message body cannot be empty")
 			}
 
-			return runMailSend(session, to, ccAddr, subject, body, importance, ackRequired, threadID, all, targetCC, targetCod, targetGmi)
+			return runMailSendOverseer(session, to, subject, body, threadID, all)
 		},
 	}
 
-	cmd.Flags().StringArrayVar(&to, "to", nil, "recipient agent (pane ID or name)")
-	cmd.Flags().StringArrayVar(&ccAddr, "cc-addr", nil, "CC recipient agent")
-	cmd.Flags().StringVarP(&subject, "subject", "s", "", "message subject")
-	cmd.Flags().BoolVar(&urgent, "urgent", false, "mark message as urgent")
-	cmd.Flags().BoolVar(&important, "important", false, "mark message as high importance")
-	cmd.Flags().BoolVar(&ackRequired, "ack-required", false, "require acknowledgment")
-	cmd.Flags().StringVar(&threadID, "thread", "", "thread ID for conversation")
-	cmd.Flags().BoolVar(&all, "all", false, "send to all agents in session")
-	cmd.Flags().BoolVar(&targetCC, "cc", false, "send to all Claude agents")
-	cmd.Flags().BoolVar(&targetCod, "cod", false, "send to all Codex agents")
-	cmd.Flags().BoolVar(&targetGmi, "gmi", false, "send to all Gemini agents")
+	cmd.Flags().StringArrayVar(&to, "to", nil, "recipient agent name (e.g., GreenCastle)")
+	cmd.Flags().StringVarP(&subject, "subject", "s", "", "message subject (auto-derived if not provided)")
+	cmd.Flags().StringVar(&threadID, "thread", "", "thread ID for conversation continuity")
+	cmd.Flags().BoolVar(&all, "all", false, "send to all registered agents in project")
 	cmd.Flags().StringVarP(&fromFile, "file", "f", "", "read message body from file")
 
 	return cmd
 }
 
-func runMailSend(session string, to, ccAddr []string, subject, body, importance string, ackRequired bool, threadID string, all, targetCC, targetCod, targetGmi bool) error {
-	if err := tmux.EnsureInstalled(); err != nil {
-		return err
-	}
-
-	if !tmux.SessionExists(session) {
-		return fmt.Errorf("session '%s' not found", session)
+// runMailSendOverseer sends a Human Overseer message via the Agent Mail HTTP API.
+// This is the correct implementation that uses the overseer endpoint which:
+// - Sends from the special "HumanOverseer" identity
+// - Bypasses contact policies
+// - Auto-injects a preamble telling agents to prioritize human instructions
+// - Marks all messages as high importance
+func runMailSendOverseer(session string, to []string, subject, body, threadID string, all bool) error {
+	// Session check is optional - we primarily care about the project
+	// But it's useful to verify the user is in the right context
+	if session != "" {
+		if err := tmux.EnsureInstalled(); err == nil {
+			if !tmux.SessionExists(session) {
+				fmt.Fprintf(os.Stderr, "Warning: tmux session '%s' not found (continuing anyway)\n", session)
+			}
+		}
 	}
 
 	// Get project key (current working directory)
@@ -133,41 +143,38 @@ func runMailSend(session string, to, ccAddr []string, subject, body, importance 
 
 	// Check if Agent Mail is available
 	if !client.IsAvailable() {
-		return fmt.Errorf("Agent Mail server not available at %s", agentmail.DefaultBaseURL)
+		return fmt.Errorf("Agent Mail server not available at %s\nStart the server with: mcp-agent-mail serve", agentmail.DefaultBaseURL)
 	}
 
-	// Resolve recipients
-	recipients, err := resolveRecipients(session, to, all, targetCC, targetCod, targetGmi)
-	if err != nil {
-		return err
-	}
-
-	if len(recipients) == 0 {
-		return fmt.Errorf("no recipients specified (use --to, --all, --cc, --cod, or --gmi)")
-	}
-
-	// Get sender name from environment or generate
-	senderName := os.Getenv("AGENT_NAME")
-	if senderName == "" {
-		senderName = fmt.Sprintf("NtmCli%s", strings.Title(session))
-	}
-
-	// Ensure project exists
-	_, err = client.EnsureProject(ctx, projectKey)
+	// Ensure project exists before proceeding
+	project, err := client.EnsureProject(ctx, projectKey)
 	if err != nil {
 		return fmt.Errorf("ensuring project: %w", err)
 	}
 
-	// Register sender if needed
-	_, err = client.RegisterAgent(ctx, agentmail.RegisterAgentOptions{
-		ProjectKey:      projectKey,
-		Name:            senderName,
-		Program:         "ntm-cli",
-		Model:           "user",
-		TaskDescription: "CLI message sender",
-	})
-	if err != nil {
-		// Ignore registration errors (may already exist)
+	// Resolve recipients
+	var recipients []string
+	if all {
+		// Get all registered agents in the project
+		agents, err := client.ListProjectAgents(ctx, projectKey)
+		if err != nil {
+			return fmt.Errorf("listing agents: %w", err)
+		}
+		for _, agent := range agents {
+			// Skip the HumanOverseer itself
+			if agent.Name != "HumanOverseer" {
+				recipients = append(recipients, agent.Name)
+			}
+		}
+		if len(recipients) == 0 {
+			return fmt.Errorf("no agents registered in project (agents must register with Agent Mail first)")
+		}
+	} else {
+		recipients = to
+	}
+
+	if len(recipients) == 0 {
+		return fmt.Errorf("no recipients specified (use --to <agent-name> or --all)")
 	}
 
 	// Auto-generate subject if not provided
@@ -175,42 +182,41 @@ func runMailSend(session string, to, ccAddr []string, subject, body, importance 
 		subject = truncateSubject(body, 60)
 	}
 
-	// Send message
-	result, err := client.SendMessage(ctx, agentmail.SendMessageOptions{
-		ProjectKey:  projectKey,
-		SenderName:  senderName,
-		To:          recipients,
-		CC:          ccAddr,
+	// Derive project slug for the HTTP endpoint
+	projectSlug := agentmail.ProjectSlugFromPath(projectKey)
+	if project.Slug != "" {
+		projectSlug = project.Slug // Use server-provided slug if available
+	}
+
+	// Send via Human Overseer endpoint
+	result, err := client.SendOverseerMessage(ctx, agentmail.OverseerMessageOptions{
+		ProjectSlug: projectSlug,
+		Recipients:  recipients,
 		Subject:     subject,
 		BodyMD:      body,
-		Importance:  importance,
-		AckRequired: ackRequired,
 		ThreadID:    threadID,
 	})
 	if err != nil {
-		return fmt.Errorf("sending message: %w", err)
+		return fmt.Errorf("sending overseer message: %w", err)
 	}
 
 	// Output result
-	var messageID int
-	if len(result.Deliveries) > 0 && result.Deliveries[0].Payload != nil {
-		messageID = result.Deliveries[0].Payload.ID
-	}
-
 	if IsJSONOutput() {
 		return encodeJSONResult(map[string]interface{}{
-			"success":    true,
-			"recipients": recipients,
+			"success":    result.Success,
+			"recipients": result.Recipients,
 			"subject":    subject,
-			"message_id": messageID,
-			"count":      result.Count,
+			"message_id": result.MessageID,
+			"sent_at":    result.SentAt,
+			"overseer":   true,
 		})
 	}
 
-	fmt.Printf("Message sent to %d recipient(s)\n", result.Count)
-	for _, r := range recipients {
+	fmt.Printf("🚨 Human Overseer message sent to %d agent(s)\n", len(result.Recipients))
+	for _, r := range result.Recipients {
 		fmt.Printf("  → %s\n", r)
 	}
+	fmt.Printf("\nAgents will receive this with high priority and a directive preamble.\n")
 
 	return nil
 }
@@ -376,4 +382,89 @@ func encodeJSONResult(v interface{}) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(v)
+}
+
+// openEditorForMessage opens $EDITOR for message composition.
+// Returns the body and subject (parsed from first line if it's a heading).
+func openEditorForMessage(existingSubject string) (body string, subject string, err error) {
+	// Get editor
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if editor == "" {
+		editor = "nano" // fallback
+	}
+
+	// Create temp file with template
+	tmpFile, err := os.CreateTemp("", "ntm-mail-*.md")
+	if err != nil {
+		return "", "", fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	// Write template
+	template := "# Subject\n\n<!-- Write your message below. First line starting with # becomes the subject. -->\n\n"
+	if existingSubject != "" {
+		template = fmt.Sprintf("# %s\n\n<!-- Edit your message below. -->\n\n", existingSubject)
+	}
+	if _, err := tmpFile.WriteString(template); err != nil {
+		tmpFile.Close()
+		return "", "", fmt.Errorf("writing template: %w", err)
+	}
+	tmpFile.Close()
+
+	// Open editor
+	cmd := exec.Command(editor, tmpPath)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", "", fmt.Errorf("running editor: %w", err)
+	}
+
+	// Read composed message
+	content, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return "", "", fmt.Errorf("reading composed message: %w", err)
+	}
+
+	// Parse content
+	lines := strings.Split(string(content), "\n")
+	var bodyLines []string
+	subject = ""
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Skip HTML comments
+		if strings.HasPrefix(trimmed, "<!--") && strings.HasSuffix(trimmed, "-->") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "<!--") || strings.HasSuffix(trimmed, "-->") {
+			continue
+		}
+
+		// Extract subject from first heading
+		if subject == "" && strings.HasPrefix(trimmed, "#") {
+			// Remove heading markers
+			subject = strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+			if subject == "Subject" {
+				subject = "" // Placeholder wasn't changed
+			}
+			continue
+		}
+
+		// Skip leading empty lines before body
+		if len(bodyLines) == 0 && trimmed == "" {
+			continue
+		}
+
+		bodyLines = append(bodyLines, lines[i])
+	}
+
+	body = strings.TrimSpace(strings.Join(bodyLines, "\n"))
+	return body, subject, nil
 }
