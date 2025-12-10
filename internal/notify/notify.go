@@ -113,7 +113,6 @@ type Notifier struct {
 	enabledSet map[EventType]bool
 	mu         sync.Mutex
 	httpClient *http.Client
-	logFile    *os.File
 }
 
 // New creates a new Notifier with the given configuration
@@ -354,14 +353,10 @@ func (n *Notifier) sendLog(event Event) error {
 	return nil
 }
 
-// Close closes any open resources
+// Close closes any open resources.
+// Currently a no-op as log files are opened/closed per write, but retained
+// for future extensibility (e.g., cached file handles, persistent connections).
 func (n *Notifier) Close() error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.logFile != nil {
-		return n.logFile.Close()
-	}
 	return nil
 }
 

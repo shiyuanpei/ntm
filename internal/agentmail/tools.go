@@ -412,9 +412,15 @@ func (c *Client) ListReservations(ctx context.Context, projectKey, agentName str
 		args["all_agents"] = true
 	}
 
+	// Primary tool name
 	result, err := c.callTool(ctx, "list_file_reservations", args)
 	if err != nil {
-		return nil, err
+		// Some deployments may expose legacy name; try a fallback once.
+		fallbackResult, fallbackErr := c.callTool(ctx, "list_reservations", args)
+		if fallbackErr != nil {
+			return nil, err // return original error to make diagnosis clear
+		}
+		result = fallbackResult
 	}
 
 	var reservations []FileReservation
