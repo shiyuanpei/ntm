@@ -90,9 +90,12 @@ func (d *UnifiedDetector) Detect(paneID string) (AgentStatus, error) {
 		status.State = StateIdle
 		return status, nil
 	}
-	// Heuristic: for user panes with empty or prompt-like output, treat as idle
+	// Heuristic: for user panes with empty output, treat as idle
+	// Note: We removed the strings.Contains(output, "$") check because it was too broad -
+	// it would match any $ in the output (like $i in shell scripts), not just prompts.
+	// The DetectIdleFromOutput function already handles prompt detection properly.
 	if status.AgentType == "" || status.AgentType == "user" {
-		if strings.TrimSpace(output) == "" || strings.Contains(output, "$") {
+		if strings.TrimSpace(output) == "" {
 			status.State = StateIdle
 			return status, nil
 		}

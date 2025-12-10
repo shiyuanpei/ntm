@@ -76,6 +76,13 @@ func IsPromptLine(line string, agentType string) bool {
 			continue
 		}
 
+		// Skip generic shell prompt patterns for known agent types.
+		// A shell $ prompt in a cc/cod/gmi pane means the agent exited,
+		// not that it's idle at its prompt.
+		if p.AgentType == "" && p.Description == "Generic shell prompt" && knownAgentTypes[agentType] {
+			continue
+		}
+
 		if p.Regex != nil && p.Regex.MatchString(line) {
 			return true
 		}
@@ -87,6 +94,17 @@ func IsPromptLine(line string, agentType string) bool {
 	return false
 }
 
+// knownAgentTypes are agent types that have their own specific prompt patterns.
+// Generic shell prompt detection should not apply to these.
+var knownAgentTypes = map[string]bool{
+	"cc":       true, // Claude Code uses "claude>" or ">" prompts
+	"cod":      true, // Codex uses "codex>" prompt
+	"gmi":      true, // Gemini uses "gemini>" prompt
+	"cursor":   true,
+	"windsurf": true,
+	"aider":    true,
+}
+
 // DetectIdleFromOutput analyzes output to determine if agent is idle.
 // It checks up to 3 non-empty lines from the end for prompt patterns.
 // This window allows detecting idle state even when there's trailing output.
@@ -94,9 +112,16 @@ func DetectIdleFromOutput(output string, agentType string) bool {
 	// Strip ANSI first for cleaner processing
 	clean := StripANSI(output)
 
-	// Quick heuristic: if we see a prompt marker in the raw output, treat as idle
-	if strings.Contains(clean, "\n$ ") || strings.HasSuffix(clean, "$ ") {
-		return true
+	// Quick heuristic: if output ends with a shell prompt marker, treat as idle.
+	// Only apply to user panes or unknown agent types, since known agent types
+	// (cc, cod, gmi, etc.) have their own prompt patterns and a shell $ prompt
+	// in those panes indicates the agent has exited, not that it's idle.
+	// Check for both "$ " and just "$" since TrimSpace may remove trailing space.
+	trimmed := strings.TrimSpace(clean)
+	if !knownAgentTypes[agentType] {
+		if strings.HasSuffix(trimmed, "$") || strings.HasSuffix(trimmed, "$ ") {
+			return true
+		}
 	}
 
 	lines := strings.Split(clean, "\n")

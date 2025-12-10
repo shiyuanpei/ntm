@@ -26,20 +26,33 @@ func TestStatusDetectsIdlePrompt(t *testing.T) {
 
 	_, paneID := createSessionWithTitle(t, logger, "user_1")
 
-	if err := tmux.SendKeys(paneID, "printf \"idle-ready\\n$ \"", true); err != nil {
+	// Start a simple bash shell with a standard prompt to avoid fancy shells
+	// (starship, powerlevel10k, etc.) that may not match our detection patterns.
+	if err := tmux.SendKeys(paneID, "exec bash --norc --noprofile", true); err != nil {
+		t.Fatalf("failed to start bash: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	// Set a simple prompt and run a command
+	if err := tmux.SendKeys(paneID, "PS1='$ '; echo done", true); err != nil {
 		t.Fatalf("failed to seed pane output: %v", err)
 	}
-	time.Sleep(150 * time.Millisecond)
+	// Wait for command to execute and shell to return to prompt
+	time.Sleep(500 * time.Millisecond)
 
 	requirePaneActivity(t, paneID)
 
+	// For a user pane at a shell prompt, detection should find it idle.
+	// The shell prompt (e.g., "$ ") should be in the output.
 	detector := status.NewDetector()
 	st, err := detector.Detect(paneID)
 	if err != nil {
 		t.Fatalf("detect failed: %v", err)
 	}
 	if st.State != status.StateIdle {
-		t.Fatalf("expected idle, got %s", st.State)
+		// Capture output for debugging
+		output, _ := tmux.CapturePaneOutput(paneID, 50)
+		t.Fatalf("expected idle, got %s; agentType=%q, output=%q", st.State, st.AgentType, output)
 	}
 }
 
@@ -49,10 +62,13 @@ func TestStatusDetectsWorkingPane(t *testing.T) {
 
 	_, paneID := createSessionWithTitle(t, logger, "cod_1")
 
-	if err := tmux.SendKeys(paneID, "for i in 1 2 3; do echo working-$i; sleep 1; done", true); err != nil {
+	// Start a longer-running command and wait for visible output to reduce flakiness.
+	// The detection relies on seeing activity and not detecting an idle prompt.
+	if err := tmux.SendKeys(paneID, "for i in 1 2 3 4 5; do echo working-$i; sleep 0.5; done", true); err != nil {
 		t.Fatalf("failed to start work loop: %v", err)
 	}
-	time.Sleep(300 * time.Millisecond)
+	// Wait for first output to appear
+	time.Sleep(600 * time.Millisecond)
 
 	requirePaneActivity(t, paneID)
 
@@ -62,7 +78,9 @@ func TestStatusDetectsWorkingPane(t *testing.T) {
 		t.Fatalf("detect failed: %v", err)
 	}
 	if st.State != status.StateWorking {
-		t.Fatalf("expected working, got %s", st.State)
+		// Capture output for debugging
+		output, _ := tmux.CapturePaneOutput(paneID, 50)
+		t.Fatalf("expected working, got %s; output=%q", st.State, output)
 	}
 }
 
