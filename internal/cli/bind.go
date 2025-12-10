@@ -90,17 +90,17 @@ func setupBinding(key string) error {
 				newLines = append(newLines, line)
 			}
 		}
-		if err := os.WriteFile(tmuxConf, []byte(strings.Join(newLines, "\n")), 0644); err != nil {
+		if err := os.WriteFile(tmuxConf, []byte(strings.Join(newLines, "\n")), 0600); err != nil {
 			return fmt.Errorf("failed to update tmux.conf: %w", err)
 		}
 		fmt.Printf("%s✓%s Updated existing %s binding in %s\n", colorize(t.Success), colorize(t.Text), key, tmuxConf)
 	} else {
 		// Append new binding
-		f, err := os.OpenFile(tmuxConf, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(tmuxConf, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			return fmt.Errorf("failed to open tmux.conf: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		// Add comment and binding
 		addition := fmt.Sprintf("\n# NTM Command Palette (added by 'ntm bind')\n%s\n", bindCmd)
