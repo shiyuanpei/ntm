@@ -246,7 +246,8 @@ func gitCommand(dir string, args ...string) (string, error) {
 
 // parseGitStatus parses git status --porcelain output.
 func parseGitStatus(status string) (staged, unstaged, untracked int) {
-	lines := strings.Split(strings.TrimSpace(status), "\n")
+	// Only trim trailing newlines, not leading spaces which are significant in porcelain format
+	lines := strings.Split(strings.TrimRight(status, "\n"), "\n")
 	for _, line := range lines {
 		if len(line) < 2 {
 			continue

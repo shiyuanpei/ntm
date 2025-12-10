@@ -17,12 +17,12 @@ func TestGenerateID(t *testing.T) {
 		{
 			name:    "simple name",
 			input:   "backup",
-			wantLen: 22, // YYYYMMDD-HHMMSS-backup
+			wantLen: 26, // YYYYMMDD-HHMMSS.mmm-backup (includes milliseconds)
 		},
 		{
 			name:    "empty name",
 			input:   "",
-			wantLen: 15, // YYYYMMDD-HHMMSS
+			wantLen: 19, // YYYYMMDD-HHMMSS.mmm (includes milliseconds)
 		},
 		{
 			name:     "name with spaces",
@@ -63,7 +63,7 @@ func TestSanitizeName(t *testing.T) {
 		{"with:colon", "with-colon"},
 		{"a*b?c<d>e|f", "a-b-c-d-e-f"},
 		{"  trimmed  ", "trimmed"},
-		{"verylongnamethatexceedsfiftycharacterssothatshouldbetruncated", "verylongnamethatexceedsfiftycharacterssothatshou"},
+		{"verylongnamethatexceedsfiftycharacterssothatshouldbetruncated", "verylongnamethatexceedsfiftycharacterssothatshould"},
 	}
 
 	for _, tt := range tests {
