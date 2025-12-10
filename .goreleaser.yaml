@@ -1,0 +1,132 @@
+# GoReleaser configuration for NTM
+# https://goreleaser.com
+
+version: 2
+
+project_name: ntm
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+builds:
+  - id: ntm
+    main: ./cmd/ntm
+    binary: ntm
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/Dicklesworthstone/ntm/internal/cli.Version={{.Version}}
+    flags:
+      - -trimpath
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+    format_overrides:
+      - goos: windows
+        format: zip
+
+# Also create raw binaries for curl-based install
+  - id: binary
+    format: binary
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: Dicklesworthstone
+    name: ntm
+  prerelease: auto
+  mode: replace
+  header: |
+    ## NTM {{ .Tag }}
+    
+    Named Tmux Manager - Orchestrate AI coding agents in tmux sessions
+    
+    ### Installation
+    
+    ```bash
+    # Quick install
+    curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/ntm/main/install.sh | bash
+    
+    # Or with Homebrew
+    brew install dicklesworthstone/tap/ntm
+    ```
+    
+    After installing, add to your shell rc file:
+    ```bash
+    eval "$(ntm init zsh)"   # for zsh
+    eval "$(ntm init bash)"  # for bash
+    ```
+  footer: |
+    **Full Changelog**: https://github.com/Dicklesworthstone/ntm/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+brews:
+  - name: ntm
+    repository:
+      owner: Dicklesworthstone
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    folder: Formula
+    homepage: "https://github.com/Dicklesworthstone/ntm"
+    description: "Named Tmux Manager - Orchestrate AI coding agents in tmux sessions"
+    license: "MIT"
+    dependencies:
+      - name: tmux
+    install: |
+      bin.install "ntm"
+    test: |
+      system "#{bin}/ntm", "version"
+    caveats: |
+      Add to your shell rc file:
+        eval "$(ntm init zsh)"   # for zsh
+        eval "$(ntm init bash)"  # for bash
+
+nfpms:
+  - id: packages
+    package_name: ntm
+    vendor: Dicklesworthstone
+    homepage: https://github.com/Dicklesworthstone/ntm
+    maintainer: Jeff <jeff@example.com>
+    description: Named Tmux Manager - Orchestrate AI coding agents in tmux sessions
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    dependencies:
+      - tmux
+    recommends:
+      - fzf
+    bindir: /usr/bin
+    contents:
+      - src: README.md
+        dst: /usr/share/doc/ntm/README.md

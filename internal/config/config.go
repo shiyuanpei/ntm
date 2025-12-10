@@ -1,0 +1,337 @@
+package config
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+
+	"github.com/BurntSushi/toml"
+)
+
+// Config represents the main configuration
+type Config struct {
+	ProjectsBase string       `toml:"projects_base"`
+	Agents       AgentConfig  `toml:"agents"`
+	Palette      []PaletteCmd `toml:"palette"`
+	Tmux         TmuxConfig   `toml:"tmux"`
+}
+
+// AgentConfig defines the commands for each agent type
+type AgentConfig struct {
+	Claude string `toml:"claude"`
+	Codex  string `toml:"codex"`
+	Gemini string `toml:"gemini"`
+}
+
+// PaletteCmd represents a command in the palette
+type PaletteCmd struct {
+	Key      string   `toml:"key"`
+	Label    string   `toml:"label"`
+	Prompt   string   `toml:"prompt"`
+	Category string   `toml:"category,omitempty"`
+	Tags     []string `toml:"tags,omitempty"`
+}
+
+// TmuxConfig holds tmux-specific settings
+type TmuxConfig struct {
+	DefaultPanes int    `toml:"default_panes"`
+	PaletteKey   string `toml:"palette_key"`
+}
+
+// DefaultPath returns the default config file path
+func DefaultPath() string {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "ntm", "config.toml")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "ntm", "config.toml")
+}
+
+// DefaultProjectsBase returns the default projects directory
+func DefaultProjectsBase() string {
+	home, _ := os.UserHomeDir()
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(home, "Developer")
+	}
+	return "/data/projects"
+}
+
+// Default returns the default configuration
+func Default() *Config {
+	return &Config{
+		ProjectsBase: DefaultProjectsBase(),
+		Agents: AgentConfig{
+			Claude: `NODE_OPTIONS="--max-old-space-size=32768" ENABLE_BACKGROUND_TASKS=1 claude --dangerously-skip-permissions`,
+			Codex:  `codex --dangerously-bypass-approvals-and-sandbox -m gpt-5.1-codex-max -c model_reasoning_effort="high" -c model_reasoning_summary_format=experimental --enable web_search_request`,
+			Gemini: `gemini --yolo`,
+		},
+		Tmux: TmuxConfig{
+			DefaultPanes: 10,
+			PaletteKey:   "F6",
+		},
+		Palette: defaultPaletteCommands(),
+	}
+}
+
+func defaultPaletteCommands() []PaletteCmd {
+	return []PaletteCmd{
+		// Quick Actions
+		{
+			Key:      "fresh_review",
+			Label:    "Fresh Eyes Review",
+			Category: "Quick Actions",
+			Prompt: `Take a step back and carefully reread the most recent code changes with fresh eyes.
+Look for any obvious bugs, logical errors, or confusing patterns.
+Fix anything you spot without waiting for direction.`,
+		},
+		{
+			Key:      "fix_bug",
+			Label:    "Fix the Bug",
+			Category: "Quick Actions",
+			Prompt: `Focus on diagnosing the root cause of the reported issue.
+Don't just patch symptoms - find and fix the underlying problem.
+Implement a real fix, not a workaround.`,
+		},
+		{
+			Key:      "git_commit",
+			Label:    "Commit Changes",
+			Category: "Quick Actions",
+			Prompt: `Commit all changed files with detailed, meaningful commit messages.
+Group related changes logically. Push to the remote branch.`,
+		},
+		{
+			Key:      "run_tests",
+			Label:    "Run All Tests",
+			Category: "Quick Actions",
+			Prompt:   `Run the full test suite and fix any failing tests.`,
+		},
+
+		// Code Quality
+		{
+			Key:      "refactor",
+			Label:    "Refactor Code",
+			Category: "Code Quality",
+			Prompt: `Review the current code for opportunities to improve:
+- Extract reusable functions
+- Simplify complex logic
+- Improve naming
+- Remove duplication
+Make incremental improvements while preserving functionality.`,
+		},
+		{
+			Key:      "add_types",
+			Label:    "Add Type Annotations",
+			Category: "Code Quality",
+			Prompt: `Add comprehensive type annotations to the codebase.
+Focus on function signatures, class attributes, and complex data structures.
+Use generics where appropriate.`,
+		},
+		{
+			Key:      "add_docs",
+			Label:    "Add Documentation",
+			Category: "Code Quality",
+			Prompt: `Add comprehensive docstrings and comments to the codebase.
+Document public APIs, complex algorithms, and non-obvious behavior.
+Keep docs concise but complete.`,
+		},
+
+		// Coordination
+		{
+			Key:      "status_update",
+			Label:    "Status Update",
+			Category: "Coordination",
+			Prompt: `Provide a brief status update:
+1. What you just completed
+2. What you're currently working on
+3. Any blockers or questions
+4. What you plan to do next`,
+		},
+		{
+			Key:      "handoff",
+			Label:    "Prepare Handoff",
+			Category: "Coordination",
+			Prompt: `Prepare a handoff document for another agent:
+- Current state of the code
+- What's working and what isn't
+- Open issues and edge cases
+- Recommended next steps`,
+		},
+		{
+			Key:      "sync",
+			Label:    "Sync with Main",
+			Category: "Coordination",
+			Prompt: `Pull latest changes from main branch and resolve any conflicts.
+Run tests after merging to ensure nothing is broken.`,
+		},
+
+		// Investigation
+		{
+			Key:      "explain",
+			Label:    "Explain This Code",
+			Category: "Investigation",
+			Prompt: `Explain how the current code works in detail.
+Walk through the control flow, data transformations, and key design decisions.
+Note any potential issues or areas for improvement.`,
+		},
+		{
+			Key:      "find_issue",
+			Label:    "Find the Issue",
+			Category: "Investigation",
+			Prompt: `Investigate the codebase to find potential issues:
+- Logic errors
+- Edge cases not handled
+- Performance problems
+- Security concerns
+Report findings with specific file locations and line numbers.`,
+		},
+	}
+}
+
+// Load loads configuration from a file
+func Load(path string) (*Config, error) {
+	if path == "" {
+		path = DefaultPath()
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg Config
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+
+	// Apply defaults for missing values
+	if cfg.ProjectsBase == "" {
+		cfg.ProjectsBase = DefaultProjectsBase()
+	}
+	if cfg.Agents.Claude == "" {
+		cfg.Agents.Claude = Default().Agents.Claude
+	}
+	if cfg.Agents.Codex == "" {
+		cfg.Agents.Codex = Default().Agents.Codex
+	}
+	if cfg.Agents.Gemini == "" {
+		cfg.Agents.Gemini = Default().Agents.Gemini
+	}
+	if cfg.Tmux.DefaultPanes == 0 {
+		cfg.Tmux.DefaultPanes = 10
+	}
+	if cfg.Tmux.PaletteKey == "" {
+		cfg.Tmux.PaletteKey = "F6"
+	}
+
+	// If no palette commands, use defaults
+	if len(cfg.Palette) == 0 {
+		cfg.Palette = defaultPaletteCommands()
+	}
+
+	return &cfg, nil
+}
+
+// CreateDefault creates a default config file
+func CreateDefault() (string, error) {
+	path := DefaultPath()
+
+	// Ensure directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("creating config directory: %w", err)
+	}
+
+	// Check if file already exists
+	if _, err := os.Stat(path); err == nil {
+		return "", fmt.Errorf("config file already exists: %s", path)
+	}
+
+	// Write default config
+	f, err := os.Create(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	if err := Print(Default(), f); err != nil {
+		return "", err
+	}
+
+	return path, nil
+}
+
+// Print writes config to a writer in TOML format
+func Print(cfg *Config, w io.Writer) error {
+	// Write a nicely formatted config file
+	fmt.Fprintln(w, "# NTM (Named Tmux Manager) Configuration")
+	fmt.Fprintln(w, "# https://github.com/Dicklesworthstone/ntm")
+	fmt.Fprintln(w)
+
+	fmt.Fprintf(w, "# Base directory for projects\n")
+	fmt.Fprintf(w, "projects_base = %q\n", cfg.ProjectsBase)
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "[agents]")
+	fmt.Fprintln(w, "# Commands used to launch each agent type")
+	fmt.Fprintf(w, "claude = %q\n", cfg.Agents.Claude)
+	fmt.Fprintf(w, "codex = %q\n", cfg.Agents.Codex)
+	fmt.Fprintf(w, "gemini = %q\n", cfg.Agents.Gemini)
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "[tmux]")
+	fmt.Fprintln(w, "# Tmux-specific settings")
+	fmt.Fprintf(w, "default_panes = %d\n", cfg.Tmux.DefaultPanes)
+	fmt.Fprintf(w, "palette_key = %q\n", cfg.Tmux.PaletteKey)
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "# Command Palette entries")
+	fmt.Fprintln(w, "# Add your own prompts here")
+	fmt.Fprintln(w)
+
+	// Group by category
+	categories := make(map[string][]PaletteCmd)
+	for _, cmd := range cfg.Palette {
+		cat := cmd.Category
+		if cat == "" {
+			cat = "General"
+		}
+		categories[cat] = append(categories[cat], cmd)
+	}
+
+	// Write in order
+	order := []string{"Quick Actions", "Code Quality", "Coordination", "Investigation", "General"}
+	for _, cat := range order {
+		cmds, ok := categories[cat]
+		if !ok {
+			continue
+		}
+
+		fmt.Fprintf(w, "# %s\n", cat)
+		for _, cmd := range cmds {
+			fmt.Fprintln(w, "[[palette]]")
+			fmt.Fprintf(w, "key = %q\n", cmd.Key)
+			fmt.Fprintf(w, "label = %q\n", cmd.Label)
+			if cmd.Category != "" {
+				fmt.Fprintf(w, "category = %q\n", cmd.Category)
+			}
+			// Use multi-line string for prompts
+			fmt.Fprintf(w, "prompt = \"\"\"\n%s\"\"\"\n", cmd.Prompt)
+			fmt.Fprintln(w)
+		}
+	}
+
+	return nil
+}
+
+// GetProjectDir returns the project directory for a session
+func (c *Config) GetProjectDir(session string) string {
+	// Expand ~ in path
+	base := c.ProjectsBase
+	if len(base) > 0 && base[0] == '~' {
+		home, _ := os.UserHomeDir()
+		base = filepath.Join(home, base[1:])
+	}
+	return filepath.Join(base, session)
+}
