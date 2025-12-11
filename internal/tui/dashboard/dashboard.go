@@ -10,13 +10,18 @@ import (
 	"time"
 
 	"github.com/Dicklesworthstone/ntm/internal/agentmail"
+	"github.com/Dicklesworthstone/ntm/internal/alerts"
 	"github.com/Dicklesworthstone/ntm/internal/bv"
 	"github.com/Dicklesworthstone/ntm/internal/cass"
+	conf "github.com/Dicklesworthstone/ntm/internal/config"
+	"github.com/Dicklesworthstone/ntm/internal/history"
 	"github.com/Dicklesworthstone/ntm/internal/scanner"
 	"github.com/Dicklesworthstone/ntm/internal/status"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
 	"github.com/Dicklesworthstone/ntm/internal/tokens"
+	"github.com/Dicklesworthstone/ntm/internal/tracker"
 	"github.com/Dicklesworthstone/ntm/internal/tui/components"
+	"github.com/Dicklesworthstone/ntm/internal/tui/dashboard/panels"
 	"github.com/Dicklesworthstone/ntm/internal/tui/icons"
 	"github.com/Dicklesworthstone/ntm/internal/tui/layout"
 	"github.com/Dicklesworthstone/ntm/internal/tui/styles"
@@ -38,6 +43,11 @@ type RefreshMsg struct{}
 type StatusUpdateMsg struct {
 	Statuses []status.AgentStatus
 	Time     time.Time
+}
+
+// ConfigReloadMsg is sent when configuration changes
+type ConfigReloadMsg struct {
+	Config *conf.Config
 }
 
 // HealthCheckMsg is sent when health check (bv drift) completes
@@ -64,6 +74,44 @@ type AgentMailUpdateMsg struct {
 // CassSelectMsg is sent when a CASS search result is selected
 type CassSelectMsg struct {
 	Hit cass.SearchHit
+}
+
+// BeadsUpdateMsg is sent when beads data is fetched
+type BeadsUpdateMsg struct {
+	Summary bv.BeadsSummary
+	Ready   []bv.BeadPreview
+	Err     error
+}
+
+// AlertsUpdateMsg is sent when alerts are refreshed
+type AlertsUpdateMsg struct {
+	Alerts []alerts.Alert
+	Err    error
+}
+
+// MetricsUpdateMsg is sent when session metrics are updated
+type MetricsUpdateMsg struct {
+	TotalTokens int
+	CostEst     float64
+	Err         error
+}
+
+// HistoryUpdateMsg is sent when command history is fetched
+type HistoryUpdateMsg struct {
+	Entries []history.HistoryEntry
+	Err     error
+}
+
+// FileChangeMsg is sent when file changes are detected
+type FileChangeMsg struct {
+	Changes []tracker.RecordedFileChange
+	Err     error
+}
+
+// CASSContextMsg is sent when relevant context is found
+type CASSContextMsg struct {
+	Hits []cass.SearchHit
+	Err  error
 }
 
 // Model is the session dashboard model
@@ -122,12 +170,30 @@ type Model struct {
 	agentMailUnread    int                 // Unread message count (requires agent context)
 	agentMailLockInfo  []AgentMailLockInfo // Lock details for display
 
+	// Config watcher
+	configSub    chan *conf.Config
+	configCloser func()
+
 	// Markdown renderer
 	renderer *glamour.TermRenderer
 
 	// CASS Search
 	showCassSearch bool
 	cassSearch     components.CassSearchModel
+
+	// Panels
+	beadsPanel  *panels.BeadsPanel
+	alertsPanel *panels.AlertsPanel
+
+	// Data for new panels
+	beadsSummary  bv.BeadsSummary
+	beadsReady    []bv.BeadPreview
+	activeAlerts  []alerts.Alert
+	metricsTokens int
+	metricsCost   float64
+	cmdHistory    []history.HistoryEntry
+	fileChanges   []tracker.RecordedFileChange
+	cassContext   []cass.SearchHit
 }
 
 // PaneStatus tracks the status of a pane including compaction state
@@ -235,6 +301,32 @@ func New(session string) Model {
 				return CassSelectMsg{Hit: hit}
 			}
 		}),
+		beadsPanel:  panels.NewBeadsPanel(),
+		alertsPanel: panels.NewAlertsPanel(),
+	}
+
+	// Setup config watcher
+	m.configSub = make(chan *conf.Config, 1)
+	// We capture the channel in the closure. Since Model is copied, we must ensure
+	// we use the channel we just created, which is what m.configSub holds.
+	sub := m.configSub
+	closer, err := conf.Watch(func(cfg *conf.Config) {
+		select {
+		case sub <- cfg:
+		default:
+			// If channel full, drop oldest
+			select {
+			case <-sub:
+			default:
+			}
+			select {
+			case sub <- cfg:
+			default:
+			}
+		}
+	})
+	if err == nil {
+		m.configCloser = closer
 	}
 
 	m.initRenderer(40)
@@ -256,7 +348,23 @@ func (m Model) Init() tea.Cmd {
 		m.fetchHealthStatus(),
 		m.fetchStatuses(),
 		m.fetchAgentMailStatus(),
+		m.fetchBeadsCmd(),
+		m.fetchAlertsCmd(),
+		m.fetchMetricsCmd(),
+		m.fetchHistoryCmd(),
+		m.fetchFileChangesCmd(),
+		m.subscribeToConfig(),
 	)
+}
+
+func (m Model) subscribeToConfig() tea.Cmd {
+	return func() tea.Msg {
+		if m.configSub == nil {
+			return nil
+		}
+		cfg := <-m.configSub
+		return ConfigReloadMsg{Config: cfg}
+	}
 }
 
 func (m Model) tick() tea.Cmd {
@@ -483,6 +591,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.healthMessage = fmt.Sprintf("Selected: %s", msg.Hit.Title)
 		return m, tea.Batch(cmds...)
 
+	case BeadsUpdateMsg:
+		if msg.Err == nil {
+			m.beadsSummary = msg.Summary
+			m.beadsReady = msg.Ready
+			m.beadsPanel.SetData(msg.Summary, msg.Ready)
+		}
+		return m, nil
+
+	case AlertsUpdateMsg:
+		if msg.Err == nil {
+			m.activeAlerts = msg.Alerts
+			m.alertsPanel.SetData(msg.Alerts)
+		}
+		return m, nil
+
+	case MetricsUpdateMsg:
+		if msg.Err == nil {
+			m.metricsTokens = msg.TotalTokens
+			m.metricsCost = msg.CostEst
+		}
+		return m, nil
+
+	case HistoryUpdateMsg:
+		if msg.Err == nil {
+			m.cmdHistory = msg.Entries
+		}
+		return m, nil
+
+	case FileChangeMsg:
+		if msg.Err == nil {
+			m.fileChanges = msg.Changes
+		}
+		return m, nil
+
+	case CASSContextMsg:
+		if msg.Err == nil {
+			m.cassContext = msg.Hits
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -510,6 +658,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(
 			m.fetchSessionDataWithOutputs(),
 			m.fetchStatuses(),
+			m.fetchBeadsCmd(),
+			m.fetchAlertsCmd(),
+			m.fetchMetricsCmd(),
+			m.fetchHistoryCmd(),
+			m.fetchFileChangesCmd(),
 		)
 
 	case SessionDataWithOutputMsg:
@@ -593,6 +746,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.lastRefresh = msg.Time
 		return m, nil
+
+	case ConfigReloadMsg:
+		if msg.Config != nil {
+			// Update theme
+			m.theme = theme.FromName(msg.Config.Theme)
+			// Reload icons (if dependent on config in future, pass cfg)
+			m.icons = icons.Current()
+
+			// Re-initialize renderer with new theme colors
+			_, detailWidth := layout.SplitProportions(m.width)
+			contentWidth := detailWidth - 4
+			if contentWidth < 20 {
+				contentWidth = 20
+			}
+			m.initRenderer(contentWidth)
+		}
+		return m, m.subscribeToConfig()
 
 	case HealthCheckMsg:
 		m.healthStatus = msg.Status
@@ -1052,17 +1222,14 @@ func (m Model) renderRateLimitAlert() string {
 func (m Model) renderContextBar(percent float64, width int) string {
 	t := m.theme
 
-	// Determine color based on usage
-	var barColor lipgloss.Color
+	// Determine warning icon and gradient stops
 	var warningIcon string
-	if percent >= 80 {
-		barColor = t.Red
+	switch {
+	case percent >= 90:
 		warningIcon = " ⚠"
-	} else if percent >= 60 {
-		barColor = t.Yellow
-		warningIcon = ""
-	} else {
-		barColor = t.Green
+	case percent >= 80:
+		warningIcon = " !"
+	default:
 		warningIcon = ""
 	}
 
@@ -1081,16 +1248,19 @@ func (m Model) renderContextBar(percent float64, width int) string {
 	filled := int(displayPercent * float64(barWidth) / 100)
 	empty := barWidth - filled
 
-	// Build the bar
-	filledStyle := lipgloss.NewStyle().Foreground(barColor)
-	emptyStyle := lipgloss.NewStyle().Foreground(t.Surface1)
+	// Gradient-filled portion
+	var filledStr string
+	if filled > 0 {
+		grad := []string{string(t.Green), string(t.Blue), string(t.Yellow), string(t.Red)}
+		filledStr = styles.GradientText(strings.Repeat("█", filled), grad...)
+	}
+
+	emptyStr := lipgloss.NewStyle().Foreground(t.Surface1).Render(strings.Repeat("░", empty))
+
 	percentStyle := lipgloss.NewStyle().Foreground(t.Overlay)
 	warningStyle := lipgloss.NewStyle().Foreground(t.Red).Bold(true)
 
-	bar := "[" +
-		filledStyle.Render(strings.Repeat("█", filled)) +
-		emptyStyle.Render(strings.Repeat("░", empty)) +
-		"]" +
+	bar := "[" + filledStr + emptyStr + "]" +
 		percentStyle.Render(fmt.Sprintf("%3.0f%%", percent)) +
 		warningStyle.Render(warningIcon)
 
@@ -1444,11 +1614,13 @@ func (m Model) renderMegaLayout() string {
 }
 
 func (m Model) renderBeadsPanel(width int) string {
-	return "Beads Panel\n(Coming Soon)"
+	m.beadsPanel.SetSize(width, 0) // Height handled by container
+	return m.beadsPanel.View()
 }
 
 func (m Model) renderAlertsPanel(width int) string {
-	return "Alerts Panel\n(Coming Soon)"
+	m.alertsPanel.SetSize(width, 0) // Height handled by container
+	return m.alertsPanel.View()
 }
 
 // renderPaneList renders a compact list of panes with status indicators
@@ -1571,7 +1743,7 @@ func (m Model) renderPaneRow(p tmux.Pane, rank int, selected bool, width int) st
 	var statusIcon string
 	switch ps.State {
 	case "working":
-		statusIcon = "●"
+		statusIcon = spinnerDot(m.animTick)
 		statusStyle = statusStyle.Foreground(t.Green)
 	case "idle":
 		statusIcon = "○"
@@ -1672,6 +1844,12 @@ func (m Model) renderPaneRow(p tmux.Pane, rank int, selected bool, width int) st
 		return lipgloss.NewStyle().Background(t.Surface0).Render(rowContent)
 	}
 	return rowContent
+}
+
+// spinnerDot returns a one-cell dot spinner frame based on the animation tick.
+func spinnerDot(tick int) string {
+	frames := []string{".", "·", "•", "·"}
+	return frames[tick%len(frames)]
 }
 
 // renderPaneDetail renders detailed info for the selected pane

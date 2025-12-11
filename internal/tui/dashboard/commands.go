@@ -1,0 +1,97 @@
+package dashboard
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/Dicklesworthstone/ntm/internal/alerts"
+	"github.com/Dicklesworthstone/ntm/internal/bv"
+	"github.com/Dicklesworthstone/ntm/internal/history"
+	"github.com/Dicklesworthstone/ntm/internal/tmux"
+	"github.com/Dicklesworthstone/ntm/internal/tokens"
+	"github.com/Dicklesworthstone/ntm/internal/tracker"
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+// fetchBeadsCmd calls bv.GetBeadsSummary
+func (m Model) fetchBeadsCmd() tea.Cmd {
+	return func() tea.Msg {
+		if !bv.IsInstalled() {
+			return BeadsUpdateMsg{Err: fmt.Errorf("bv not installed")}
+		}
+		summary := bv.GetBeadsSummary(5) // Get top 5 ready/in-progress
+		if !summary.Available {
+			return BeadsUpdateMsg{Err: fmt.Errorf("%s", summary.Reason)}
+		}
+		return BeadsUpdateMsg{Summary: *summary, Ready: summary.ReadyPreview}
+	}
+}
+
+// fetchAlertsCmd aggregates alerts
+func (m Model) fetchAlertsCmd() tea.Cmd {
+	return func() tea.Msg {
+		// Use default config for alerts generator
+		cfg := alerts.DefaultConfig()
+		gen := alerts.NewGenerator(cfg)
+		activeAlerts := gen.GenerateAll()
+		return AlertsUpdateMsg{Alerts: activeAlerts}
+	}
+}
+
+// fetchMetricsCmd calculates token usage
+func (m Model) fetchMetricsCmd() tea.Cmd {
+	// Capture panes from model to avoid race (Model is value receiver so copy)
+	panes := m.panes
+
+	return func() tea.Msg {
+		var totalTokens int
+		var totalCost float64
+
+		for _, p := range panes {
+			// Skip user panes
+			if p.Type == tmux.AgentUser {
+				continue
+			}
+
+			// Capture more context for better estimate
+			out, err := tmux.CapturePaneOutput(p.ID, 2000)
+			if err != nil {
+				continue
+			}
+
+			tokensCount := tokens.EstimateTokens(out)
+			totalTokens += tokensCount
+
+			// Rough cost calculation (very approximate placeholders)
+			// $10 per 1M tokens input (blended)
+			cost := float64(tokensCount) / 1_000_000.0 * 10.0
+			totalCost += cost
+		}
+
+		return MetricsUpdateMsg{
+			TotalTokens: totalTokens,
+			CostEst:     totalCost,
+		}
+	}
+}
+
+// fetchHistoryCmd reads recent history
+func (m Model) fetchHistoryCmd() tea.Cmd {
+	return func() tea.Msg {
+		entries, err := history.ReadRecent(20)
+		if err != nil {
+			return HistoryUpdateMsg{Err: err}
+		}
+		return HistoryUpdateMsg{Entries: entries}
+	}
+}
+
+// fetchFileChangesCmd queries tracker
+func (m Model) fetchFileChangesCmd() tea.Cmd {
+	return func() tea.Msg {
+		// Get changes from last 5 minutes
+		since := time.Now().Add(-5 * time.Minute)
+		changes := tracker.RecordedChangesSince(since)
+		return FileChangeMsg{Changes: changes}
+	}
+}
