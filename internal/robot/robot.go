@@ -304,6 +304,7 @@ type AgentMailSummary struct {
 	Error              string `json:"error,omitempty"`
 }
 
+
 // GraphMetrics provides bv graph analysis metrics for status output
 type GraphMetrics struct {
 	TopBottlenecks []BottleneckInfo `json:"top_bottlenecks,omitempty"`
@@ -2389,9 +2390,4 @@ func countInbox(ctx context.Context, client *agentmail.Client, projectKey, agent
 	return len(msgs)
 }
 
-// PrintDashboard outputs the dashboard state as JSON
-func PrintDashboard() error {
-	return encodeJSON(map[string]string{
-		"status": "not_implemented",
-	})
-}
+// PrintDashboard is implemented in robot_dashboard.go
