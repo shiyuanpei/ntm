@@ -111,7 +111,7 @@ func (p *Preview) Render() string {
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(p.BorderColor).
-		Width(p.Width - 2).
+		Width(p.Width-2).
 		Padding(0, 1)
 
 	boxContent := boxStyle.Render(styledContent)

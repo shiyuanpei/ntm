@@ -22,7 +22,7 @@ type CassSearchModel struct {
 	searching bool
 	err       error
 	onSelect  func(cass.SearchHit) tea.Cmd
-	
+
 	// Debounce
 	searchID int
 }
@@ -31,8 +31,10 @@ type searchItem struct {
 	hit cass.SearchHit
 }
 
-func (i searchItem) Title() string       { return i.hit.Title }
-func (i searchItem) Description() string { return fmt.Sprintf("%s • %s", i.hit.Agent, i.hit.SourcePath) }
+func (i searchItem) Title() string { return i.hit.Title }
+func (i searchItem) Description() string {
+	return fmt.Sprintf("%s • %s", i.hit.Agent, i.hit.SourcePath)
+}
 func (i searchItem) FilterValue() string { return i.hit.Title }
 
 type searchResultMsg struct {

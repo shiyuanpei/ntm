@@ -291,7 +291,7 @@ func ShimmerProgressBar(percent float64, width int, filled, empty string, tick i
 
 	// Create base gradient
 	filledStr := GradientText(strings.Repeat(filled, filledWidth), colors...)
-	
+
 	// Apply shimmer effect on top if tick > 0
 	if tick > 0 {
 		filledStr = Shimmer(strings.Repeat(filled, filledWidth), tick, colors...)

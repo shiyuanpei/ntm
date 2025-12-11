@@ -9,13 +9,13 @@ import (
 // IconSet contains all icons used in the TUI
 type IconSet struct {
 	// Navigation
-	Pointer   string
-	ArrowUp   string
-	ArrowDown string
-	ArrowLeft string
+	Pointer    string
+	ArrowUp    string
+	ArrowDown  string
+	ArrowLeft  string
 	ArrowRight string
-	Enter     string
-	Back      string
+	Enter      string
+	Back       string
 
 	// Status
 	Check    string
@@ -36,15 +36,15 @@ type IconSet struct {
 	Session  string
 
 	// Actions
-	Send     string
-	Target   string
-	Search   string
-	Filter   string
-	Copy     string
-	Save     string
-	Kill     string
-	Zoom     string
-	View     string
+	Send   string
+	Target string
+	Search string
+	Filter string
+	Copy   string
+	Save   string
+	Kill   string
+	Zoom   string
+	View   string
 
 	// Branding
 	Palette string
@@ -63,11 +63,11 @@ type IconSet struct {
 	General       string
 
 	// Decorations
-	Sparkle  string
-	Fire     string
+	Sparkle   string
+	Fire      string
 	Lightning string
-	Rocket   string
-	Gear     string
+	Rocket    string
+	Gear      string
 }
 
 // NerdFonts is the full icon set using Nerd Font symbols

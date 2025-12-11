@@ -279,10 +279,10 @@ func TestTokensForWidth(t *testing.T) {
 	bp := DefaultBreakpoints
 
 	tests := []struct {
-		name          string
-		width         int
-		expectCompact bool
-		expectDefault bool
+		name           string
+		width          int
+		expectCompact  bool
+		expectDefault  bool
 		expectSpacious bool
 	}{
 		{"very narrow", 20, true, false, false},

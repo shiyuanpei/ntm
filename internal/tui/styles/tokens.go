@@ -59,12 +59,12 @@ const (
 // Typography defines text sizing and styling tokens.
 type Typography struct {
 	// Font sizes (conceptual - terminals use fixed sizes)
-	SizeXS   int // For hints, captions
-	SizeSM   int // For secondary text
-	SizeMD   int // For body text (default)
-	SizeLG   int // For subheadings
-	SizeXL   int // For headings
-	SizeXXL  int // For titles
+	SizeXS  int // For hints, captions
+	SizeSM  int // For secondary text
+	SizeMD  int // For body text (default)
+	SizeLG  int // For subheadings
+	SizeXL  int // For headings
+	SizeXXL int // For titles
 
 	// Line heights (number of empty lines)
 	LineHeightTight  int // 0 - Compact
@@ -106,12 +106,12 @@ type LayoutTokens struct {
 	ButtonMinWidth int // Minimum button width
 
 	// List dimensions
-	ListIndent       int // Nested list indentation
-	ListItemPadding  int // List item internal padding
-	ListGutterWidth  int // Space between columns
+	ListIndent      int // Nested list indentation
+	ListItemPadding int // List item internal padding
+	ListGutterWidth int // Space between columns
 
 	// Table dimensions
-	TableColumnGap int // Gap between table columns
+	TableColumnGap  int // Gap between table columns
 	TableRowPadding int // Padding above/below rows
 
 	// Modal/Dialog dimensions
@@ -190,12 +190,12 @@ var DefaultAnimation = AnimationTokens{
 type ZIndex int
 
 const (
-	ZIndexBase      ZIndex = 0   // Base layer (content)
-	ZIndexFloating  ZIndex = 10  // Floating elements (dropdowns)
-	ZIndexModal     ZIndex = 20  // Modal dialogs
-	ZIndexOverlay   ZIndex = 30  // Full-screen overlays
-	ZIndexTooltip   ZIndex = 40  // Tooltips (highest)
-	ZIndexMax       ZIndex = 100 // Maximum z-index
+	ZIndexBase     ZIndex = 0   // Base layer (content)
+	ZIndexFloating ZIndex = 10  // Floating elements (dropdowns)
+	ZIndexModal    ZIndex = 20  // Modal dialogs
+	ZIndexOverlay  ZIndex = 30  // Full-screen overlays
+	ZIndexTooltip  ZIndex = 40  // Tooltips (highest)
+	ZIndexMax      ZIndex = 100 // Maximum z-index
 )
 
 // Breakpoints defines responsive width thresholds.
@@ -276,27 +276,27 @@ func Compact() DesignTokens {
 			LineHeightLoose:  1,
 		},
 		Layout: LayoutTokens{
-			MarginPage:       1,
-			MarginSection:    1,
-			MarginItem:       0,
-			PaddingCard:      1,
-			PaddingInline:    0,
-			PaddingInput:     0,
-			IconWidth:        2,
-			LabelWidth:       10,
-			BadgeMinWidth:    4,
-			InputMinWidth:    15,
-			ButtonMinWidth:   6,
-			ListIndent:       1,
-			ListItemPadding:  0,
-			ListGutterWidth:  1,
-			TableColumnGap:   1,
-			TableRowPadding:  0,
-			ModalWidth:       50,
-			ModalMinHeight:   8,
-			DashCardWidth:    20,
-			DashCardHeight:   4,
-			DashGridGap:      1,
+			MarginPage:      1,
+			MarginSection:   1,
+			MarginItem:      0,
+			PaddingCard:     1,
+			PaddingInline:   0,
+			PaddingInput:    0,
+			IconWidth:       2,
+			LabelWidth:      10,
+			BadgeMinWidth:   4,
+			InputMinWidth:   15,
+			ButtonMinWidth:  6,
+			ListIndent:      1,
+			ListItemPadding: 0,
+			ListGutterWidth: 1,
+			TableColumnGap:  1,
+			TableRowPadding: 0,
+			ModalWidth:      50,
+			ModalMinHeight:  8,
+			DashCardWidth:   20,
+			DashCardHeight:  4,
+			DashGridGap:     1,
 		},
 		Animation:   DefaultAnimation,
 		Breakpoints: DefaultBreakpoints,
@@ -335,27 +335,27 @@ func Spacious() DesignTokens {
 			LineHeightLoose:  3,
 		},
 		Layout: LayoutTokens{
-			MarginPage:       4,
-			MarginSection:    3,
-			MarginItem:       2,
-			PaddingCard:      3,
-			PaddingInline:    2,
-			PaddingInput:     2,
-			IconWidth:        4,
-			LabelWidth:       16,
-			BadgeMinWidth:    8,
-			InputMinWidth:    25,
-			ButtonMinWidth:   10,
-			ListIndent:       4,
-			ListItemPadding:  2,
-			ListGutterWidth:  4,
-			TableColumnGap:   4,
-			TableRowPadding:  1,
-			ModalWidth:       80,
-			ModalMinHeight:   15,
-			DashCardWidth:    30,
-			DashCardHeight:   7,
-			DashGridGap:      2,
+			MarginPage:      4,
+			MarginSection:   3,
+			MarginItem:      2,
+			PaddingCard:     3,
+			PaddingInline:   2,
+			PaddingInput:    2,
+			IconWidth:       4,
+			LabelWidth:      16,
+			BadgeMinWidth:   8,
+			InputMinWidth:   25,
+			ButtonMinWidth:  10,
+			ListIndent:      4,
+			ListItemPadding: 2,
+			ListGutterWidth: 4,
+			TableColumnGap:  4,
+			TableRowPadding: 1,
+			ModalWidth:      80,
+			ModalMinHeight:  15,
+			DashCardWidth:   30,
+			DashCardHeight:  7,
+			DashGridGap:     2,
 		},
 		Animation:   DefaultAnimation,
 		Breakpoints: DefaultBreakpoints,
@@ -395,27 +395,27 @@ func UltraWide() DesignTokens {
 			LineHeightLoose:  4,
 		},
 		Layout: LayoutTokens{
-			MarginPage:       6,
-			MarginSection:    4,
-			MarginItem:       2,
-			PaddingCard:      4,
-			PaddingInline:    3,
-			PaddingInput:     2,
-			IconWidth:        5,
-			LabelWidth:       20,
-			BadgeMinWidth:    10,
-			InputMinWidth:    35,
-			ButtonMinWidth:   14,
-			ListIndent:       6,
-			ListItemPadding:  2,
-			ListGutterWidth:  6,
-			TableColumnGap:   6,
-			TableRowPadding:  1,
-			ModalWidth:       120,
-			ModalMinHeight:   20,
-			DashCardWidth:    40,
-			DashCardHeight:   10,
-			DashGridGap:      3,
+			MarginPage:      6,
+			MarginSection:   4,
+			MarginItem:      2,
+			PaddingCard:     4,
+			PaddingInline:   3,
+			PaddingInput:    2,
+			IconWidth:       5,
+			LabelWidth:      20,
+			BadgeMinWidth:   10,
+			InputMinWidth:   35,
+			ButtonMinWidth:  14,
+			ListIndent:      6,
+			ListItemPadding: 2,
+			ListGutterWidth: 6,
+			TableColumnGap:  6,
+			TableRowPadding: 1,
+			ModalWidth:      120,
+			ModalMinHeight:  20,
+			DashCardWidth:   40,
+			DashCardHeight:  10,
+			DashGridGap:     3,
 		},
 		Animation:   DefaultAnimation,
 		Breakpoints: DefaultBreakpoints,

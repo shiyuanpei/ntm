@@ -57,17 +57,17 @@ type SemanticPalette struct {
 	Accent4 lipgloss.Color // Quaternary accent
 
 	// Special purpose
-	Link       lipgloss.Color // Hyperlinks
-	Code       lipgloss.Color // Inline code
-	CodeBlock  lipgloss.Color // Code block background
-	Selection  lipgloss.Color // Selected text background
-	Cursor     lipgloss.Color // Cursor/caret
-	Scrollbar  lipgloss.Color // Scrollbar track/thumb
-	Divider    lipgloss.Color // Divider lines
-	Shadow     lipgloss.Color // Shadow/overlay
-	Badge      lipgloss.Color // Badge background
-	BadgeText  lipgloss.Color // Badge text
-	Tooltip    lipgloss.Color // Tooltip background
+	Link        lipgloss.Color // Hyperlinks
+	Code        lipgloss.Color // Inline code
+	CodeBlock   lipgloss.Color // Code block background
+	Selection   lipgloss.Color // Selected text background
+	Cursor      lipgloss.Color // Cursor/caret
+	Scrollbar   lipgloss.Color // Scrollbar track/thumb
+	Divider     lipgloss.Color // Divider lines
+	Shadow      lipgloss.Color // Shadow/overlay
+	Badge       lipgloss.Color // Badge background
+	BadgeText   lipgloss.Color // Badge text
+	Tooltip     lipgloss.Color // Tooltip background
 	TooltipText lipgloss.Color // Tooltip text
 }
 
@@ -124,17 +124,17 @@ func (t Theme) Semantic() SemanticPalette {
 		Accent4: t.Lavender,
 
 		// Special
-		Link:       t.Blue,
-		Code:       t.Peach,
-		CodeBlock:  t.Surface0,
-		Selection:  t.Surface1,
-		Cursor:     t.Rosewater,
-		Scrollbar:  t.Surface2,
-		Divider:    t.Surface2,
-		Shadow:     t.Crust,
-		Badge:      t.Surface1,
-		BadgeText:  t.Text,
-		Tooltip:    t.Surface1,
+		Link:        t.Blue,
+		Code:        t.Peach,
+		CodeBlock:   t.Surface0,
+		Selection:   t.Surface1,
+		Cursor:      t.Rosewater,
+		Scrollbar:   t.Surface2,
+		Divider:     t.Surface2,
+		Shadow:      t.Crust,
+		Badge:       t.Surface1,
+		BadgeText:   t.Text,
+		Tooltip:     t.Surface1,
 		TooltipText: t.Text,
 	}
 }
@@ -197,10 +197,10 @@ type SemanticStyles struct {
 	TextInfo    lipgloss.Style
 
 	// Interactive elements
-	Link       lipgloss.Style
-	LinkHover  lipgloss.Style
-	Code       lipgloss.Style
-	CodeBlock  lipgloss.Style
+	Link      lipgloss.Style
+	LinkHover lipgloss.Style
+	Code      lipgloss.Style
+	CodeBlock lipgloss.Style
 
 	// Containers
 	Surface    lipgloss.Style
