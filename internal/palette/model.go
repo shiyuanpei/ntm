@@ -834,7 +834,29 @@ func (m Model) renderHelpBar() string {
 		{"↑/↓", "navigate"},
 		{"1-9", "quick select"},
 		{"Enter", "select"},
-		{"Esc", "quit"},
+		{"Esc", "back"},
+	}
+
+	if m.tier >= layout.TierWide {
+		items = append(items,
+			struct {
+				key  string
+				desc string
+			}{"q/ctrl+c", "quit"},
+		)
+	}
+
+	if m.tier >= layout.TierUltra {
+		items = append(items,
+			struct {
+				key  string
+				desc string
+			}{"Enter→", "targets 1-4"},
+			struct {
+				key  string
+				desc string
+			}{"type", "filter commands"},
+		)
 	}
 
 	var parts []string

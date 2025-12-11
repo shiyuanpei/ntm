@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Dicklesworthstone/ntm/internal/tui/layout"
 	"github.com/Dicklesworthstone/ntm/internal/tui/styles"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -13,8 +14,15 @@ const maxContentWidth = 90
 
 // effectiveWidth returns the content width, constrained to maxContentWidth on wide screens
 func (m Model) effectiveWidth() int {
-	if m.width > maxContentWidth {
-		return maxContentWidth
+	maxWidth := maxContentWidth
+	if m.tier >= layout.TierUltra {
+		maxWidth = 140
+	} else if m.tier >= layout.TierWide {
+		maxWidth = 120
+	}
+
+	if m.width > maxWidth {
+		return maxWidth
 	}
 	return m.width
 }
@@ -47,9 +55,22 @@ func (m Model) renderSlide() string {
 		content = m.renderCompleteSlide(tick)
 	}
 
+	// Calculate effective width for main content
+	effWidth := m.effectiveWidth()
+
 	// On wide screens, center the content within a constrained width
-	if m.width > maxContentWidth {
-		padding := (m.width - maxContentWidth) / 2
+	// If we have a side panel, we center within the remaining space minus side panel
+	centerWidth := m.width
+	if m.tier >= layout.TierWide {
+		// Reserve space for side panel (approx 35 cols)
+		centerWidth -= 35
+		if centerWidth < effWidth {
+			centerWidth = effWidth
+		}
+	}
+
+	if centerWidth > effWidth {
+		padding := (centerWidth - effWidth) / 2
 		lines := strings.Split(content, "\n")
 		var centered strings.Builder
 		for i, line := range lines {
@@ -62,10 +83,82 @@ func (m Model) renderSlide() string {
 		content = centered.String()
 	}
 
+	// Add side panel on wide screens
+	if m.tier >= layout.TierWide {
+		sidePanel := m.renderSidePanel()
+		content = lipgloss.JoinHorizontal(lipgloss.Top, content, sidePanel)
+	}
+
 	// Add navigation bar at bottom
 	content += "\n" + m.renderNavigationBar()
 
 	return content
+}
+
+// renderSidePanel renders the persistent side panel for wide screens
+func (m Model) renderSidePanel() string {
+	t := m.theme
+	width := 30
+
+	style := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, false, true). // Left border
+		BorderForeground(t.Surface1).
+		Padding(0, 1).
+		Width(width).
+		Height(m.height - 3) // Leave room for nav bar
+
+	var b strings.Builder
+	b.WriteString(styles.GradientText("  QUICK REF", "#89b4fa", "#cba6f7") + "\n\n")
+
+	// Key bindings
+	keys := []struct{ k, d string }{
+		{"→/SPACE", "Next"},
+		{"←/BACK", "Prev"},
+		{"s", "Skip Anim"},
+		{"r", "Replay"},
+		{"q", "Quit"},
+	}
+
+	for _, k := range keys {
+		keyStyle := lipgloss.NewStyle().Foreground(t.Text).Bold(true)
+		descStyle := lipgloss.NewStyle().Foreground(t.Overlay)
+		b.WriteString(fmt.Sprintf("  %-10s %s\n", keyStyle.Render(k.k), descStyle.Render(k.d)))
+	}
+
+	// Progress Map
+	b.WriteString("\n" + styles.GradientText("  PROGRESS", "#a6e3a1", "#94e2d5") + "\n\n")
+
+	slides := []string{
+		"Welcome",
+		"Problem",
+		"Solution",
+		"Concepts",
+		"Quick Start",
+		"Commands",
+		"Workflows",
+		"Tips",
+		"Complete",
+	}
+
+	for i, name := range slides {
+		var marker string
+		var itemStyle lipgloss.Style
+
+		if SlideID(i) == m.currentSlide {
+			marker = "●"
+			itemStyle = lipgloss.NewStyle().Foreground(t.Pink).Bold(true)
+		} else if SlideID(i) < m.currentSlide {
+			marker = "✓"
+			itemStyle = lipgloss.NewStyle().Foreground(t.Green)
+		} else {
+			marker = "○"
+			itemStyle = lipgloss.NewStyle().Foreground(t.Surface2)
+		}
+
+		b.WriteString(fmt.Sprintf("  %s %s\n", itemStyle.Render(marker), itemStyle.Render(name)))
+	}
+
+	return style.Render(b.String())
 }
 
 // renderWelcomeSlide renders the animated welcome slide
@@ -381,7 +474,7 @@ func (m Model) renderCommandsSlide(tick int) string {
 			color: "#f9e2af",
 			commands: [][]string{
 				{"ntm palette", "ncp", "Command palette"},
-				{"ntm copy", "cpnt", "Copy pane output"},
+				{"ntm copy", "cpnt", "Copy pane output (pane, filters, clipboard/file)"},
 				{"ntm save", "svnt", "Save outputs to files"},
 			},
 		},
@@ -616,13 +709,23 @@ func (m Model) renderNavigationBar() string {
 		Render(counter)
 
 	// Navigation hints
-	navHints := "  ← → navigate  •  s skip  •  q quit"
+	hints := []string{"← → navigate", "s skip", "q quit"}
+	if m.tier >= layout.TierSplit {
+		hints = append(hints, "space next")
+	}
+	if m.tier >= layout.TierWide {
+		hints = append(hints, "1-9 jump")
+	}
+	if m.tier >= layout.TierUltra {
+		hints = append(hints, "home/end first/last", "r restart", "tab expand")
+	}
+	navHints := "  " + strings.Join(hints, "  •  ")
 	navStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("#6c7086")).Render(navHints)
 
 	// Calculate spacing
-	dotsLen := SlideCount*2 + 2
-	counterLen := len(counter)
-	navLen := len(navHints)
+	dotsLen := lipgloss.Width(dots)
+	counterLen := lipgloss.Width(counter)
+	navLen := lipgloss.Width(navHints)
 	spacing := m.width - dotsLen - counterLen - navLen - 6
 
 	if spacing > 0 {

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestAgentBadge(t *testing.T) {
@@ -216,5 +218,45 @@ func TestTextBadge(t *testing.T) {
 	}
 	if !strings.Contains(result, "custom") {
 		t.Error("TextBadge should contain the text")
+	}
+}
+
+func TestMiniBar(t *testing.T) {
+	p := DefaultMiniBarPalette()
+	bar := MiniBar(0.75, 6, p)
+	if bar == "" {
+		t.Fatal("MiniBar returned empty string")
+	}
+	if w := lipgloss.Width(bar); w != 6 {
+		t.Fatalf("MiniBar width = %d, want 6", w)
+	}
+
+	// Four-tier threshold: ensure mid-high band uses provided MidHigh
+	custom := p
+	custom.MidHigh = lipgloss.Color("#ffff00")
+	MiniBar(0.7, 4, custom) // should not panic; color check is visual-only here
+
+	// Clamp extremes
+	if w := lipgloss.Width(MiniBar(1.5, 4)); w != 4 {
+		t.Fatalf("MiniBar should clamp values above 1; width=%d", w)
+	}
+	if w := lipgloss.Width(MiniBar(-1, 3)); w != 3 {
+		t.Fatalf("MiniBar should clamp values below 0; width=%d", w)
+	}
+}
+
+func TestRankBadge(t *testing.T) {
+	tests := []int{1, 2, 3, 4}
+	for _, rank := range tests {
+		rank := rank
+		t.Run(fmt.Sprintf("rank_%d", rank), func(t *testing.T) {
+			out := RankBadge(rank)
+			if out == "" {
+				t.Fatalf("RankBadge(%d) returned empty string", rank)
+			}
+			if !strings.Contains(out, fmt.Sprintf("#%d", rank)) {
+				t.Fatalf("RankBadge(%d) missing label", rank)
+			}
+		})
 	}
 }

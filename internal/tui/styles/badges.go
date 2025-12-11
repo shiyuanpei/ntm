@@ -29,10 +29,28 @@ type BadgeOptions struct {
 	ShowIcon bool
 }
 
+// MedalPalette defines standard medal colors for rank badges.
+type MedalPalette struct {
+	Gold   lipgloss.Color
+	Silver lipgloss.Color
+	Bronze lipgloss.Color
+}
+
+// MedalColors returns the current theme's medal palette.
+func MedalColors() MedalPalette {
+	t := theme.Current()
+	return MedalPalette{
+		Gold:   t.Yellow,
+		Silver: t.Surface2,
+		Bronze: t.Maroon,
+	}
+}
+
 // MiniBarPalette controls the colors and glyphs for MiniBar rendering.
 type MiniBarPalette struct {
 	Low        lipgloss.Color // value < 0.60
-	Mid        lipgloss.Color // 0.60–0.79
+	Mid        lipgloss.Color // 0.40–0.59 (legacy mid-low band)
+	MidHigh    lipgloss.Color // 0.60–0.79 (optional; falls back to Mid)
 	High       lipgloss.Color // >= 0.80
 	Empty      lipgloss.Color
 	FilledChar string
@@ -44,7 +62,8 @@ func DefaultMiniBarPalette() MiniBarPalette {
 	t := theme.Current()
 	return MiniBarPalette{
 		Low:        t.Green,
-		Mid:        t.Yellow,
+		Mid:        t.Blue,
+		MidHigh:    t.Yellow,
 		High:       t.Red,
 		Empty:      t.Surface1,
 		FilledChar: "█",
@@ -257,16 +276,15 @@ func RankBadge(rank int, opts ...BadgeOptions) string {
 		return ""
 	}
 
-	var bg lipgloss.Color
+	medals := MedalColors()
+	bg := t.Surface1
 	switch rank {
 	case 1:
-		bg = t.Yellow
+		bg = medals.Gold
 	case 2:
-		bg = t.Surface2
+		bg = medals.Silver
 	case 3:
-		bg = t.Maroon
-	default:
-		bg = t.Surface1
+		bg = medals.Bronze
 	}
 
 	label := fmt.Sprintf("#%d", rank)
@@ -451,6 +469,12 @@ func MiniBar(value float64, width int, palettes ...MiniBarPalette) string {
 	case value >= 0.80:
 		barColor = palette.High
 	case value >= 0.60:
+		if palette.MidHigh != "" {
+			barColor = palette.MidHigh
+		} else {
+			barColor = palette.Mid
+		}
+	case value >= 0.40:
 		barColor = palette.Mid
 	default:
 		barColor = palette.Low
