@@ -181,7 +181,7 @@ type Model struct {
 	scanDuration time.Duration      // How long the scan took
 
 	// Layout tier (narrow/split/wide/ultra)
-	tier baselayout.Tier
+	tier layout.Tier
 
 	// Agent Mail integration
 	agentMailAvailable bool
@@ -253,6 +253,8 @@ type KeyMap struct {
 	ContextRefresh key.Binding // 'c' to refresh context data
 	MailRefresh    key.Binding // 'm' to refresh Agent Mail data
 	CassSearch     key.Binding // 'ctrl+s' to open CASS search
+	Tab            key.Binding
+	ShiftTab       key.Binding
 	Num1           key.Binding
 	Num2           key.Binding
 	Num3           key.Binding
@@ -299,6 +301,8 @@ var dashKeys = KeyMap{
 	ContextRefresh: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "refresh context")),
 	MailRefresh:    key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "refresh mail")),
 	CassSearch:     key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "cass search")),
+	Tab:            key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next panel")),
+	ShiftTab:       key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev panel")),
 	Num1:           key.NewBinding(key.WithKeys("1")),
 	Num2:           key.NewBinding(key.WithKeys("2")),
 	Num3:           key.NewBinding(key.WithKeys("3")),
@@ -319,7 +323,7 @@ func New(session string) Model {
 		session:         session,
 		width:           80,
 		height:          24,
-		tier:            baselayout.TierForWidth(80),
+		tier:            layout.TierForWidth(80),
 		theme:           t,
 		icons:           ic,
 		compaction:      status.NewCompactionRecoveryIntegrationDefault(),
@@ -676,9 +680,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.tier = baselayout.TierForWidth(msg.Width)
+		m.tier = layout.TierForWidth(msg.Width)
 
-		_, detailWidth := baselayout.SplitProportions(msg.Width)
+		_, detailWidth := layout.SplitProportions(msg.Width)
 		contentWidth := detailWidth - 4
 		if contentWidth < 20 {
 			contentWidth = 20
@@ -1385,7 +1389,7 @@ func (m Model) renderPaneGrid() string {
 	cardWidth, cardsPerRow := styles.AdaptiveCardDimensions(availableWidth, minCardWidth, maxCardWidth, cardGap)
 
 	// On wide/ultra displays, show more detail per card
-	showExtendedInfo := m.tier >= layout.TierWide
+	showExtendedInfo := m.tier >= baselayout.TierWide
 
 	var cards []string
 
@@ -1425,7 +1429,7 @@ func (m Model) renderPaneGrid() string {
 
 		// Header line with icon and title
 		iconStyled := lipgloss.NewStyle().Foreground(iconColor).Bold(true).Render(agentIcon)
-		title := layout.TruncateRunes(p.Title, maxInt(cardWidth-6, 10), "…")
+		title := baselayout.TruncateRunes(p.Title, maxInt(cardWidth-6, 10), "…")
 
 		titleStyled := lipgloss.NewStyle().Foreground(t.Text).Bold(true).Render(title)
 		cardContent.WriteString(iconStyled + " " + titleStyled + "\n")
@@ -1450,14 +1454,14 @@ func (m Model) renderPaneGrid() string {
 		}
 
 		// Command running (if any) - only when there is room
-		if p.Command != "" && m.tier >= layout.TierSplit {
+		if p.Command != "" && m.tier >= baselayout.TierSplit {
 			cmdStyle := lipgloss.NewStyle().Foreground(t.Overlay).Italic(true)
-			cmd := layout.TruncateRunes(p.Command, maxInt(cardWidth-4, 8), "…")
+			cmd := baselayout.TruncateRunes(p.Command, maxInt(cardWidth-4, 8), "…")
 			cardContent.WriteString(cmdStyle.Render(cmd))
 		}
 
 		// Context usage bar
-		if ps, ok := m.paneStatus[p.Index]; ok && ps.ContextLimit > 0 && m.tier >= layout.TierWide {
+		if ps, ok := m.paneStatus[p.Index]; ok && ps.ContextLimit > 0 && m.tier >= baselayout.TierWide {
 			cardContent.WriteString("\n")
 			contextBar := m.renderContextBar(ps.ContextPercent, cardWidth-4)
 			cardContent.WriteString(contextBar)
@@ -1551,7 +1555,7 @@ func maxInt(a, b int) int {
 // renderSplitView renders a two-panel layout: pane list (left) + detail (right)
 func (m Model) renderSplitView() string {
 	t := m.theme
-	leftWidth, rightWidth := layout.SplitProportions(m.width)
+	leftWidth, rightWidth := baselayout.SplitProportions(m.width)
 
 	// Calculate content height (leave room for header/footer)
 	contentHeight := m.height - 14
@@ -2029,6 +2033,31 @@ func (m Model) renderPaneDetail(width int) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func (m *Model) cycleFocus(next bool) {
+	if next {
+		m.focusedPanel++
+		if m.focusedPanel >= numPanes {
+			m.focusedPanel = 0
+		}
+	} else {
+		m.focusedPanel--
+		if m.focusedPanel < 0 {
+			m.focusedPanel = numPanes - 1
+		}
+	}
+
+	// Update panel focus state
+	m.beadsPanel.Blur()
+	m.alertsPanel.Blur()
+
+	switch m.focusedPanel {
+	case PanelBeads:
+		m.beadsPanel.Focus()
+	case PanelAlerts:
+		m.alertsPanel.Focus()
+	}
 }
 
 // Run starts the dashboard
