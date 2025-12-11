@@ -1408,21 +1408,9 @@ func (m Model) renderRateLimitAlert() string {
 }
 
 // renderContextBar renders a progress bar showing context usage percentage
+// High context (>80%) uses shimmer effect on warning indicators
 func (m Model) renderContextBar(percent float64, width int) string {
 	t := m.theme
-
-	// Determine warning icon
-	var warningIcon string
-	switch {
-	case percent >= 95:
-		warningIcon = " !!!"
-	case percent >= 90:
-		warningIcon = " !!"
-	case percent >= 80:
-		warningIcon = " !"
-	default:
-		warningIcon = ""
-	}
 
 	// Calculate bar width (leave room for percentage text and warning icon)
 	barWidth := width - 8 // "[████░░] XX%⚠"
@@ -1434,11 +1422,26 @@ func (m Model) renderContextBar(percent float64, width int) string {
 	barContent := styles.ShimmerProgressBar(percent/100.0, barWidth, "█", "░", m.animTick, colors...)
 
 	percentStyle := lipgloss.NewStyle().Foreground(t.Overlay)
-	warningStyle := lipgloss.NewStyle().Foreground(t.Red).Bold(true)
+
+	// Determine warning icon with shimmer effect for high context
+	var warningIcon string
+	switch {
+	case percent >= 95:
+		// Critical: shimmer the warning in red/maroon gradient
+		warningIcon = " " + styles.Shimmer("!!!", m.animTick, string(t.Red), string(t.Maroon), string(t.Red))
+	case percent >= 90:
+		// High: shimmer in red/orange gradient
+		warningIcon = " " + styles.Shimmer("!!", m.animTick, string(t.Red), string(t.Maroon), string(t.Red))
+	case percent >= 80:
+		// Warning: shimmer in yellow/orange gradient
+		warningIcon = " " + styles.Shimmer("!", m.animTick, string(t.Yellow), string(t.Peach), string(t.Yellow))
+	default:
+		warningIcon = ""
+	}
 
 	bar := "[" + barContent + "]" +
 		percentStyle.Render(fmt.Sprintf("%3.0f%%", percent)) +
-		warningStyle.Render(warningIcon)
+		warningIcon
 
 	return bar
 }
