@@ -957,11 +957,11 @@ func (m *Model) selectByNumber(n int) {
 func (m *Model) cycleFocus(dir int) {
 	var visiblePanes []PanelID
 	switch {
-	case m.tier >= layout.TierMega:
+	case m.tier >= baselayout.TierMega:
 		visiblePanes = []PanelID{PanelPaneList, PanelDetail, PanelBeads, PanelAlerts, PanelSidebar}
-	case m.tier >= layout.TierUltra:
+	case m.tier >= baselayout.TierUltra:
 		visiblePanes = []PanelID{PanelPaneList, PanelDetail, PanelSidebar}
-	case m.tier >= layout.TierSplit:
+	case m.tier >= baselayout.TierSplit:
 		visiblePanes = []PanelID{PanelPaneList, PanelDetail}
 	default:
 		visiblePanes = []PanelID{PanelPaneList}
@@ -1054,11 +1054,11 @@ func (m Model) View() string {
 	} else {
 		// Responsive layout selection
 		switch {
-		case m.tier >= layout.TierMega:
+		case m.tier >= baselayout.TierMega:
 			b.WriteString(m.renderMegaLayout() + "\n")
-		case m.tier >= layout.TierUltra:
+		case m.tier >= baselayout.TierUltra:
 			b.WriteString(m.renderUltraLayout() + "\n")
-		case m.tier >= layout.TierSplit:
+		case m.tier >= baselayout.TierSplit:
 			b.WriteString(m.renderSplitView() + "\n")
 		default:
 			b.WriteString(m.renderPaneGrid() + "\n")
