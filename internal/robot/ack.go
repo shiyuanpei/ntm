@@ -40,11 +40,11 @@ type AckFailure struct {
 type AckType string
 
 const (
-	AckPromptReturned AckType = "prompt_returned"  // Agent showed ready prompt after processing
-	AckEchoDetected   AckType = "echo_detected"    // Agent echoed the input
-	AckExplicitAck    AckType = "explicit_ack"     // Agent responded with understood/acknowledged
-	AckOutputStarted  AckType = "output_started"   // Agent began producing output
-	AckNone           AckType = "none"             // No acknowledgment detected
+	AckPromptReturned AckType = "prompt_returned" // Agent showed ready prompt after processing
+	AckEchoDetected   AckType = "echo_detected"   // Agent echoed the input
+	AckExplicitAck    AckType = "explicit_ack"    // Agent responded with understood/acknowledged
+	AckOutputStarted  AckType = "output_started"  // Agent began producing output
+	AckNone           AckType = "none"            // No acknowledgment detected
 )
 
 // AckOptions configures the PrintAck operation

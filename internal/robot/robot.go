@@ -605,10 +605,6 @@ func appendConflicts(output *StatusOutput) {
 	output.Conflicts = conflicts
 }
 
-
-
-
-
 // PrintMail outputs detailed Agent Mail state for AI orchestrators.
 func PrintMail(projectKey string) error {
 	if projectKey == "" {
@@ -2392,4 +2388,3 @@ func countInbox(ctx context.Context, client *agentmail.Client, projectKey, agent
 	}
 	return len(msgs)
 }
-

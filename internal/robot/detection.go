@@ -32,17 +32,17 @@ type AgentDetection struct {
 
 // processPatterns maps process/command names to agent types
 var processPatterns = map[string]string{
-	"claude":         "claude",
-	"claude-code":    "claude",
-	"codex":          "codex",
-	"codex-cli":      "codex",
-	"openai-codex":   "codex",
-	"gemini":         "gemini",
-	"gemini-cli":     "gemini",
-	"cursor":         "cursor",
-	"windsurf":       "windsurf",
-	"aider":          "aider",
-	"aider-chat":     "aider",
+	"claude":       "claude",
+	"claude-code":  "claude",
+	"codex":        "codex",
+	"codex-cli":    "codex",
+	"openai-codex": "codex",
+	"gemini":       "gemini",
+	"gemini-cli":   "gemini",
+	"cursor":       "cursor",
+	"windsurf":     "windsurf",
+	"aider":        "aider",
+	"aider-chat":   "aider",
 }
 
 // contentPatterns provides regex patterns for detecting agents from output

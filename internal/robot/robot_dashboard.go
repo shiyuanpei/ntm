@@ -15,18 +15,18 @@ import (
 
 // DashboardOutput provides a concise dashboard view for AI orchestrators.
 type DashboardOutput struct {
-	GeneratedAt  time.Time           `json:"generated_at"`
-	Fleet        string              `json:"fleet"`
-	Agents       []SnapshotSession   `json:"agents"`
-	Metrics      map[string]any      `json:"metrics,omitempty"`
-	System       SystemInfo          `json:"system"`
-	Summary      StatusSummary       `json:"summary"`
-	Beads        *bv.BeadsSummary    `json:"beads,omitempty"`
-	Alerts       []AlertInfo         `json:"alerts,omitempty"`
-	AlertSummary *AlertSummaryInfo   `json:"alert_summary,omitempty"`
-	Conflicts    []tracker.Conflict  `json:"conflicts,omitempty"`
-	FileChanges  []FileChangeInfo    `json:"file_changes,omitempty"`
-	AgentMail    *SnapshotAgentMail  `json:"agent_mail,omitempty"`
+	GeneratedAt  time.Time          `json:"generated_at"`
+	Fleet        string             `json:"fleet"`
+	Agents       []SnapshotSession  `json:"agents"`
+	Metrics      map[string]any     `json:"metrics,omitempty"`
+	System       SystemInfo         `json:"system"`
+	Summary      StatusSummary      `json:"summary"`
+	Beads        *bv.BeadsSummary   `json:"beads,omitempty"`
+	Alerts       []AlertInfo        `json:"alerts,omitempty"`
+	AlertSummary *AlertSummaryInfo  `json:"alert_summary,omitempty"`
+	Conflicts    []tracker.Conflict `json:"conflicts,omitempty"`
+	FileChanges  []FileChangeInfo   `json:"file_changes,omitempty"`
+	AgentMail    *SnapshotAgentMail `json:"agent_mail,omitempty"`
 }
 
 // PrintDashboard outputs a dashboard-oriented view for AI orchestrators.
@@ -64,41 +64,41 @@ func PrintDashboard(jsonMode bool) error {
 					Attached: sess.Attached,
 					Agents:   []SnapshotAgent{},
 				}
-			panes, err := tmux.GetPanes(sess.Name)
-			if err == nil {
-				for _, pane := range panes {
-					agentType := agentTypeString(pane.Type)
-					snapSession.Agents = append(snapSession.Agents, SnapshotAgent{
-						Pane:           fmt.Sprintf("%d.%d", 0, pane.Index),
-						Type:           agentType,
-						Variant:        pane.Variant,
-						TypeConfidence: 0.5,
-						TypeMethod:     "tmux-pane",
-						State:          "unknown",
-					})
+				panes, err := tmux.GetPanes(sess.Name)
+				if err == nil {
+					for _, pane := range panes {
+						agentType := agentTypeString(pane.Type)
+						snapSession.Agents = append(snapSession.Agents, SnapshotAgent{
+							Pane:           fmt.Sprintf("%d.%d", 0, pane.Index),
+							Type:           agentType,
+							Variant:        pane.Variant,
+							TypeConfidence: 0.5,
+							TypeMethod:     "tmux-pane",
+							State:          "unknown",
+						})
 
-					switch agentType {
-					case "claude":
-						output.Summary.ClaudeCount++
-					case "codex":
-						output.Summary.CodexCount++
-					case "gemini":
-						output.Summary.GeminiCount++
-					case "cursor":
-						output.Summary.CursorCount++
-					case "windsurf":
-						output.Summary.WindsurfCount++
-					case "aider":
-						output.Summary.AiderCount++
+						switch agentType {
+						case "claude":
+							output.Summary.ClaudeCount++
+						case "codex":
+							output.Summary.CodexCount++
+						case "gemini":
+							output.Summary.GeminiCount++
+						case "cursor":
+							output.Summary.CursorCount++
+						case "windsurf":
+							output.Summary.WindsurfCount++
+						case "aider":
+							output.Summary.AiderCount++
+						}
+						output.Summary.TotalAgents++
 					}
-					output.Summary.TotalAgents++
 				}
-			}
-			output.Agents = append(output.Agents, snapSession)
-			output.Summary.TotalSessions++
-			if sess.Attached {
-				output.Summary.AttachedCount++
-			}
+				output.Agents = append(output.Agents, snapSession)
+				output.Summary.TotalSessions++
+				if sess.Attached {
+					output.Summary.AttachedCount++
+				}
 			}
 		}
 	}

@@ -28,18 +28,18 @@ type HealthOutput struct {
 	Alerts []string `json:"alerts"`
 
 	// Project/beads health (existing functionality)
-	BvAvailable       bool                   `json:"bv_available"`
-	BdAvailable       bool                   `json:"bd_available"`
-	Error             string                 `json:"error,omitempty"`
-	DriftStatus       string                 `json:"drift_status,omitempty"`
-	DriftMessage      string                 `json:"drift_message,omitempty"`
-	TopBottlenecks    []bv.NodeScore         `json:"top_bottlenecks,omitempty"`
-	TopKeystones      []bv.NodeScore         `json:"top_keystones,omitempty"`
-	ReadyCount        int                    `json:"ready_count"`
-	InProgressCount   int                    `json:"in_progress_count"`
-	BlockedCount      int                    `json:"blocked_count"`
-	NextRecommended   []RecommendedAction    `json:"next_recommended,omitempty"`
-	DependencyContext *bv.DependencyContext  `json:"dependency_context,omitempty"`
+	BvAvailable       bool                  `json:"bv_available"`
+	BdAvailable       bool                  `json:"bd_available"`
+	Error             string                `json:"error,omitempty"`
+	DriftStatus       string                `json:"drift_status,omitempty"`
+	DriftMessage      string                `json:"drift_message,omitempty"`
+	TopBottlenecks    []bv.NodeScore        `json:"top_bottlenecks,omitempty"`
+	TopKeystones      []bv.NodeScore        `json:"top_keystones,omitempty"`
+	ReadyCount        int                   `json:"ready_count"`
+	InProgressCount   int                   `json:"in_progress_count"`
+	BlockedCount      int                   `json:"blocked_count"`
+	NextRecommended   []RecommendedAction   `json:"next_recommended,omitempty"`
+	DependencyContext *bv.DependencyContext `json:"dependency_context,omitempty"`
 }
 
 // SystemHealthInfo contains system-level health metrics
