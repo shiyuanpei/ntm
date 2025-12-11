@@ -37,6 +37,7 @@ func (c *Config) GenerateAgentCommand(tmplStr string, vars AgentTemplateVars) (s
 // Config represents the main configuration
 type Config struct {
 	ProjectsBase  string            `toml:"projects_base"`
+	Theme         string            `toml:"theme"`        // UI Theme (mocha, macchiato, nord, latte, auto)
 	PaletteFile   string            `toml:"palette_file"` // Path to command_palette.md (optional)
 	Agents        AgentConfig       `toml:"agents"`
 	Palette       []PaletteCmd      `toml:"palette"`
@@ -1017,6 +1018,14 @@ func Print(cfg *Config, w io.Writer) error {
 
 	fmt.Fprintf(w, "# Base directory for projects\n")
 	fmt.Fprintf(w, "projects_base = %q\n", cfg.ProjectsBase)
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "# UI Theme (mocha, macchiato, nord, latte, auto)")
+	if cfg.Theme != "" {
+		fmt.Fprintf(w, "theme = %q\n", cfg.Theme)
+	} else {
+		fmt.Fprintln(w, "# theme = \"auto\"")
+	}
 	fmt.Fprintln(w)
 
 	fmt.Fprintln(w, "# Path to command palette markdown file (optional)")

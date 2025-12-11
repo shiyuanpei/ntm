@@ -226,9 +226,9 @@ var Nord = Theme{
 // Default is the currently active theme
 var Default = CatppuccinMocha
 
-// Current returns the current theme based on env var or default
-func Current() Theme {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("NTM_THEME"))) {
+// FromName returns a theme by name
+func FromName(name string) Theme {
+	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "macchiato":
 		return CatppuccinMacchiato
 	case "nord":
@@ -242,6 +242,11 @@ func Current() Theme {
 	default:
 		return autoTheme()
 	}
+}
+
+// Current returns the current theme based on env var or default
+func Current() Theme {
+	return FromName(os.Getenv("NTM_THEME"))
 }
 
 // detectDarkBackground inspects the terminal to determine if a dark background is in use.
