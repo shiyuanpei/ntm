@@ -172,15 +172,15 @@ func parseResetTime(resetStr string) time.Time {
 
 // ClaudeQuota is a convenience type for Claude-specific quota info
 type ClaudeQuota struct {
-	SessionUsage  float64
-	WeeklyUsage   float64
-	PeriodUsage   float64
-	SonnetUsage   float64
-	ResetTime     string
-	AccountEmail  string
-	Organization  string
-	LoginMethod   string
-	IsLimited     bool
+	SessionUsage float64
+	WeeklyUsage  float64
+	PeriodUsage  float64
+	SonnetUsage  float64
+	ResetTime    string
+	AccountEmail string
+	Organization string
+	LoginMethod  string
+	IsLimited    bool
 }
 
 // ParseClaudeUsageString parses raw /usage output and returns structured data
@@ -190,14 +190,14 @@ func ParseClaudeUsageString(output string) *ClaudeQuota {
 	parseClaudeStatus(info, output)
 
 	return &ClaudeQuota{
-		SessionUsage:  info.SessionUsage,
-		WeeklyUsage:   info.WeeklyUsage,
-		PeriodUsage:   info.PeriodUsage,
-		SonnetUsage:   info.SonnetUsage,
-		ResetTime:     info.ResetString,
-		AccountEmail:  info.AccountID,
-		Organization:  info.Organization,
-		LoginMethod:   info.LoginMethod,
-		IsLimited:     info.IsLimited,
+		SessionUsage: info.SessionUsage,
+		WeeklyUsage:  info.WeeklyUsage,
+		PeriodUsage:  info.PeriodUsage,
+		SonnetUsage:  info.SonnetUsage,
+		ResetTime:    info.ResetString,
+		AccountEmail: info.AccountID,
+		Organization: info.Organization,
+		LoginMethod:  info.LoginMethod,
+		IsLimited:    info.IsLimited,
 	}
 }

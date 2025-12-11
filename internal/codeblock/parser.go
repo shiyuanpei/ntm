@@ -9,12 +9,12 @@ import (
 
 // CodeBlock represents a single code block extracted from markdown.
 type CodeBlock struct {
-	Language   string `json:"language"`             // From fence (python, bash, etc.)
-	Content    string `json:"content"`              // The code itself
-	StartLine  int    `json:"start_line"`           // Line number in source
-	EndLine    int    `json:"end_line"`             // Ending line number
-	FilePath   string `json:"file_path,omitempty"`  // Detected file path (if any)
-	IsNew      bool   `json:"is_new,omitempty"`     // Appears to be new file vs modification
+	Language   string `json:"language"`              // From fence (python, bash, etc.)
+	Content    string `json:"content"`               // The code itself
+	StartLine  int    `json:"start_line"`            // Line number in source
+	EndLine    int    `json:"end_line"`              // Ending line number
+	FilePath   string `json:"file_path,omitempty"`   // Detected file path (if any)
+	IsNew      bool   `json:"is_new,omitempty"`      // Appears to be new file vs modification
 	SourcePane string `json:"source_pane,omitempty"` // Pane ID where block was found
 }
 

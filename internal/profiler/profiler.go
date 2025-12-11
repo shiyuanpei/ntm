@@ -22,7 +22,7 @@ type Profiler struct {
 // Span represents a timed operation
 type Span struct {
 	Name      string        `json:"name"`
-	Phase     string        `json:"phase,omitempty"`     // e.g., "startup", "command", "shutdown"
+	Phase     string        `json:"phase,omitempty"` // e.g., "startup", "command", "shutdown"
 	StartTime time.Time     `json:"start_time"`
 	EndTime   time.Time     `json:"end_time,omitempty"`
 	Duration  time.Duration `json:"duration_ns,omitempty"`

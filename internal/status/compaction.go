@@ -29,14 +29,14 @@ var (
 // Claude Code compaction patterns - these are the CRITICAL ones
 // "Conversation compacted" is the EXACT text Claude Code shows
 var claudePatterns = []string{
-	`Conversation compacted`,                       // EXACT - primary signal
-	`(?i)conversation.*summarized`,                 // Alternate phrasing
-	`(?i)context.*compacted`,                       // Context management
-	`(?i)continued from.*previous.*conversation`,   // Recovery indication
-	`(?i)ran out of context`,                       // Explicit context limit
-	`(?i)session is being continued`,               // Session continuation
-	`(?i)conversation.*truncated`,                  // Truncation signal
-	`(?i)previous.*context.*lost`,                  // Context loss
+	`Conversation compacted`,                                       // EXACT - primary signal
+	`(?i)conversation.*summarized`,                                 // Alternate phrasing
+	`(?i)context.*compacted`,                                       // Context management
+	`(?i)continued from.*previous.*conversation`,                   // Recovery indication
+	`(?i)ran out of context`,                                       // Explicit context limit
+	`(?i)session is being continued`,                               // Session continuation
+	`(?i)conversation.*truncated`,                                  // Truncation signal
+	`(?i)previous.*context.*lost`,                                  // Context loss
 	`This session is being continued from a previous conversation`, // Full phrase
 }
 

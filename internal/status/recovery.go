@@ -35,9 +35,9 @@ type RecoveryEvent struct {
 // RecoveryManager handles sending recovery prompts with cooldown protection.
 type RecoveryManager struct {
 	mu                 sync.RWMutex
-	lastRecovery       map[string]time.Time      // paneID -> last recovery time
-	recoveryCount      map[string]int            // paneID -> number of recoveries
-	recoveryEvents     []RecoveryEvent           // History of recovery events
+	lastRecovery       map[string]time.Time // paneID -> last recovery time
+	recoveryCount      map[string]int       // paneID -> number of recoveries
+	recoveryEvents     []RecoveryEvent      // History of recovery events
 	cooldown           time.Duration
 	prompt             string
 	maxRecoveries      int
@@ -261,15 +261,15 @@ func makePaneID(session string, paneIndex int) string {
 
 // BeadContext contains bead-related context for recovery prompts
 type BeadContext struct {
-	TopBottlenecks    []string // Top bottleneck issue IDs
-	NextActions       []string // Recommended next actions
-	HealthStatus      string   // Project health summary
-	HasDrift          bool     // Whether drift was detected
+	TopBottlenecks []string // Top bottleneck issue IDs
+	NextActions    []string // Recommended next actions
+	HealthStatus   string   // Project health summary
+	HasDrift       bool     // Whether drift was detected
 	// Dependency context
-	InProgressTasks   []string // Currently in-progress tasks
-	BlockedCount      int      // Number of blocked issues
-	ReadyCount        int      // Number of ready issues
-	TopBlockers       []string // Top issues blocking progress
+	InProgressTasks []string // Currently in-progress tasks
+	BlockedCount    int      // Number of blocked issues
+	ReadyCount      int      // Number of ready issues
+	TopBlockers     []string // Top issues blocking progress
 }
 
 // BuildContextAwarePrompt creates a recovery prompt that includes bead context

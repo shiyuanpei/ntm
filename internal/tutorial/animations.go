@@ -609,4 +609,3 @@ func visibleLength(s string) int {
 	// Use runewidth for proper emoji/wide character width calculation
 	return runewidth.StringWidth(stripped.String())
 }
-

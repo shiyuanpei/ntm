@@ -22,13 +22,13 @@ const (
 
 // Logger writes events to a JSONL file with automatic rotation.
 type Logger struct {
-	path           string
-	retentionDays  int
-	enabled        bool
-	mu             sync.Mutex
-	file           *os.File
-	eventCount     int
-	lastRotation   time.Time
+	path          string
+	retentionDays int
+	enabled       bool
+	mu            sync.Mutex
+	file          *os.File
+	eventCount    int
+	lastRotation  time.Time
 }
 
 // LoggerOptions configures the event logger.

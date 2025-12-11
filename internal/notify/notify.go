@@ -22,15 +22,15 @@ import (
 type EventType string
 
 const (
-	EventAgentError     EventType = "agent.error"     // Agent hit error state
-	EventAgentCrashed   EventType = "agent.crashed"   // Agent process exited
-	EventAgentRestarted EventType = "agent.restarted" // Agent was auto-restarted
-	EventAgentIdle      EventType = "agent.idle"      // Agent waiting for input
+	EventAgentError     EventType = "agent.error"      // Agent hit error state
+	EventAgentCrashed   EventType = "agent.crashed"    // Agent process exited
+	EventAgentRestarted EventType = "agent.restarted"  // Agent was auto-restarted
+	EventAgentIdle      EventType = "agent.idle"       // Agent waiting for input
 	EventRateLimit      EventType = "agent.rate_limit" // Agent hit rate limit
-	EventRotationNeeded EventType = "rotation.needed" // Account rotation recommended
-	EventSessionCreated EventType = "session.created" // New session spawned
-	EventSessionKilled  EventType = "session.killed"  // Session terminated
-	EventHealthDegraded EventType = "health.degraded" // Overall health dropped
+	EventRotationNeeded EventType = "rotation.needed"  // Account rotation recommended
+	EventSessionCreated EventType = "session.created"  // New session spawned
+	EventSessionKilled  EventType = "session.killed"   // Session terminated
+	EventHealthDegraded EventType = "health.degraded"  // Overall health dropped
 )
 
 // Event represents a notification event
@@ -63,10 +63,10 @@ type DesktopConfig struct {
 
 // WebhookConfig configures webhook notifications
 type WebhookConfig struct {
-	Enabled  bool   `toml:"enabled"`
-	URL      string `toml:"url"`
-	Template string `toml:"template"` // Go template for payload
-	Method   string `toml:"method"`   // HTTP method (default POST)
+	Enabled  bool              `toml:"enabled"`
+	URL      string            `toml:"url"`
+	Template string            `toml:"template"` // Go template for payload
+	Method   string            `toml:"method"`   // HTTP method (default POST)
 	Headers  map[string]string `toml:"headers"`
 }
 

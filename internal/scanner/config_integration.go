@@ -8,7 +8,7 @@ import (
 // ScanOptionsFromConfig creates ScanOptions from a ScannerConfig
 func ScanOptionsFromConfig(cfg *config.ScannerConfig, context string) ScanOptions {
 	opts := ScanOptions{
-		Timeout:  cfg.Defaults.GetTimeout(),
+		Timeout:   cfg.Defaults.GetTimeout(),
 		Languages: cfg.Defaults.Languages,
 	}
 

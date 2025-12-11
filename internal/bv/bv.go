@@ -438,9 +438,9 @@ func GetGraphPositionsBatch(issueIDs []string) (map[string]*GraphPosition, error
 
 // HealthSummary returns a brief project health summary
 type HealthSummary struct {
-	DriftStatus   DriftStatus
-	DriftMessage  string
-	TopBottleneck string
+	DriftStatus     DriftStatus
+	DriftMessage    string
+	TopBottleneck   string
 	BottleneckCount int
 }
 
@@ -470,10 +470,10 @@ func GetHealthSummary() (*HealthSummary, error) {
 
 // BlockerInfo represents an issue that is blocked and what blocks it
 type BlockerInfo struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	BlockedBy   []string `json:"blocked_by"`
-	IsInProgress bool    `json:"is_in_progress"`
+	ID           string   `json:"id"`
+	Title        string   `json:"title"`
+	BlockedBy    []string `json:"blocked_by"`
+	IsInProgress bool     `json:"is_in_progress"`
 }
 
 // InProgressInfo represents an in-progress issue with its dependencies
@@ -486,10 +486,10 @@ type InProgressInfo struct {
 
 // DependencyContext contains dependency information for recovery prompts
 type DependencyContext struct {
-	InProgressTasks  []InProgressInfo `json:"in_progress_tasks"`
-	BlockedCount     int              `json:"blocked_count"`
-	ReadyCount       int              `json:"ready_count"`
-	TopBlockers      []BlockerInfo    `json:"top_blockers,omitempty"`
+	InProgressTasks []InProgressInfo `json:"in_progress_tasks"`
+	BlockedCount    int              `json:"blocked_count"`
+	ReadyCount      int              `json:"ready_count"`
+	TopBlockers     []BlockerInfo    `json:"top_blockers,omitempty"`
 }
 
 // GetDependencyContext returns dependency/blocker context from bd

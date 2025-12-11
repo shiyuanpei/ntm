@@ -19,20 +19,20 @@ type NodeScore struct {
 
 // PriorityResponse contains priority recommendations
 type PriorityResponse struct {
-	GeneratedAt     time.Time            `json:"generated_at"`
+	GeneratedAt     time.Time                `json:"generated_at"`
 	Recommendations []PriorityRecommendation `json:"recommendations"`
 }
 
 // PriorityRecommendation suggests priority adjustments
 type PriorityRecommendation struct {
-	IssueID          string   `json:"issue_id"`
-	Title            string   `json:"title"`
-	CurrentPriority  int      `json:"current_priority"`
-	SuggestedPriority int     `json:"suggested_priority"`
-	ImpactScore      float64  `json:"impact_score"`
-	Confidence       float64  `json:"confidence"`
-	Reasoning        []string `json:"reasoning"`
-	Direction        string   `json:"direction"` // "increase" or "decrease"
+	IssueID           string   `json:"issue_id"`
+	Title             string   `json:"title"`
+	CurrentPriority   int      `json:"current_priority"`
+	SuggestedPriority int      `json:"suggested_priority"`
+	ImpactScore       float64  `json:"impact_score"`
+	Confidence        float64  `json:"confidence"`
+	Reasoning         []string `json:"reasoning"`
+	Direction         string   `json:"direction"` // "increase" or "decrease"
 }
 
 // PlanResponse contains parallel work plan

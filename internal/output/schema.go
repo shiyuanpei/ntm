@@ -67,11 +67,11 @@ type PaneResponse struct {
 
 // AgentCountsResponse is the standard format for agent counts
 type AgentCountsResponse struct {
-	Claude  int `json:"claude"`
-	Codex   int `json:"codex"`
-	Gemini  int `json:"gemini"`
-	User    int `json:"user,omitempty"`
-	Total   int `json:"total"`
+	Claude int `json:"claude"`
+	Codex  int `json:"codex"`
+	Gemini int `json:"gemini"`
+	User   int `json:"user,omitempty"`
+	Total  int `json:"total"`
 }
 
 // SpawnResponse is the output format for spawn command (with agents)
@@ -87,34 +87,34 @@ type SpawnResponse struct {
 // CreateResponse is the output format for create command (basic session)
 type CreateResponse struct {
 	TimestampedResponse
-	Session          string           `json:"session"`
-	Created          bool             `json:"created"`
-	AlreadyExisted   bool             `json:"already_existed,omitempty"`
-	WorkingDirectory string           `json:"working_directory,omitempty"`
-	PaneCount        int              `json:"pane_count"`
-	Panes            []PaneResponse   `json:"panes,omitempty"`
+	Session          string         `json:"session"`
+	Created          bool           `json:"created"`
+	AlreadyExisted   bool           `json:"already_existed,omitempty"`
+	WorkingDirectory string         `json:"working_directory,omitempty"`
+	PaneCount        int            `json:"pane_count"`
+	Panes            []PaneResponse `json:"panes,omitempty"`
 }
 
 // AddResponse is the output format for add command (adding agents to session)
 type AddResponse struct {
 	TimestampedResponse
-	Session     string           `json:"session"`
-	AddedClaude int              `json:"added_claude"`
-	AddedCodex  int              `json:"added_codex"`
-	AddedGemini int              `json:"added_gemini"`
-	TotalAdded  int              `json:"total_added"`
-	NewPanes    []PaneResponse   `json:"new_panes,omitempty"`
+	Session     string         `json:"session"`
+	AddedClaude int            `json:"added_claude"`
+	AddedCodex  int            `json:"added_codex"`
+	AddedGemini int            `json:"added_gemini"`
+	TotalAdded  int            `json:"total_added"`
+	NewPanes    []PaneResponse `json:"new_panes,omitempty"`
 }
 
 // SendResponse is the output format for send command
 type SendResponse struct {
 	TimestampedResponse
-	Session       string   `json:"session"`
-	PromptPreview string   `json:"prompt_preview"` // First N chars
-	Targets       []int    `json:"targets"`        // Pane indices
-	Delivered     int      `json:"delivered"`
-	Failed        int      `json:"failed"`
-	FailedPanes   []int    `json:"failed_panes,omitempty"`
+	Session       string `json:"session"`
+	PromptPreview string `json:"prompt_preview"` // First N chars
+	Targets       []int  `json:"targets"`        // Pane indices
+	Delivered     int    `json:"delivered"`
+	Failed        int    `json:"failed"`
+	FailedPanes   []int  `json:"failed_panes,omitempty"`
 }
 
 // ListResponse is the output format for list command
@@ -126,35 +126,35 @@ type ListResponse struct {
 
 // SessionListItem is a single session in list output
 type SessionListItem struct {
-	Name             string              `json:"name"`
-	Windows          int                 `json:"windows"`
-	PaneCount        int                 `json:"pane_count"`
-	Attached         bool                `json:"attached"`
-	WorkingDirectory string              `json:"working_directory,omitempty"`
+	Name             string               `json:"name"`
+	Windows          int                  `json:"windows"`
+	PaneCount        int                  `json:"pane_count"`
+	Attached         bool                 `json:"attached"`
+	WorkingDirectory string               `json:"working_directory,omitempty"`
 	AgentCounts      *AgentCountsResponse `json:"agents,omitempty"`
 }
 
 // StatusResponse is the output format for status command
 type StatusResponse struct {
 	TimestampedResponse
-	Session          string               `json:"session"`
-	Exists           bool                 `json:"exists"`
-	Attached         bool                 `json:"attached"`
-	WorkingDirectory string               `json:"working_directory"`
-	Panes            []PaneResponse       `json:"panes"`
-	AgentCounts      AgentCountsResponse  `json:"agent_counts"`
-	AgentMail        *AgentMailStatus     `json:"agent_mail,omitempty"`
+	Session          string              `json:"session"`
+	Exists           bool                `json:"exists"`
+	Attached         bool                `json:"attached"`
+	WorkingDirectory string              `json:"working_directory"`
+	Panes            []PaneResponse      `json:"panes"`
+	AgentCounts      AgentCountsResponse `json:"agent_counts"`
+	AgentMail        *AgentMailStatus    `json:"agent_mail,omitempty"`
 }
 
 // AgentMailStatus represents Agent Mail integration status for a session
 type AgentMailStatus struct {
-	Available    bool                    `json:"available"`
-	Connected    bool                    `json:"connected"`
-	ServerURL    string                  `json:"server_url,omitempty"`
-	UnreadCount  int                     `json:"unread_count,omitempty"`
-	UrgentCount  int                     `json:"urgent_count,omitempty"`
-	ActiveLocks  int                     `json:"active_locks,omitempty"`
-	Reservations []FileReservationInfo   `json:"reservations,omitempty"`
+	Available    bool                  `json:"available"`
+	Connected    bool                  `json:"connected"`
+	ServerURL    string                `json:"server_url,omitempty"`
+	UnreadCount  int                   `json:"unread_count,omitempty"`
+	UrgentCount  int                   `json:"urgent_count,omitempty"`
+	ActiveLocks  int                   `json:"active_locks,omitempty"`
+	Reservations []FileReservationInfo `json:"reservations,omitempty"`
 }
 
 // FileReservationInfo represents a file reservation summary

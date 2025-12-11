@@ -180,13 +180,13 @@ func Reset() {
 
 // Stats returns startup timing statistics
 type Stats struct {
-	CurrentPhase  Phase         `json:"current_phase"`
-	Phase1Done    bool          `json:"phase1_done"`
-	Phase2Done    bool          `json:"phase2_done"`
-	Phase1TimeMs  float64       `json:"phase1_time_ms,omitempty"`
-	Phase2TimeMs  float64       `json:"phase2_time_ms,omitempty"`
-	DeferredCount int           `json:"deferred_count"`
-	Initialized   []string      `json:"initialized,omitempty"`
+	CurrentPhase  Phase    `json:"current_phase"`
+	Phase1Done    bool     `json:"phase1_done"`
+	Phase2Done    bool     `json:"phase2_done"`
+	Phase1TimeMs  float64  `json:"phase1_time_ms,omitempty"`
+	Phase2TimeMs  float64  `json:"phase2_time_ms,omitempty"`
+	DeferredCount int      `json:"deferred_count"`
+	Initialized   []string `json:"initialized,omitempty"`
 }
 
 // GetStats returns current startup statistics

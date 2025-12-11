@@ -8,11 +8,11 @@ import (
 
 // AlertsOutput provides machine-readable alert information
 type AlertsOutput struct {
-	GeneratedAt  time.Time    `json:"generated_at"`
-	Active       []Alert      `json:"active"`
-	Resolved     []Alert      `json:"resolved,omitempty"`
-	Summary      AlertSummary `json:"summary"`
-	Config       Config       `json:"config"`
+	GeneratedAt time.Time    `json:"generated_at"`
+	Active      []Alert      `json:"active"`
+	Resolved    []Alert      `json:"resolved,omitempty"`
+	Summary     AlertSummary `json:"summary"`
+	Config      Config       `json:"config"`
 }
 
 // GenerateAndTrack generates new alerts and updates the tracker

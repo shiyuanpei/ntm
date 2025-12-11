@@ -14,7 +14,7 @@ import (
 // It returns a close function to stop watching.
 func Watch(onChange func(*Config)) (func(), error) {
 	path := DefaultPath()
-	
+
 	// Create watcher with debounce to avoid multiple reloads on single save
 	w, err := watcher.New(func(events []watcher.Event) {
 		// We only care if the config file changed

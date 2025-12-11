@@ -10,11 +10,11 @@ import (
 
 // ImpactAnalysis represents a finding's impact in the dependency graph.
 type ImpactAnalysis struct {
-	Finding       Finding   `json:"finding"`
-	BeadID        string    `json:"bead_id,omitempty"`        // If created as a bead
+	Finding       Finding           `json:"finding"`
+	BeadID        string            `json:"bead_id,omitempty"`        // If created as a bead
 	GraphPosition *bv.GraphPosition `json:"graph_position,omitempty"` // Position in dependency graph
-	BlocksCount   int       `json:"blocks_count"`             // Number of tasks blocked by this
-	ImpactScore   float64   `json:"impact_score"`             // Combined severity + graph centrality
+	BlocksCount   int               `json:"blocks_count"`             // Number of tasks blocked by this
+	ImpactScore   float64           `json:"impact_score"`             // Combined severity + graph centrality
 }
 
 // Hotspot represents a file with multiple findings and high centrality.

@@ -7,11 +7,11 @@ import (
 
 // Tracker manages the lifecycle of alerts
 type Tracker struct {
-	mu           sync.RWMutex
-	active       map[string]*Alert // keyed by alert ID
-	resolved     []*Alert          // recently resolved alerts
-	config       Config
-	pruneAfter   time.Duration
+	mu         sync.RWMutex
+	active     map[string]*Alert // keyed by alert ID
+	resolved   []*Alert          // recently resolved alerts
+	config     Config
+	pruneAfter time.Duration
 }
 
 // NewTracker creates a new alert tracker

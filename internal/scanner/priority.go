@@ -10,12 +10,12 @@ import (
 
 // PrioritizedFinding represents a finding with smart priority.
 type PrioritizedFinding struct {
-	Finding         Finding  `json:"finding"`
-	BasePriority    int      `json:"base_priority"`    // From severity
-	AdjustedPriority int     `json:"adjusted_priority"` // After graph analysis
-	ImpactScore     float64  `json:"impact_score"`
-	Reasoning       []string `json:"reasoning"`
-	BeadID          string   `json:"bead_id,omitempty"`
+	Finding          Finding  `json:"finding"`
+	BasePriority     int      `json:"base_priority"`     // From severity
+	AdjustedPriority int      `json:"adjusted_priority"` // After graph analysis
+	ImpactScore      float64  `json:"impact_score"`
+	Reasoning        []string `json:"reasoning"`
+	BeadID           string   `json:"bead_id,omitempty"`
 }
 
 // PriorityReport contains prioritized findings with reasoning.

@@ -19,21 +19,21 @@ const (
 
 // QuotaInfo represents current quota state for an account
 type QuotaInfo struct {
-	Provider      Provider  `json:"provider"`
-	PaneIndex     int       `json:"pane_index,omitempty"`     // Pane index for context
-	AccountID     string    `json:"account_id,omitempty"`     // email or unique identifier
-	SessionUsage  float64   `json:"session_usage,omitempty"`  // 0-100 percentage
-	PeriodUsage   float64   `json:"period_usage,omitempty"`   // 0-100 (5-hour rolling window)
-	WeeklyUsage   float64   `json:"weekly_usage,omitempty"`   // 0-100 percentage
-	SonnetUsage   float64   `json:"sonnet_usage,omitempty"`   // 0-100 (Claude sonnet-specific)
-	ResetTime     time.Time `json:"reset_time,omitempty"`     // When the period resets
-	ResetString   string    `json:"reset_string,omitempty"`   // Raw reset string for display
-	IsLimited     bool      `json:"is_limited"`               // Currently rate limited
-	Organization  string    `json:"organization,omitempty"`   // Account organization
-	LoginMethod   string    `json:"login_method,omitempty"`   // OAuth, API key, etc.
-	FetchedAt     time.Time `json:"fetched_at"`
-	RawOutput     string    `json:"raw_output,omitempty"` // For debugging
-	Error         string    `json:"error,omitempty"`      // If fetch failed
+	Provider     Provider  `json:"provider"`
+	PaneIndex    int       `json:"pane_index,omitempty"`    // Pane index for context
+	AccountID    string    `json:"account_id,omitempty"`    // email or unique identifier
+	SessionUsage float64   `json:"session_usage,omitempty"` // 0-100 percentage
+	PeriodUsage  float64   `json:"period_usage,omitempty"`  // 0-100 (5-hour rolling window)
+	WeeklyUsage  float64   `json:"weekly_usage,omitempty"`  // 0-100 percentage
+	SonnetUsage  float64   `json:"sonnet_usage,omitempty"`  // 0-100 (Claude sonnet-specific)
+	ResetTime    time.Time `json:"reset_time,omitempty"`    // When the period resets
+	ResetString  string    `json:"reset_string,omitempty"`  // Raw reset string for display
+	IsLimited    bool      `json:"is_limited"`              // Currently rate limited
+	Organization string    `json:"organization,omitempty"`  // Account organization
+	LoginMethod  string    `json:"login_method,omitempty"`  // OAuth, API key, etc.
+	FetchedAt    time.Time `json:"fetched_at"`
+	RawOutput    string    `json:"raw_output,omitempty"` // For debugging
+	Error        string    `json:"error,omitempty"`      // If fetch failed
 }
 
 // IsStale returns true if the quota info is older than the given duration

@@ -7,17 +7,17 @@ import (
 
 // SearchHit represents a single search result from CASS
 type SearchHit struct {
-	SourcePath  string  `json:"source_path"`
-	LineNumber  *int    `json:"line_number,omitempty"`
-	Agent       string  `json:"agent"`
-	Workspace   string  `json:"workspace"`
-	Title       string  `json:"title"`
-	Score       float64 `json:"score"`
-	Snippet     string  `json:"snippet"`
-	CreatedAt   *int64  `json:"created_at,omitempty"`
-	MatchType   string  `json:"match_type"`
-	Content     string  `json:"content,omitempty"`
-	SessionID   string  `json:"session_id,omitempty"`
+	SourcePath string  `json:"source_path"`
+	LineNumber *int    `json:"line_number,omitempty"`
+	Agent      string  `json:"agent"`
+	Workspace  string  `json:"workspace"`
+	Title      string  `json:"title"`
+	Score      float64 `json:"score"`
+	Snippet    string  `json:"snippet"`
+	CreatedAt  *int64  `json:"created_at,omitempty"`
+	MatchType  string  `json:"match_type"`
+	Content    string  `json:"content,omitempty"`
+	SessionID  string  `json:"session_id,omitempty"`
 }
 
 // CreatedAtTime returns the CreatedAt timestamp as a time.Time
@@ -123,7 +123,7 @@ type StatusResponse struct {
 	Index             IndexInfo `json:"index"`
 	Database          DBInfo    `json:"database"`
 	Pending           Pending   `json:"pending"`
-	
+
 	// Flattened fields for backwards compatibility/simpler parsing if needed
 	IndexSize     int64     `json:"index_size,omitempty"`
 	Conversations int64     `json:"conversations,omitempty"`

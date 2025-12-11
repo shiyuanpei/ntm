@@ -41,12 +41,12 @@ func DefaultPreCommitConfig() PreCommitConfig {
 
 // PreCommitResult contains the result of running the pre-commit hook.
 type PreCommitResult struct {
-	Passed       bool              `json:"passed"`
-	StagedFiles  []string          `json:"staged_files"`
+	Passed       bool                `json:"passed"`
+	StagedFiles  []string            `json:"staged_files"`
 	ScanResult   *scanner.ScanResult `json:"scan_result,omitempty"`
-	BlockReason  string            `json:"block_reason,omitempty"`
-	Duration     time.Duration     `json:"duration"`
-	UBSAvailable bool              `json:"ubs_available"`
+	BlockReason  string              `json:"block_reason,omitempty"`
+	Duration     time.Duration       `json:"duration"`
+	UBSAvailable bool                `json:"ubs_available"`
 }
 
 // RunPreCommit executes the pre-commit hook logic.

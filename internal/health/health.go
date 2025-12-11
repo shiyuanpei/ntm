@@ -59,45 +59,45 @@ const (
 
 // Progress represents the detected work progress of an agent
 type Progress struct {
-	Stage           ProgressStage `json:"stage"`              // Current progress stage
-	Confidence      float64       `json:"confidence"`         // 0.0-1.0 confidence in detection
-	Indicators      []string      `json:"indicators"`         // What patterns were detected
-	TimeInStageSec  int           `json:"time_in_stage_sec"`  // Seconds in current stage
-	StageChangedAt  *time.Time    `json:"stage_changed_at"`   // When stage last changed
+	Stage          ProgressStage `json:"stage"`             // Current progress stage
+	Confidence     float64       `json:"confidence"`        // 0.0-1.0 confidence in detection
+	Indicators     []string      `json:"indicators"`        // What patterns were detected
+	TimeInStageSec int           `json:"time_in_stage_sec"` // Seconds in current stage
+	StageChangedAt *time.Time    `json:"stage_changed_at"`  // When stage last changed
 }
 
 // AgentHealth contains health information for a single agent
 type AgentHealth struct {
-	Pane          int           `json:"pane"`            // Pane index
-	PaneID        string        `json:"pane_id"`         // Full pane ID
-	AgentType     string        `json:"agent_type"`      // claude, codex, gemini, user, unknown
-	Status        Status        `json:"status"`          // Overall health status
-	ProcessStatus ProcessStatus `json:"process_status"`  // Process running state
-	Activity      ActivityLevel `json:"activity"`        // Activity level
-	LastActivity  *time.Time    `json:"last_activity"`   // Last activity timestamp
-	IdleSeconds   int           `json:"idle_seconds"`    // Seconds since last activity
-	Issues        []Issue       `json:"issues"`          // Detected issues
-	RateLimited   bool          `json:"rate_limited"`    // True if agent hit rate limit
-	WaitSeconds   int           `json:"wait_seconds"`    // Suggested wait time (if rate limited)
-	Progress      *Progress     `json:"progress"`        // Detected work progress
+	Pane          int           `json:"pane"`           // Pane index
+	PaneID        string        `json:"pane_id"`        // Full pane ID
+	AgentType     string        `json:"agent_type"`     // claude, codex, gemini, user, unknown
+	Status        Status        `json:"status"`         // Overall health status
+	ProcessStatus ProcessStatus `json:"process_status"` // Process running state
+	Activity      ActivityLevel `json:"activity"`       // Activity level
+	LastActivity  *time.Time    `json:"last_activity"`  // Last activity timestamp
+	IdleSeconds   int           `json:"idle_seconds"`   // Seconds since last activity
+	Issues        []Issue       `json:"issues"`         // Detected issues
+	RateLimited   bool          `json:"rate_limited"`   // True if agent hit rate limit
+	WaitSeconds   int           `json:"wait_seconds"`   // Suggested wait time (if rate limited)
+	Progress      *Progress     `json:"progress"`       // Detected work progress
 }
 
 // SessionHealth contains health information for an entire session
 type SessionHealth struct {
-	Session     string        `json:"session"`      // Session name
-	CheckedAt   time.Time     `json:"checked_at"`   // When check was performed
-	Agents      []AgentHealth `json:"agents"`       // Per-agent health
-	Summary     HealthSummary `json:"summary"`      // Aggregate summary
-	OverallStatus Status      `json:"overall_status"` // Worst status among all agents
+	Session       string        `json:"session"`        // Session name
+	CheckedAt     time.Time     `json:"checked_at"`     // When check was performed
+	Agents        []AgentHealth `json:"agents"`         // Per-agent health
+	Summary       HealthSummary `json:"summary"`        // Aggregate summary
+	OverallStatus Status        `json:"overall_status"` // Worst status among all agents
 }
 
 // HealthSummary provides aggregate statistics
 type HealthSummary struct {
-	Total     int `json:"total"`      // Total agents
-	Healthy   int `json:"healthy"`    // Agents with OK status
-	Warning   int `json:"warning"`    // Agents with warning status
-	Error     int `json:"error"`      // Agents with error status
-	Unknown   int `json:"unknown"`    // Agents with unknown status
+	Total   int `json:"total"`   // Total agents
+	Healthy int `json:"healthy"` // Agents with OK status
+	Warning int `json:"warning"` // Agents with warning status
+	Error   int `json:"error"`   // Agents with error status
+	Unknown int `json:"unknown"` // Agents with unknown status
 }
 
 // Error patterns for detection
@@ -141,10 +141,10 @@ func CheckSession(session string) (*SessionHealth, error) {
 	}
 
 	health := &SessionHealth{
-		Session:   session,
-		CheckedAt: time.Now().UTC(),
-		Agents:    make([]AgentHealth, 0, len(panesWithActivity)),
-		Summary:   HealthSummary{},
+		Session:       session,
+		CheckedAt:     time.Now().UTC(),
+		Agents:        make([]AgentHealth, 0, len(panesWithActivity)),
+		Summary:       HealthSummary{},
 		OverallStatus: StatusOK,
 	}
 
@@ -263,11 +263,11 @@ func detectErrors(output string) []Issue {
 
 // waitTimePatterns for extracting suggested wait times from rate limit messages
 var waitTimePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)try\s+again\s+in\s+(\d+)\s*s`),              // "try again in 60s"
-	regexp.MustCompile(`(?i)wait\s+(\d+)\s*(?:second|sec|s)`),          // "wait 60 seconds"
-	regexp.MustCompile(`(?i)retry\s+(?:after|in)\s+(\d+)\s*(?:s|sec)`), // "retry after 30s"
+	regexp.MustCompile(`(?i)try\s+again\s+in\s+(\d+)\s*s`),                       // "try again in 60s"
+	regexp.MustCompile(`(?i)wait\s+(\d+)\s*(?:second|sec|s)`),                    // "wait 60 seconds"
+	regexp.MustCompile(`(?i)retry\s+(?:after|in)\s+(\d+)\s*(?:s|sec)`),           // "retry after 30s"
 	regexp.MustCompile(`(?i)(\d+)\s*(?:second|sec)s?\s+(?:cooldown|delay|wait)`), // "60 second cooldown"
-	regexp.MustCompile(`(?i)rate.?limit.*?(\d+)\s*s`),                  // "rate limit exceeded, 60s"
+	regexp.MustCompile(`(?i)rate.?limit.*?(\d+)\s*s`),                            // "rate limit exceeded, 60s"
 }
 
 // parseWaitTime extracts the suggested wait time in seconds from rate limit messages
@@ -296,9 +296,9 @@ func hasRateLimitIssue(issues []Issue) bool {
 
 // progressPatterns define indicators for each progress stage
 var progressPatterns = map[ProgressStage][]struct {
-	Pattern    *regexp.Regexp
-	Indicator  string
-	Weight     float64 // How much this contributes to confidence
+	Pattern   *regexp.Regexp
+	Indicator string
+	Weight    float64 // How much this contributes to confidence
 }{
 	StageStarting: {
 		{regexp.MustCompile(`(?i)^(Let me|I'll|I will|Starting|Beginning)`), "planning_phrase", 0.3},

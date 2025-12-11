@@ -108,9 +108,9 @@ func (d Duration) Duration() time.Duration {
 
 // CommandHookDefaults contains default values for command hooks
 var CommandHookDefaults = struct {
-	Timeout     time.Duration
-	MaxTimeout  time.Duration
-	Enabled     bool
+	Timeout    time.Duration
+	MaxTimeout time.Duration
+	Enabled    bool
 }{
 	Timeout:    30 * time.Second,
 	MaxTimeout: 10 * time.Minute,

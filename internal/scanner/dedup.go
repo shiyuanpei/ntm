@@ -152,7 +152,7 @@ func parseBeadForDedup(title, desc string) (signature, file string) {
 
 // DedupStats returns statistics about the dedup index.
 type DedupStats struct {
-	TotalBeads int `json:"total_beads"`
+	TotalBeads  int `json:"total_beads"`
 	UniqueFiles int `json:"unique_files"`
 }
 
@@ -166,8 +166,8 @@ func (idx *DedupIndex) Stats() DedupStats {
 
 // FindDuplicatesInFindings identifies findings that already have beads.
 type DuplicateInfo struct {
-	Finding  Finding `json:"finding"`
-	BeadID   string  `json:"bead_id"`
+	Finding Finding `json:"finding"`
+	BeadID  string  `json:"bead_id"`
 }
 
 // CheckFindings returns which findings are duplicates of existing beads.

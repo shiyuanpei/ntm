@@ -15,10 +15,10 @@ const (
 type AutoCheckpointReason string
 
 const (
-	ReasonBroadcast  AutoCheckpointReason = "broadcast"   // Before sending to all agents
-	ReasonAddAgents  AutoCheckpointReason = "add_agents"  // Before adding many agents
-	ReasonSpawn      AutoCheckpointReason = "spawn"       // After spawning session
-	ReasonRiskyOp    AutoCheckpointReason = "risky_op"    // Before other risky operation
+	ReasonBroadcast AutoCheckpointReason = "broadcast"  // Before sending to all agents
+	ReasonAddAgents AutoCheckpointReason = "add_agents" // Before adding many agents
+	ReasonSpawn     AutoCheckpointReason = "spawn"      // After spawning session
+	ReasonRiskyOp   AutoCheckpointReason = "risky_op"   // Before other risky operation
 )
 
 // AutoCheckpointOptions configures auto-checkpoint creation

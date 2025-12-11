@@ -9,13 +9,13 @@ import (
 
 // Template represents a loaded prompt template with metadata.
 type Template struct {
-	Name        string            `yaml:"name"`
-	Description string            `yaml:"description"`
-	Variables   []VariableSpec    `yaml:"variables"`
-	Tags        []string          `yaml:"tags,omitempty"`
-	Body        string            `yaml:"-"` // The template body (not in frontmatter)
-	Source      TemplateSource    `yaml:"-"` // Where this template came from
-	SourcePath  string            `yaml:"-"` // File path if from file
+	Name        string         `yaml:"name"`
+	Description string         `yaml:"description"`
+	Variables   []VariableSpec `yaml:"variables"`
+	Tags        []string       `yaml:"tags,omitempty"`
+	Body        string         `yaml:"-"` // The template body (not in frontmatter)
+	Source      TemplateSource `yaml:"-"` // Where this template came from
+	SourcePath  string         `yaml:"-"` // File path if from file
 }
 
 // VariableSpec describes a template variable.

@@ -52,7 +52,7 @@ type Config struct {
 	CASS          CASSConfig        `toml:"cass"`     // CASS integration configuration
 	Accounts      AccountsConfig    `toml:"accounts"` // Multi-account management
 	Rotation      RotationConfig    `toml:"rotation"` // Account rotation configuration
-	
+
 	// Runtime-only fields (populated by project config merging)
 	ProjectDefaults map[string]int `toml:"-"`
 }
@@ -177,10 +177,10 @@ type RotationAccount struct {
 
 // RotationThresholds defines when to trigger account rotation
 type RotationThresholds struct {
-	WarningPercent       int     `toml:"warning_percent"`         // Show warning at this quota %
-	CriticalPercent      int     `toml:"critical_percent"`        // Consider limited at this %
-	RestartIfTokensAbove float64 `toml:"restart_if_tokens_above"` // Restart if tokens exceed this
-	RestartIfSessionHours int    `toml:"restart_if_session_hours"` // Restart after N hours
+	WarningPercent        int     `toml:"warning_percent"`          // Show warning at this quota %
+	CriticalPercent       int     `toml:"critical_percent"`         // Consider limited at this %
+	RestartIfTokensAbove  float64 `toml:"restart_if_tokens_above"`  // Restart if tokens exceed this
+	RestartIfSessionHours int     `toml:"restart_if_session_hours"` // Restart after N hours
 }
 
 // RotationDashboard defines dashboard display settings for rotation
@@ -252,10 +252,10 @@ type CASSConfig struct {
 	BinaryPath       string `toml:"binary_path"`        // Path to cass binary (auto-detect from PATH if empty)
 	Timeout          int    `toml:"timeout"`            // Timeout for CASS operations (seconds)
 
-	Context    CASSContextConfig    `toml:"context"`    // Context injection settings
-	Duplicates CASSDuplicateConfig  `toml:"duplicates"` // Duplicate detection settings
-	Search     CASSSearchConfig     `toml:"search"`     // Search defaults
-	TUI        CASSTUIConfig        `toml:"tui"`        // TUI settings
+	Context    CASSContextConfig   `toml:"context"`    // Context injection settings
+	Duplicates CASSDuplicateConfig `toml:"duplicates"` // Duplicate detection settings
+	Search     CASSSearchConfig    `toml:"search"`     // Search defaults
+	TUI        CASSTUIConfig       `toml:"tui"`        // TUI settings
 }
 
 // CASSContextConfig holds settings for automatic context injection

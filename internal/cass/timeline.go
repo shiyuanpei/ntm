@@ -8,10 +8,10 @@ import (
 
 // TimelineResponse represents response from timeline query
 type TimelineResponse struct {
-	Period    string          `json:"period"`
-	GroupBy   string          `json:"group_by"`
-	Entries   []TimelineEntry `json:"entries"`
-	Total     int             `json:"total"`
+	Period  string          `json:"period"`
+	GroupBy string          `json:"group_by"`
+	Entries []TimelineEntry `json:"entries"`
+	Total   int             `json:"total"`
 }
 
 // Timeline fetches agent activity timeline

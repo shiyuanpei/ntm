@@ -41,7 +41,7 @@ func LoadCommandPlugins(dir string) ([]CommandPlugin, error) {
 		}
 
 		// Check if executable (Mode & 0111)
-		// Note: On Windows this check might be insufficient or different, 
+		// Note: On Windows this check might be insufficient or different,
 		// but for Unix-like systems (target for tmux), this works.
 		if info.Mode()&0111 == 0 {
 			continue
@@ -57,7 +57,7 @@ func LoadCommandPlugins(dir string) ([]CommandPlugin, error) {
 			plugin.Description = desc
 			plugin.Usage = usage
 		}
-		
+
 		if plugin.Description == "" {
 			plugin.Description = fmt.Sprintf("Custom command: %s", plugin.Name)
 		}
@@ -78,31 +78,31 @@ func parseScriptHeader(path string) (string, string, error) {
 
 	scanner := bufio.NewScanner(f)
 	var description, usage string
-	
+
 	// Read first 10 lines
 	for i := 0; i < 10 && scanner.Scan(); i++ {
 		line := strings.TrimSpace(scanner.Text())
-		
+
 		// Handle shebang
 		if i == 0 && strings.HasPrefix(line, "#!") {
 			continue
 		}
-		
+
 		if !strings.HasPrefix(line, "#") {
 			// Stop at first non-comment line
 			break
 		}
-		
+
 		// Remove leading # and space
 		content := strings.TrimSpace(strings.TrimPrefix(line, "#"))
-		
+
 		if strings.HasPrefix(content, "Description:") {
 			description = strings.TrimSpace(strings.TrimPrefix(content, "Description:"))
 		} else if strings.HasPrefix(content, "Usage:") {
 			usage = strings.TrimSpace(strings.TrimPrefix(content, "Usage:"))
 		}
 	}
-	
+
 	return description, usage, nil
 }
 
@@ -112,12 +112,12 @@ func (p *CommandPlugin) Execute(args []string, env map[string]string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	
+
 	currentEnv := os.Environ()
 	for k, v := range env {
 		currentEnv = append(currentEnv, fmt.Sprintf("%s=%s", k, v))
 	}
 	cmd.Env = currentEnv
-	
+
 	return cmd.Run()
 }

@@ -72,7 +72,7 @@ func WithExecutor(e Executor) ClientOption {
 func NewClient(opts ...ClientOption) *Client {
 	// Default to "cass" in PATH
 	binary := "cass"
-	
+
 	c := &Client{
 		executor: &DefaultExecutor{BinaryPath: binary},
 		timeout:  30 * time.Second,
