@@ -17,7 +17,7 @@ import (
 //   session__cc_1
 //   session__cc_1[frontend]
 //   session__cc_1_opus[backend,api]
-var paneNameRegex = regexp.MustCompile(`^.+__(\w+)_\d+(?:_([A-Za-z0-9._/@:+-]+))?(?:\[([^\]]*)\])?$`)
+var paneNameRegex = regexp.MustCompile(`^.+__(\w+)_\d+(?:_([A-Za-z0-9._/@:+-]+))?(?:[^\]]*)?$`)
 
 // AgentType represents the type of AI agent
 type AgentType string
@@ -267,7 +267,7 @@ func (c *Client) GetPanes(session string) ([]Pane, error) {
 			Active:  active,
 		}
 
-		// Parse pane title using regex to extract type and variant
+		// Parse pane title using regex to extract type, variant, and tags
 		// Format: {session}__{type}_{index} or {session}__{type}_{index}_{variant}
 		pane.Type, pane.Variant, pane.Tags = parseAgentFromTitle(pane.Title)
 
@@ -853,4 +853,22 @@ func (c *Client) GetPaneLastActivityAge(paneID string) (time.Duration, error) {
 // GetPaneLastActivityAge returns how long ago the pane was last active (default client)
 func GetPaneLastActivityAge(paneID string) (time.Duration, error) {
 	return DefaultClient.GetPaneLastActivityAge(paneID)
+}
+
+// IsAttached checks if a session is currently attached
+func (c *Client) IsAttached(session string) bool {
+	output, err := c.Run("list-sessions", "-F", "#{session_name}:#{session_attached}", "-f", fmt.Sprintf("#{==:#{session_name},%s}", session))
+	if err != nil || output == "" {
+		return false
+	}
+	parts := strings.Split(output, ":")
+	if len(parts) < 2 {
+		return false
+	}
+	return parts[1] == "1"
+}
+
+// IsAttached checks if a session is currently attached (default client)
+func IsAttached(session string) bool {
+	return DefaultClient.IsAttached(session)
 }

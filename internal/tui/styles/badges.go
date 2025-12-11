@@ -29,6 +29,29 @@ type BadgeOptions struct {
 	ShowIcon bool
 }
 
+// MiniBarPalette controls the colors and glyphs for MiniBar rendering.
+type MiniBarPalette struct {
+	Low        lipgloss.Color // value < 0.60
+	Mid        lipgloss.Color // 0.60–0.79
+	High       lipgloss.Color // >= 0.80
+	Empty      lipgloss.Color
+	FilledChar string
+	EmptyChar  string
+}
+
+// DefaultMiniBarPalette returns a sensible palette derived from the current theme.
+func DefaultMiniBarPalette() MiniBarPalette {
+	t := theme.Current()
+	return MiniBarPalette{
+		Low:        t.Green,
+		Mid:        t.Yellow,
+		High:       t.Red,
+		Empty:      t.Surface1,
+		FilledChar: "█",
+		EmptyChar:  "░",
+	}
+}
+
 // DefaultBadgeOptions returns sensible defaults for badge rendering
 func DefaultBadgeOptions() BadgeOptions {
 	return BadgeOptions{
@@ -215,8 +238,50 @@ func StatusBadgeIcon(status string) string {
 	return lipgloss.NewStyle().
 		Background(bgColor).
 		Foreground(t.Base).
-		Padding(0, 1).
+		Bold(true).
+		Width(3).
+		Align(lipgloss.Center).
 		Render(icon)
+}
+
+// RankBadge renders a compact numeric rank badge (1-based) with medal-like colors.
+// 1 → gold, 2 → silver, 3 → bronze, others → neutral surface.
+// Fixed width to avoid layout jitter in dense tables.
+func RankBadge(rank int, opts ...BadgeOptions) string {
+	t := theme.Current()
+	opt := DefaultBadgeOptions()
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	if rank <= 0 {
+		return ""
+	}
+
+	var bg lipgloss.Color
+	switch rank {
+	case 1:
+		bg = t.Yellow
+	case 2:
+		bg = t.Surface2
+	case 3:
+		bg = t.Maroon
+	default:
+		bg = t.Surface1
+	}
+
+	label := fmt.Sprintf("#%d", rank)
+	content := label
+	if opt.ShowIcon {
+		content = "★ " + label
+	}
+
+	return lipgloss.NewStyle().
+		Background(bg).
+		Foreground(t.Base).
+		Bold(opt.Bold).
+		Width(5).
+		Align(lipgloss.Center).
+		Render(content)
 }
 
 // PriorityBadge renders a priority indicator badge (P0-P4)
@@ -355,6 +420,47 @@ func IssueTypeBadge(issueType string, opts ...BadgeOptions) string {
 	}
 
 	return renderBadge(text, bgColor, t.Base, opt)
+}
+
+// MiniBar renders a compact, fixed-width bar (typically 4–8 chars) for inline metrics.
+// Value is clamped to [0,1]. Palette can override default colors and glyphs.
+func MiniBar(value float64, width int, palettes ...MiniBarPalette) string {
+	if width < 1 {
+		return ""
+	}
+	if value < 0 {
+		value = 0
+	}
+	if value > 1 {
+		value = 1
+	}
+
+	palette := DefaultMiniBarPalette()
+	if len(palettes) > 0 {
+		palette = palettes[0]
+	}
+
+	filled := int(value * float64(width))
+	if filled > width {
+		filled = width
+	}
+	empty := width - filled
+
+	var barColor lipgloss.Color
+	switch {
+	case value >= 0.80:
+		barColor = palette.High
+	case value >= 0.60:
+		barColor = palette.Mid
+	default:
+		barColor = palette.Low
+	}
+
+	filledStyle := lipgloss.NewStyle().Foreground(barColor)
+	emptyStyle := lipgloss.NewStyle().Foreground(palette.Empty)
+
+	return filledStyle.Render(strings.Repeat(palette.FilledChar, filled)) +
+		emptyStyle.Render(strings.Repeat(palette.EmptyChar, empty))
 }
 
 // renderBadge is the internal badge rendering function

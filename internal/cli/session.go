@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/Dicklesworthstone/ntm/internal/agentmail"
@@ -11,8 +14,10 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/status"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
 	"github.com/Dicklesworthstone/ntm/internal/tui/icons"
+	"github.com/Dicklesworthstone/ntm/internal/tui/layout"
 	"github.com/Dicklesworthstone/ntm/internal/tui/theme"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 func newAttachCmd() *cobra.Command {
@@ -171,17 +176,71 @@ func runList(tags []string) error {
 		return nil
 	}
 
-	for _, s := range sessions {
-		attached := ""
-		if s.Attached {
-			attached = " (attached)"
+	// Check terminal width for responsive output
+	width, _, _ := term.GetSize(int(os.Stdout.Fd()))
+	isWide := width >= 100
+
+	if isWide {
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "SESSION\tWINDOWS\tSTATE\tAGENTS")
+
+		for _, s := range sessions {
+			attached := "detached"
+			if s.Attached {
+				attached = "attached"
+			}
+
+			// Fetch agents summary
+			agents := "-"
+			panes, err := tmux.GetPanes(s.Name)
+			if err == nil {
+				var cc, cod, gmi, user int
+				for _, p := range panes {
+					switch p.Type {
+					case tmux.AgentClaude:
+						cc++
+					case tmux.AgentCodex:
+						cod++
+					case tmux.AgentGemini:
+						gmi++
+					default:
+						user++
+					}
+				}
+				var parts []string
+				if cc > 0 {
+					parts = append(parts, fmt.Sprintf("%d CC", cc))
+				}
+				if cod > 0 {
+					parts = append(parts, fmt.Sprintf("%d COD", cod))
+				}
+				if gmi > 0 {
+					parts = append(parts, fmt.Sprintf("%d GMI", gmi))
+				}
+				if user > 0 {
+					parts = append(parts, fmt.Sprintf("%d Usr", user))
+				}
+				if len(parts) > 0 {
+					agents = strings.Join(parts, ", ")
+				}
+			}
+
+			fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", s.Name, s.Windows, attached, agents)
 		}
-		fmt.Printf("  %s: %d windows%s\n", s.Name, s.Windows, attached)
+		w.Flush()
+	} else {
+		// Standard output for narrow screens
+		for _, s := range sessions {
+			attached := ""
+			if s.Attached {
+				attached = " (attached)"
+			}
+			fmt.Printf("  %s: %d windows%s\n", s.Name, s.Windows, attached)
+		}
 	}
 
 	return nil
 }
-
 func newStatusCmd() *cobra.Command {
 	var tags []string
 	cmd := &cobra.Command{
@@ -247,50 +306,23 @@ func runStatus(w io.Writer, session string, tags []string) error {
 
 	dir := cfg.GetProjectDir(session)
 
+	// Calculate counts
+	var ccCount, codCount, gmiCount, otherCount int
+	for _, p := range panes {
+		switch p.Type {
+		case tmux.AgentClaude:
+			ccCount++
+		case tmux.AgentCodex:
+			codCount++
+		case tmux.AgentGemini:
+			gmiCount++
+		default:
+			otherCount++
+		}
+	}
+
 	// JSON output mode - build structured response
 	if IsJSONOutput() {
-		detector := status.NewDetector()
-		paneResponses := make([]output.PaneResponse, len(panes))
-		agentCounts := output.AgentCountsResponse{}
-
-		for i, p := range panes {
-			// Detect agent status
-			agentStatus, _ := detector.Detect(p.ID)
-			statusStr := "unknown"
-			switch agentStatus.State {
-			case status.StateIdle:
-				statusStr = "idle"
-			case status.StateWorking:
-				statusStr = "working"
-			case status.StateError:
-				statusStr = "error"
-			}
-
-			paneResponses[i] = output.PaneResponse{
-				Index:   p.Index,
-				Title:   p.Title,
-				Type:    agentTypeToString(p.Type),
-				Variant: p.Variant,
-				Active:  p.Active,
-				Width:   p.Width,
-				Height:  p.Height,
-				Command: p.Command,
-				Status:  statusStr,
-			}
-
-			switch p.Type {
-			case tmux.AgentClaude:
-				agentCounts.Claude++
-			case tmux.AgentCodex:
-				agentCounts.Codex++
-			case tmux.AgentGemini:
-				agentCounts.Gemini++
-			default:
-				agentCounts.User++
-			}
-		}
-		agentCounts.Total = agentCounts.Claude + agentCounts.Codex + agentCounts.Gemini
-
 		// Check if session is attached
 		attached := false
 		sessions, _ := tmux.ListSessions()
@@ -301,38 +333,64 @@ func runStatus(w io.Writer, session string, tags []string) error {
 			}
 		}
 
-		// Fetch Agent Mail status (graceful degradation if unavailable)
-		agentMailStatus := fetchAgentMailStatus(dir)
-
-		return output.PrintJSON(output.StatusResponse{
+		resp := output.StatusResponse{
 			TimestampedResponse: output.NewTimestamped(),
 			Session:             session,
 			Exists:              true,
 			Attached:            attached,
 			WorkingDirectory:    dir,
-			Panes:               paneResponses,
-			AgentCounts:         agentCounts,
-			AgentMail:           agentMailStatus,
-		})
+			AgentCounts: output.AgentCountsResponse{
+				Claude: ccCount,
+				Codex:  codCount,
+				Gemini: gmiCount,
+				User:   otherCount,
+				Total:  len(panes),
+			},
+		}
+
+		// Add panes
+		for _, p := range panes {
+			resp.Panes = append(resp.Panes, output.PaneResponse{
+				Index:   p.Index,
+				Title:   p.Title,
+				Type:    agentTypeToString(p.Type),
+				Variant: p.Variant,
+				Active:  p.Active,
+				Width:   p.Width,
+				Height:  p.Height,
+				Command: p.Command,
+			})
+		}
+
+		return output.PrintJSON(resp)
 	}
 
-	// Use theme colors
+	// Text output
 	t := theme.Current()
-	ic := icons.Current()
+	
+	// ANSI helpers
+	const reset = "\033[0m"
+	const bold = "\033[1m"
 
-	// Convert theme colors to ANSI
+	// Colors
 	primary := colorize(t.Primary)
-	claude := colorize(t.Claude)
-	codex := colorize(t.Codex)
-	gemini := colorize(t.Gemini)
-	success := colorize(t.Success)
+	surface := colorize(t.Surface0)
 	text := colorize(t.Text)
 	subtext := colorize(t.Subtext)
 	overlay := colorize(t.Overlay)
-	surface := colorize(t.Surface2)
+	success := colorize(t.Success)
+	claude := colorize(t.Claude)
+	codex := colorize(t.Codex)
+	gemini := colorize(t.Gemini)
+	
+	ic := icons.Current()
 
-	const reset = "\033[0m"
-	const bold = "\033[1m"
+	// Detect terminal width and layout tier
+	width, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		width = 80 // Default fallback
+	}
+	tier := layout.TierForWidth(width)
 
 	fmt.Fprintln(w)
 
@@ -350,8 +408,6 @@ func runStatus(w io.Writer, session string, tags []string) error {
 	fmt.Fprintf(w, "  %sPanes%s\n", bold, reset)
 	fmt.Fprintf(w, "  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
 
-	ccCount, codCount, gmiCount, otherCount := 0, 0, 0, 0
-
 	// Create status detector for agent state detection
 	detector := status.NewDetector()
 
@@ -364,19 +420,15 @@ func runStatus(w io.Writer, session string, tags []string) error {
 		case tmux.AgentClaude:
 			typeColor = claude
 			typeIcon = ic.Claude
-			ccCount++
 		case tmux.AgentCodex:
 			typeColor = codex
 			typeIcon = ic.Codex
-			codCount++
 		case tmux.AgentGemini:
 			typeColor = gemini
 			typeIcon = ic.Gemini
-			gmiCount++
 		default:
 			typeColor = success
 			typeIcon = ic.User
-			otherCount++
 		}
 
 		// Number for quick selection (1-9)
@@ -410,13 +462,59 @@ func runStatus(w io.Writer, session string, tags []string) error {
 			stateText = "unknown"
 		}
 
+		// Calculate columns based on tier
+		var variantPart, cmdPart string
+		var titleWidth int
+		var variantWidth int
+		var cmdWidth int
+
+		switch {
+		case tier >= layout.TierUltra:
+			titleWidth = 35
+			variantWidth = 15
+			cmdWidth = 40
+		case tier >= layout.TierWide:
+			titleWidth = 25
+			variantWidth = 10
+			cmdWidth = 25
+		case tier >= layout.TierSplit:
+			titleWidth = 20
+			variantWidth = 0
+			cmdWidth = 15
+		default: // Narrow
+			titleWidth = 15
+			variantWidth = 0
+			cmdWidth = 10
+		}
+
+		title := layout.TruncateRunes(p.Title, titleWidth, "…")
+		titlePart := fmt.Sprintf("%*s", titleWidth, title)
+
+		if variantWidth > 0 {
+			variant := ""
+			if p.Variant != "" {
+				variant = layout.TruncateRunes(p.Variant, variantWidth, "…")
+			}
+			variantPart = fmt.Sprintf(" %s%-*s%s", subtext, variantWidth, variant, reset)
+		}
+
+		if cmdWidth > 0 {
+			cmd := ""
+			if p.Command != "" {
+				cmd = layout.TruncateRunes(p.Command, cmdWidth, "…")
+			}
+			cmdPart = fmt.Sprintf(" %s%-*s%s", subtext, cmdWidth, cmd, reset)
+		}
+
 		// Pane info with status
-		fmt.Fprintf(w, "  %s%s %s%s %-18s%s %s│%s %s%-10s%s %s│%s %s%-8s%s\n",
+		fmt.Fprintf(w, "  %s%s %s%s %s%s%s%s %s│%s %s%-8s%s\n",
 			num,
 			stateIcon,
-			typeColor, typeIcon, p.Title, reset,
-			surface, reset,
-			subtext, p.Command, reset,
+			typeColor, typeIcon,
+			titlePart,
+			reset,
+			variantPart,
+			cmdPart,
 			surface, reset,
 			stateColor, stateText, reset)
 	}

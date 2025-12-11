@@ -261,7 +261,7 @@ type SessionInfo struct {
 
 // Agent represents an AI agent in a session
 type Agent struct {
-	Type     string `json:"type"` // claude, codex, gemini
+	Type     string `json:"type"`              // claude, codex, gemini
 	Variant  string `json:"variant,omitempty"` // Model alias or persona name
 	Pane     string `json:"pane"`
 	Window   int    `json:"window"`
@@ -1742,6 +1742,49 @@ type GraphOutput struct {
 	Insights    *bv.InsightsResponse `json:"insights,omitempty"`
 	Priority    *bv.PriorityResponse `json:"priority,omitempty"`
 	Health      *bv.HealthSummary    `json:"health,omitempty"`
+	Correlation *GraphCorrelation    `json:"correlation,omitempty"`
+}
+
+// GraphCorrelation provides a best-effort cross-tool view of agents, beads, and mail threads.
+type GraphCorrelation struct {
+	GeneratedAt   time.Time                  `json:"generated_at"`
+	Agents        []GraphAgentAssignment     `json:"agents,omitempty"`
+	BeadGraph     map[string]GraphBeadNode   `json:"bead_graph,omitempty"`
+	MailThreads   map[string]GraphMailThread `json:"mail_threads,omitempty"`
+	OrphanBeads   []string                   `json:"orphan_beads,omitempty"`
+	OrphanThreads []string                   `json:"orphan_threads,omitempty"`
+	Errors        []string                   `json:"errors,omitempty"`
+}
+
+// GraphAgentAssignment captures bead/thread membership for an agent.
+type GraphAgentAssignment struct {
+	Agent        string   `json:"agent"`
+	Program      string   `json:"program,omitempty"`
+	Model        string   `json:"model,omitempty"`
+	Beads        []string `json:"beads,omitempty"`
+	Threads      []string `json:"threads,omitempty"`
+	Pane         string   `json:"pane,omitempty"`
+	Session      string   `json:"session,omitempty"`
+	Detected     string   `json:"detected_type,omitempty"`
+	DetectedFrom string   `json:"detected_from,omitempty"`
+}
+
+// GraphBeadNode summarizes bead status and relationships.
+type GraphBeadNode struct {
+	Status     string   `json:"status"`
+	AssignedTo *string  `json:"assigned_to,omitempty"`
+	BlockedBy  []string `json:"blocked_by,omitempty"`
+	Blocking   []string `json:"blocking,omitempty"`
+	Title      string   `json:"title,omitempty"`
+}
+
+// GraphMailThread summarizes a mail thread for correlation.
+type GraphMailThread struct {
+	ThreadID     string    `json:"thread_id"`
+	Subject      string    `json:"subject"`
+	Participants []string  `json:"participants,omitempty"`
+	LastActivity time.Time `json:"last_activity"`
+	UnreadHint   int       `json:"unread_hint,omitempty"`
 }
 
 // PrintGraph outputs bv graph insights for AI consumption
@@ -1753,38 +1796,218 @@ func PrintGraph() error {
 
 	if !bv.IsInstalled() {
 		output.Error = "bv (beads_viewer) is not installed"
-		return encodeJSON(output)
-	}
-
-	// Get insights (bottlenecks, keystones, etc.)
-	insights, err := bv.GetInsights()
-	if err != nil {
-		output.Error = fmt.Sprintf("failed to get insights: %v", err)
+		// Even if bv is missing, still attempt correlation to provide partial data.
 	} else {
-		output.Insights = insights
-	}
-
-	// Get priority recommendations
-	priority, err := bv.GetPriority()
-	if err != nil {
-		if output.Error == "" {
-			output.Error = fmt.Sprintf("failed to get priority: %v", err)
+		// Get insights (bottlenecks, keystones, etc.)
+		insights, err := bv.GetInsights()
+		if err != nil {
+			output.Error = fmt.Sprintf("failed to get insights: %v", err)
+		} else {
+			output.Insights = insights
 		}
-	} else {
-		output.Priority = priority
+
+		// Get priority recommendations
+		priority, err := bv.GetPriority()
+		if err != nil {
+			if output.Error == "" {
+				output.Error = fmt.Sprintf("failed to get priority: %v", err)
+			}
+		} else {
+			output.Priority = priority
+		}
+
+		// Get health summary
+		health, err := bv.GetHealthSummary()
+		if err != nil {
+			if output.Error == "" {
+				output.Error = fmt.Sprintf("failed to get health: %v", err)
+			}
+		} else {
+			output.Health = health
+		}
 	}
 
-	// Get health summary
-	health, err := bv.GetHealthSummary()
-	if err != nil {
-		if output.Error == "" {
-			output.Error = fmt.Sprintf("failed to get health: %v", err)
-		}
-	} else {
-		output.Health = health
-	}
+	// Build correlation graph (best-effort, independent of bv availability)
+	output.Correlation = buildCorrelationGraph()
 
 	return encodeJSON(output)
+}
+
+// buildCorrelationGraph assembles a best-effort correlation map across agents, beads, and mail.
+func buildCorrelationGraph() *GraphCorrelation {
+	now := time.Now().UTC()
+	corr := &GraphCorrelation{
+		GeneratedAt: now,
+		BeadGraph:   make(map[string]GraphBeadNode),
+		MailThreads: make(map[string]GraphMailThread),
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		corr.Errors = append(corr.Errors, fmt.Sprintf("working directory unavailable: %v", err))
+		return corr
+	}
+
+	// Collect Agent Mail agents (if available)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	agentMailClient := agentmail.NewClient(agentmail.WithProjectKey(wd))
+	var agents []agentmail.Agent
+	if agentMailClient.IsAvailable() {
+		if _, err := agentMailClient.EnsureProject(ctx, wd); err != nil {
+			corr.Errors = append(corr.Errors, fmt.Sprintf("agent mail ensure_project: %v", err))
+		} else if list, err := agentMailClient.ListProjectAgents(ctx, wd); err != nil {
+			corr.Errors = append(corr.Errors, fmt.Sprintf("agent mail list_agents: %v", err))
+		} else {
+			agents = list
+		}
+	} else {
+		corr.Errors = append(corr.Errors, "agent mail not available")
+	}
+
+	agentIndex := make(map[string]int)
+	for _, a := range agents {
+		corr.Agents = append(corr.Agents, GraphAgentAssignment{
+			Agent:   a.Name,
+			Program: a.Program,
+			Model:   a.Model,
+		})
+		agentIndex[a.Name] = len(corr.Agents) - 1
+	}
+
+	// Add bead assignments from bv summary (if present)
+	if beads := bv.GetBeadsSummary(BeadLimit); beads != nil && beads.Available {
+		for _, inProg := range beads.InProgressList {
+			node := GraphBeadNode{
+				Status: "in_progress",
+				Title:  inProg.Title,
+			}
+			if inProg.Assignee != "" {
+				assign := inProg.Assignee
+				node.AssignedTo = &assign
+				if idx, ok := agentIndex[assign]; ok {
+					corr.Agents[idx].Beads = append(corr.Agents[idx].Beads, inProg.ID)
+				} else {
+					corr.OrphanBeads = append(corr.OrphanBeads, inProg.ID)
+				}
+			} else {
+				corr.OrphanBeads = append(corr.OrphanBeads, inProg.ID)
+			}
+			corr.BeadGraph[inProg.ID] = node
+		}
+
+		for _, ready := range beads.ReadyPreview {
+			status := "ready"
+			node := GraphBeadNode{
+				Status: status,
+				Title:  ready.Title,
+			}
+			corr.BeadGraph[ready.ID] = node
+		}
+	} else if beads != nil && !beads.Available && beads.Reason != "" {
+		corr.Errors = append(corr.Errors, fmt.Sprintf("beads unavailable: %s", beads.Reason))
+	}
+
+	// Attempt to gather mail threads (limited for performance)
+	if len(agents) > 0 && agentMailClient.IsAvailable() {
+		msgs, err := agentMailClient.SearchMessages(ctx, agentmail.SearchOptions{
+			ProjectKey: wd,
+			Query:      "*",
+			Limit:      25,
+		})
+		if err != nil {
+			corr.Errors = append(corr.Errors, fmt.Sprintf("agent mail search_messages: %v", err))
+		} else {
+			threadOrder := make([]string, 0)
+			for _, msg := range msgs {
+				if msg.ThreadID == nil {
+					continue
+				}
+				tid := *msg.ThreadID
+				if _, ok := corr.MailThreads[tid]; !ok {
+					threadOrder = append(threadOrder, tid)
+					corr.MailThreads[tid] = GraphMailThread{
+						ThreadID:     tid,
+						Subject:      msg.Subject,
+						LastActivity: msg.CreatedTS,
+					}
+				}
+			}
+
+			// Summarize a limited number of threads for participants
+			maxSummaries := 10
+			for i, tid := range threadOrder {
+				if i >= maxSummaries {
+					break
+				}
+				summary, err := agentMailClient.SummarizeThread(ctx, wd, tid, false)
+				if err != nil {
+					corr.Errors = append(corr.Errors, fmt.Sprintf("summarize_thread %s: %v", tid, err))
+					continue
+				}
+				thread := corr.MailThreads[tid]
+				thread.Participants = summary.Participants
+				corr.MailThreads[tid] = thread
+
+				// Map thread participation to agents
+				for _, participant := range summary.Participants {
+					if idx, ok := agentIndex[participant]; ok {
+						corr.Agents[idx].Threads = appendUnique(corr.Agents[idx].Threads, tid)
+					}
+				}
+			}
+
+			// Identify orphan threads (participants not known)
+			for tid, thread := range corr.MailThreads {
+				if len(thread.Participants) == 0 {
+					corr.OrphanThreads = append(corr.OrphanThreads, tid)
+				} else {
+					known := false
+					for _, p := range thread.Participants {
+						if _, ok := agentIndex[p]; ok {
+							known = true
+							break
+						}
+					}
+					if !known {
+						corr.OrphanThreads = append(corr.OrphanThreads, tid)
+					}
+				}
+			}
+		}
+	}
+
+	// Append basic tmux pane hints for agent assignments (best-effort)
+	if sessions, err := tmux.ListSessions(); err == nil {
+		for _, sess := range sessions {
+			panes, err := tmux.GetPanes(sess.Name)
+			if err != nil {
+				continue
+			}
+			for _, pane := range panes {
+				// Try to match by pane title == agent name (common pattern)
+				if idx, ok := agentIndex[pane.Title]; ok {
+					corr.Agents[idx].Pane = fmt.Sprintf("%d.%d", 0, pane.Index)
+					corr.Agents[idx].Session = sess.Name
+					corr.Agents[idx].Detected = string(pane.Type)
+					corr.Agents[idx].DetectedFrom = "pane_title"
+				}
+			}
+		}
+	}
+
+	return corr
+}
+
+// appendUnique adds a value if absent.
+func appendUnique(list []string, value string) []string {
+	for _, v := range list {
+		if v == value {
+			return list
+		}
+	}
+	return append(list, value)
 }
 
 // AlertsOutput provides machine-readable alert information
