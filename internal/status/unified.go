@@ -157,8 +157,12 @@ func (d *UnifiedDetector) DetectAll(session string) ([]AgentStatus, error) {
 			statuses = append(statuses, status)
 			continue
 		}
+		// Heuristic: for user panes with empty output, treat as idle
+		// Note: We removed the strings.Contains(output, "$") check because it was too broad -
+		// it would match any $ in the output (like $i in shell scripts), not just prompts.
+		// The DetectIdleFromOutput function already handles prompt detection properly.
 		if status.AgentType == "" || status.AgentType == "user" {
-			if strings.TrimSpace(output) == "" || strings.Contains(output, "$") {
+			if strings.TrimSpace(output) == "" {
 				status.State = StateIdle
 				statuses = append(statuses, status)
 				continue
