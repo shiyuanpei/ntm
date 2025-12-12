@@ -191,8 +191,9 @@ func runQuick(name string, opts quickOptions) error {
 	}
 
 	fmt.Printf("\n%s🎉%s Project ready at: %s\n", colorize(t.Primary), colorize(t.Text), projectDir)
-	fmt.Printf("\n  cd %s\n", projectDir)
-	fmt.Printf("  ntm spawn %s --cc=2\n\n", name)
+
+	// Print "What's next?" suggestions
+	output.SuccessFooter(output.QuickSuggestions(projectDir, name)...)
 
 	return nil
 }

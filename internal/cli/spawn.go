@@ -650,6 +650,9 @@ func spawnSessionLogic(opts SpawnOptions) error {
 
 	fmt.Printf("✓ Launched %d agent(s)\n", totalAgents)
 
+	// Print "What's next?" suggestions
+	output.SuccessFooter(output.SpawnSuggestions(opts.Session)...)
+
 	// Emit session_create event
 	events.EmitSessionCreate(opts.Session, opts.CCCount, opts.CodCount, opts.GmiCount, dir, opts.RecipeName)
 

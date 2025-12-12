@@ -482,3 +482,117 @@ func TestNewErrorFull(t *testing.T) {
 		t.Errorf("Hint = %q", resp.Hint)
 	}
 }
+
+func TestSpawnSuggestions(t *testing.T) {
+	suggestions := SpawnSuggestions("myproject")
+	if len(suggestions) != 3 {
+		t.Fatalf("SpawnSuggestions() returned %d suggestions, want 3", len(suggestions))
+	}
+	if !strings.Contains(suggestions[0].Command, "attach") {
+		t.Errorf("First suggestion should be attach, got %q", suggestions[0].Command)
+	}
+	if !strings.Contains(suggestions[1].Command, "dashboard") {
+		t.Errorf("Second suggestion should be dashboard, got %q", suggestions[1].Command)
+	}
+}
+
+func TestQuickSuggestions(t *testing.T) {
+	suggestions := QuickSuggestions("/home/user/project", "myproject")
+	if len(suggestions) != 2 {
+		t.Fatalf("QuickSuggestions() returned %d suggestions, want 2", len(suggestions))
+	}
+	if !strings.Contains(suggestions[0].Command, "cd") {
+		t.Errorf("First suggestion should be cd, got %q", suggestions[0].Command)
+	}
+}
+
+func TestFormatSuggestions(t *testing.T) {
+	suggestions := []Suggestion{
+		{Command: "ntm attach test", Description: "Connect to session"},
+		{Command: "ntm dashboard test", Description: "Live status"},
+	}
+	result := FormatSuggestions(suggestions)
+	if !strings.Contains(result, "What's next?") {
+		t.Error("FormatSuggestions should include 'What's next?' header")
+	}
+	if !strings.Contains(result, "ntm attach test") {
+		t.Error("FormatSuggestions should include commands")
+	}
+	if !strings.Contains(result, "Connect to session") {
+		t.Error("FormatSuggestions should include descriptions")
+	}
+}
+
+func TestFormatSuggestionsEmpty(t *testing.T) {
+	result := FormatSuggestions(nil)
+	if result != "" {
+		t.Errorf("FormatSuggestions(nil) = %q, want empty string", result)
+	}
+}
+
+func TestNewSuccessWithSuggestions(t *testing.T) {
+	suggestions := []Suggestion{
+		{Command: "ntm status", Description: "Check status"},
+	}
+	resp := NewSuccessWithSuggestions("Done!", suggestions)
+	if !resp.Success {
+		t.Error("Success should be true")
+	}
+	if resp.Message != "Done!" {
+		t.Errorf("Message = %q, want 'Done!'", resp.Message)
+	}
+	if len(resp.Suggestions) != 1 {
+		t.Fatalf("Suggestions count = %d, want 1", len(resp.Suggestions))
+	}
+	if resp.Suggestions[0].Command != "ntm status" {
+		t.Errorf("Suggestion command = %q", resp.Suggestions[0].Command)
+	}
+}
+
+func TestPrintSuccessFooterToBuffer(t *testing.T) {
+	var buf bytes.Buffer
+	suggestions := []Suggestion{
+		{Command: "ntm test", Description: "Test command"},
+	}
+	// Buffer is not a terminal, so this should skip output
+	PrintSuccessFooter(&buf, suggestions...)
+	// Since buf is not a *os.File terminal, it should still output
+	// Actually the check is for *os.File, so buffer will get output
+	output := buf.String()
+	if !strings.Contains(output, "What's next?") {
+		t.Errorf("Expected 'What's next?' in output, got: %q", output)
+	}
+}
+
+func TestSuccessCheckToBuffer(t *testing.T) {
+	var buf bytes.Buffer
+	PrintSuccessCheck(&buf, "Task completed")
+	output := buf.String()
+	if !strings.Contains(output, "✓") {
+		t.Error("SuccessCheck should include checkmark")
+	}
+	if !strings.Contains(output, "Task completed") {
+		t.Error("SuccessCheck should include message")
+	}
+}
+
+func TestAddSuggestions(t *testing.T) {
+	suggestions := AddSuggestions("proj", 3)
+	if len(suggestions) != 3 {
+		t.Fatalf("AddSuggestions() returned %d suggestions, want 3", len(suggestions))
+	}
+}
+
+func TestSendSuggestions(t *testing.T) {
+	suggestions := SendSuggestions("proj")
+	if len(suggestions) != 2 {
+		t.Fatalf("SendSuggestions() returned %d suggestions, want 2", len(suggestions))
+	}
+}
+
+func TestKillSuggestions(t *testing.T) {
+	suggestions := KillSuggestions()
+	if len(suggestions) != 2 {
+		t.Fatalf("KillSuggestions() returned %d suggestions, want 2", len(suggestions))
+	}
+}
