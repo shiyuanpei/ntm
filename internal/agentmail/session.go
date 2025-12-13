@@ -30,17 +30,29 @@ func sanitizeSessionName(name string) string {
 	return strings.ToLower(sanitized)
 }
 
+// getSessionsBaseDir returns the base directory for storing session data.
+func getSessionsBaseDir() string {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = os.Getenv("HOME")
+			if home == "" {
+				home = os.TempDir()
+			}
+		}
+		configDir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(configDir, "ntm", "sessions")
+}
+
 // sessionAgentPath returns the path to the session's agent.json file.
 // The path is namespaced by project slug to avoid collisions when
 // the same tmux session name is reused across different projects.
 // If projectKey is empty, we fall back to the legacy path (no slug)
 // for backward compatibility.
 func sessionAgentPath(sessionName, projectKey string) string {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		configDir = filepath.Join(os.Getenv("HOME"), ".config")
-	}
-	base := filepath.Join(configDir, "ntm", "sessions", sessionName)
+	base := filepath.Join(getSessionsBaseDir(), sessionName)
 	if projectKey != "" {
 		slug := ProjectSlugFromPath(projectKey)
 		if slug == "" {
@@ -65,11 +77,7 @@ func LoadSessionAgent(sessionName, projectKey string) (*SessionAgentInfo, error)
 					return nil, fmt.Errorf("reading session agent: %w", err)
 				}
 				// Search for any project-scoped agent.json under the session dir
-				configDir, cfgErr := os.UserConfigDir()
-				if cfgErr != nil {
-					configDir = filepath.Join(os.Getenv("HOME"), ".config")
-				}
-				sessionDir := filepath.Join(configDir, "ntm", "sessions", sessionName)
+				sessionDir := filepath.Join(getSessionsBaseDir(), sessionName)
 				if entries, readErr := os.ReadDir(sessionDir); readErr == nil {
 					for _, entry := range entries {
 						if !entry.IsDir() {
@@ -148,7 +156,7 @@ func (c *Client) RegisterSessionAgent(ctx context.Context, sessionName, workingD
 	}
 
 	// If already registered with same project, just update activity
-	if existing != nil && existing.ProjectKey == workingDir {
+	if existing != nil && existing.ProjectKey == workingDir && existing.AgentName != "" {
 		existing.LastActiveAt = time.Now()
 		if err := SaveSessionAgent(sessionName, workingDir, existing); err != nil {
 			return nil, err
@@ -173,32 +181,16 @@ func (c *Client) RegisterSessionAgent(ctx context.Context, sessionName, workingD
 		return nil, fmt.Errorf("ensuring project: %w", err)
 	}
 
-	// Generate agent name: ntm_{sanitized_session}
-	agentName := fmt.Sprintf("ntm_%s", sanitizeSessionName(sessionName))
-
-	// Register the agent
+	// Register the agent. Omit Name so the server auto-generates a valid
+	// adjective+noun identity; persist it locally so we can reuse it.
 	agent, err := c.RegisterAgent(ctx, RegisterAgentOptions{
 		ProjectKey:      workingDir,
 		Program:         "ntm",
 		Model:           "coordinator",
-		Name:            agentName,
 		TaskDescription: fmt.Sprintf("NTM session coordinator for %s", sessionName),
 	})
 	if err != nil {
-		// If name is taken (already exists), try with timestamp suffix
-		if IsNameTakenError(err) {
-			agentName = fmt.Sprintf("ntm_%s_%d", sanitizeSessionName(sessionName), time.Now().Unix()%10000)
-			agent, err = c.RegisterAgent(ctx, RegisterAgentOptions{
-				ProjectKey:      workingDir,
-				Program:         "ntm",
-				Model:           "coordinator",
-				Name:            agentName,
-				TaskDescription: fmt.Sprintf("NTM session coordinator for %s", sessionName),
-			})
-		}
-		if err != nil {
-			return nil, fmt.Errorf("registering agent: %w", err)
-		}
+		return nil, fmt.Errorf("registering agent: %w", err)
 	}
 
 	// Save locally

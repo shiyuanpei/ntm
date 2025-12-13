@@ -9,8 +9,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 )
 
 const (
@@ -39,6 +42,7 @@ type Client struct {
 	requestID   atomic.Int64
 
 	// Availability cache (30s TTL)
+	healthCheckMu      sync.Mutex
 	availableCache     atomic.Bool
 	availableCacheTime atomic.Int64 // Unix timestamp in seconds
 }
@@ -114,8 +118,18 @@ func NewClient(opts ...Option) *Client {
 // IsAvailable checks if the Agent Mail server is reachable.
 // Results are cached for 30 seconds to avoid repeated health checks.
 func (c *Client) IsAvailable() bool {
-	// Check cache first
+	// Optimistic check (lock-free)
 	cacheTime := c.availableCacheTime.Load()
+	if cacheTime > 0 && time.Now().Unix()-cacheTime < int64(AvailabilityCacheTTL.Seconds()) {
+		return c.availableCache.Load()
+	}
+
+	// Acquire lock to prevent thundering herd
+	c.healthCheckMu.Lock()
+	defer c.healthCheckMu.Unlock()
+
+	// Double-check after acquiring lock
+	cacheTime = c.availableCacheTime.Load()
 	if cacheTime > 0 && time.Now().Unix()-cacheTime < int64(AvailabilityCacheTTL.Seconds()) {
 		return c.availableCache.Load()
 	}
@@ -309,19 +323,15 @@ func ProjectSlugFromPath(path string) string {
 	}
 
 	// Lowercase and sanitize
-	result := make([]byte, 0, len(slug))
-	for i := 0; i < len(slug); i++ {
-		ch := slug[i]
-		switch {
-		case ch >= 'A' && ch <= 'Z':
-			result = append(result, ch+32) // lowercase
-		case (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_':
-			result = append(result, ch)
-		case ch == ' ':
-			result = append(result, '_')
-		default:
-			// Skip other characters
+	var sb strings.Builder
+	for _, r := range slug {
+		r = unicode.ToLower(r)
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || r == '-' || r == '_' {
+			sb.WriteRune(r)
+		} else if r == ' ' {
+			sb.WriteRune('_')
 		}
+		// Skip other characters
 	}
-	return string(result)
+	return sb.String()
 }
