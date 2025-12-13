@@ -904,3 +904,55 @@ func TestGradientFunctions(t *testing.T) {
 		}
 	})
 }
+
+func TestRenderState(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		out := RenderState(StateOptions{
+			Kind:    StateEmpty,
+			Message: "No items",
+			Width:   40,
+		})
+		if out == "" {
+			t.Fatal("expected non-empty output")
+		}
+		if !strings.Contains(out, "No items") {
+			t.Fatalf("expected message to be included, got %q", out)
+		}
+	})
+
+	t.Run("loading has default message", func(t *testing.T) {
+		out := RenderState(StateOptions{
+			Kind:  StateLoading,
+			Width: 40,
+		})
+		if out == "" {
+			t.Fatal("expected non-empty output")
+		}
+		if !strings.Contains(out, "Loading") {
+			t.Fatalf("expected loading message, got %q", out)
+		}
+	})
+
+	t.Run("error includes hint", func(t *testing.T) {
+		out := RenderState(StateOptions{
+			Kind:    StateError,
+			Message: "Bad news",
+			Hint:    "Press r to retry",
+			Width:   40,
+		})
+		if !strings.Contains(out, "Bad news") || !strings.Contains(out, "Press r") {
+			t.Fatalf("expected message and hint, got %q", out)
+		}
+	})
+
+	t.Run("truncates to width", func(t *testing.T) {
+		out := RenderState(StateOptions{
+			Kind:    StateEmpty,
+			Message: "this is a very very long message",
+			Width:   10,
+		})
+		if !strings.Contains(out, "…") {
+			t.Fatalf("expected truncation ellipsis, got %q", out)
+		}
+	})
+}
