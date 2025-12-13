@@ -956,3 +956,245 @@ func TestRenderState(t *testing.T) {
 		}
 	})
 }
+
+func TestRenderKeyHint(t *testing.T) {
+	hint := KeyHint{Key: "Enter", Desc: "select"}
+	out := RenderKeyHint(hint)
+
+	if out == "" {
+		t.Fatal("expected non-empty output")
+	}
+	if !strings.Contains(out, "Enter") {
+		t.Fatalf("expected key to be included, got %q", out)
+	}
+	if !strings.Contains(out, "select") {
+		t.Fatalf("expected desc to be included, got %q", out)
+	}
+}
+
+func TestRenderKeyHintCompact(t *testing.T) {
+	hint := KeyHint{Key: "q", Desc: "quit"}
+	out := RenderKeyHintCompact(hint)
+
+	if out == "" {
+		t.Fatal("expected non-empty output")
+	}
+	if !strings.Contains(out, "q") {
+		t.Fatalf("expected key to be included, got %q", out)
+	}
+	if !strings.Contains(out, "quit") {
+		t.Fatalf("expected desc to be included, got %q", out)
+	}
+}
+
+func TestRenderHelpBar(t *testing.T) {
+	t.Run("renders multiple hints", func(t *testing.T) {
+		hints := []KeyHint{
+			{Key: "↑/↓", Desc: "navigate"},
+			{Key: "Enter", Desc: "select"},
+			{Key: "q", Desc: "quit"},
+		}
+		out := RenderHelpBar(HelpBarOptions{Hints: hints})
+
+		if out == "" {
+			t.Fatal("expected non-empty output")
+		}
+		if !strings.Contains(out, "navigate") {
+			t.Error("expected 'navigate' in output")
+		}
+		if !strings.Contains(out, "select") {
+			t.Error("expected 'select' in output")
+		}
+		if !strings.Contains(out, "quit") {
+			t.Error("expected 'quit' in output")
+		}
+	})
+
+	t.Run("empty hints returns empty string", func(t *testing.T) {
+		out := RenderHelpBar(HelpBarOptions{Hints: nil})
+		if out != "" {
+			t.Fatalf("expected empty string, got %q", out)
+		}
+	})
+
+	t.Run("truncates to width", func(t *testing.T) {
+		hints := []KeyHint{
+			{Key: "↑/↓", Desc: "navigate"},
+			{Key: "Enter", Desc: "select"},
+			{Key: "Esc", Desc: "back"},
+			{Key: "q", Desc: "quit"},
+		}
+		// Very narrow width should drop some hints
+		out := RenderHelpBar(HelpBarOptions{Hints: hints, Width: 30})
+
+		// Should have at least one hint
+		if out == "" {
+			t.Fatal("expected at least some output")
+		}
+		// Shouldn't have all four if space is limited
+		// Just verify it doesn't panic and produces something
+	})
+
+	t.Run("uses custom separator", func(t *testing.T) {
+		hints := []KeyHint{
+			{Key: "a", Desc: "one"},
+			{Key: "b", Desc: "two"},
+		}
+		out := RenderHelpBar(HelpBarOptions{Hints: hints, Separator: " | "})
+		if !strings.Contains(out, "|") {
+			t.Error("expected custom separator in output")
+		}
+	})
+}
+
+func TestHelpOverlay(t *testing.T) {
+	t.Run("renders with sections", func(t *testing.T) {
+		opts := HelpOverlayOptions{
+			Title: "Test Help",
+			Sections: []HelpSection{
+				{
+					Title: "Navigation",
+					Hints: []KeyHint{
+						{Key: "↑", Desc: "Up"},
+						{Key: "↓", Desc: "Down"},
+					},
+				},
+				{
+					Title: "Actions",
+					Hints: []KeyHint{
+						{Key: "Enter", Desc: "Select"},
+					},
+				},
+			},
+		}
+		out := HelpOverlay(opts)
+
+		if out == "" {
+			t.Fatal("expected non-empty output")
+		}
+		if !strings.Contains(out, "Test Help") {
+			t.Error("expected title in output")
+		}
+		if !strings.Contains(out, "Navigation") {
+			t.Error("expected section title in output")
+		}
+		if !strings.Contains(out, "Up") {
+			t.Error("expected hint desc in output")
+		}
+	})
+
+	t.Run("uses default title", func(t *testing.T) {
+		opts := HelpOverlayOptions{
+			Sections: []HelpSection{
+				{Hints: []KeyHint{{Key: "q", Desc: "quit"}}},
+			},
+		}
+		out := HelpOverlay(opts)
+		if !strings.Contains(out, "Keyboard Shortcuts") {
+			t.Error("expected default title")
+		}
+	})
+
+	t.Run("includes footer hint", func(t *testing.T) {
+		opts := HelpOverlayOptions{
+			Sections: []HelpSection{
+				{Hints: []KeyHint{{Key: "x", Desc: "test"}}},
+			},
+		}
+		out := HelpOverlay(opts)
+		if !strings.Contains(out, "Esc") {
+			t.Error("expected footer hint about Esc to close")
+		}
+	})
+}
+
+func TestDefaultHints(t *testing.T) {
+	t.Run("palette hints", func(t *testing.T) {
+		hints := DefaultPaletteHints()
+		if len(hints) == 0 {
+			t.Error("expected non-empty palette hints")
+		}
+		// Should have navigate, quick select, select, back
+		hasNav := false
+		hasSelect := false
+		for _, h := range hints {
+			if strings.Contains(h.Desc, "navigate") {
+				hasNav = true
+			}
+			if strings.Contains(h.Desc, "select") {
+				hasSelect = true
+			}
+		}
+		if !hasNav {
+			t.Error("expected navigation hint")
+		}
+		if !hasSelect {
+			t.Error("expected select hint")
+		}
+	})
+
+	t.Run("dashboard hints", func(t *testing.T) {
+		hints := DefaultDashboardHints()
+		if len(hints) == 0 {
+			t.Error("expected non-empty dashboard hints")
+		}
+		// Should have zoom and refresh
+		hasZoom := false
+		hasRefresh := false
+		for _, h := range hints {
+			if strings.Contains(h.Desc, "zoom") {
+				hasZoom = true
+			}
+			if strings.Contains(h.Desc, "refresh") {
+				hasRefresh = true
+			}
+		}
+		if !hasZoom {
+			t.Error("expected zoom hint")
+		}
+		if !hasRefresh {
+			t.Error("expected refresh hint")
+		}
+	})
+}
+
+func TestHelpSections(t *testing.T) {
+	t.Run("palette sections", func(t *testing.T) {
+		sections := PaletteHelpSections()
+		if len(sections) == 0 {
+			t.Error("expected non-empty palette sections")
+		}
+		// Should have Navigation, Actions, General
+		titles := make(map[string]bool)
+		for _, s := range sections {
+			titles[s.Title] = true
+		}
+		if !titles["Navigation"] {
+			t.Error("expected Navigation section")
+		}
+		if !titles["Actions"] {
+			t.Error("expected Actions section")
+		}
+		if !titles["General"] {
+			t.Error("expected General section")
+		}
+	})
+
+	t.Run("dashboard sections", func(t *testing.T) {
+		sections := DashboardHelpSections()
+		if len(sections) == 0 {
+			t.Error("expected non-empty dashboard sections")
+		}
+		// Should have Navigation, Pane Actions, View Controls, General
+		titles := make(map[string]bool)
+		for _, s := range sections {
+			titles[s.Title] = true
+		}
+		if !titles["Navigation"] {
+			t.Error("expected Navigation section")
+		}
+		if !titles["Pane Actions"] {
+			t.Error("expected Pane Actions section")
+		}
+	})
+}

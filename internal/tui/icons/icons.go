@@ -68,6 +68,9 @@ type IconSet struct {
 	Lightning string
 	Rocket    string
 	Gear      string
+
+	// Help
+	Help string
 }
 
 // NerdFonts is the full icon set using Nerd Font symbols
@@ -132,6 +135,9 @@ var NerdFonts = IconSet{
 	Lightning: "⚡",
 	Rocket:    "🚀",
 	Gear:      "",
+
+	// Help
+	Help: "",
 }
 
 // Unicode is a fallback icon set using standard Unicode
@@ -196,6 +202,9 @@ var Unicode = IconSet{
 	Lightning: "⚡",
 	Rocket:    "→",
 	Gear:      "⚙",
+
+	// Help
+	Help: "?",
 }
 
 // ASCII is a minimal fallback for terminals without Unicode
@@ -260,6 +269,9 @@ var ASCII = IconSet{
 	Lightning: "!",
 	Rocket:    ">>",
 	Gear:      "@",
+
+	// Help
+	Help: "?",
 }
 
 // HasNerdFonts detects if the terminal likely supports Nerd Fonts
