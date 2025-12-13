@@ -59,6 +59,15 @@ func newSpawnCmd() *cobra.Command {
 	var prompt string
 	var noHooks bool
 
+	// Pre-load plugins to avoid double loading in RunE
+	configDir := filepath.Dir(config.DefaultPath())
+	pluginsDir := filepath.Join(configDir, "agents")
+	loadedPlugins, _ := plugins.LoadAgentPlugins(pluginsDir)
+	preloadedPluginMap := make(map[string]plugins.AgentPlugin)
+	for _, p := range loadedPlugins {
+		preloadedPluginMap[p.Name] = p
+	}
+
 	cmd := &cobra.Command{
 		Use:   "spawn <session-name>",
 		Short: "Create session and spawn AI agents in panes",
@@ -114,21 +123,8 @@ Examples:
 				cfg.CASS.Context.LookbackDays = contextDays
 			}
 
-			// Load plugins (late loading to ensure config is ready if needed)
-			// But flags were registered below?
-			// Wait, if flags are registered below, RunE logic needs plugin map to resolve.
-			// Re-load plugins here?
-			configDir := filepath.Dir(config.DefaultPath())
-			pluginsDir := filepath.Join(configDir, "agents")
-			loadedPlugins, _ := plugins.LoadAgentPlugins(pluginsDir)
-			pluginMap := make(map[string]plugins.AgentPlugin)
-			for _, p := range loadedPlugins {
-				pluginMap[p.Name] = p
-				// Note: Alias mapping should match what was used for registration
-				// Since we passed p.Name as AgentType for both name and alias flags,
-				// the specs will have Type=p.Name.
-				// So we key by p.Name.
-			}
+			// Use pre-loaded plugins
+			pluginMap := preloadedPluginMap
 
 			// Handle personas first
 			personaMap := make(map[string]*persona.Persona)
@@ -184,7 +180,7 @@ Examples:
 			gmiCount := agentSpecs.ByType(AgentTypeGemini).TotalCount()
 
 			// Apply defaults
-			if ccCount+codCount+gmiCount == 0 && len(cfg.ProjectDefaults) > 0 {
+			if len(agentSpecs) == 0 && len(cfg.ProjectDefaults) > 0 {
 				if v, ok := cfg.ProjectDefaults["cc"]; ok && v > 0 {
 					agentSpecs = append(agentSpecs, AgentSpec{Type: AgentTypeClaude, Count: v})
 				}
@@ -197,7 +193,7 @@ Examples:
 				ccCount = agentSpecs.ByType(AgentTypeClaude).TotalCount()
 				codCount = agentSpecs.ByType(AgentTypeCodex).TotalCount()
 				gmiCount = agentSpecs.ByType(AgentTypeGemini).TotalCount()
-				if !IsJSONOutput() && (ccCount+codCount+gmiCount > 0) {
+				if !IsJSONOutput() && len(agentSpecs) > 0 {
 					fmt.Printf("Using default configuration: %d cc, %d cod, %d gmi\n", ccCount, codCount, gmiCount)
 				}
 			}
@@ -242,9 +238,6 @@ Examples:
 
 	// Register plugin flags dynamically
 	// Note: We scan for plugins here to register flags.
-	configDir := filepath.Dir(config.DefaultPath())
-	pluginsDir := filepath.Join(configDir, "agents")
-	loadedPlugins, _ := plugins.LoadAgentPlugins(pluginsDir)
 	for _, p := range loadedPlugins {
 		// Use p.Name as the AgentType so we can identify it later
 		agentType := AgentType(p.Name)
@@ -330,21 +323,27 @@ func spawnSessionLogic(opts SpawnOptions) error {
 
 	// Run pre-spawn hooks
 	if hookExec != nil && hookExec.HasHooksForEvent(hooks.EventPreSpawn) {
+		steps := output.NewSteps()
 		if !IsJSONOutput() {
-			fmt.Println("Running pre-spawn hooks...")
+			steps.Start("Running pre-spawn hooks")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		results, err := hookExec.RunHooksForEvent(ctx, hooks.EventPreSpawn, hookCtx)
 		cancel()
 		if err != nil {
+			if !IsJSONOutput() {
+				steps.Fail()
+			}
 			return outputError(fmt.Errorf("pre-spawn hook failed: %w", err))
 		}
 		if hooks.AnyFailed(results) {
+			if !IsJSONOutput() {
+				steps.Fail()
+			}
 			return outputError(fmt.Errorf("pre-spawn hook failed: %w", hooks.AllErrors(results)))
 		}
 		if !IsJSONOutput() {
-			success, _, _ := hooks.CountResults(results)
-			fmt.Printf("✓ %d pre-spawn hook(s) completed\n", success)
+			steps.Done()
 		}
 	}
 
@@ -375,12 +374,19 @@ func spawnSessionLogic(opts SpawnOptions) error {
 	}
 
 	// Create or use existing session
+	steps := output.NewSteps()
 	if !tmux.SessionExists(opts.Session) {
 		if !IsJSONOutput() {
-			fmt.Printf("Creating session '%s' in %s...\n", opts.Session, dir)
+			steps.Start(fmt.Sprintf("Creating session '%s'", opts.Session))
 		}
 		if err := tmux.CreateSession(opts.Session, dir); err != nil {
+			if !IsJSONOutput() {
+				steps.Fail()
+			}
 			return outputError(fmt.Errorf("creating session: %w", err))
+		}
+		if !IsJSONOutput() {
+			steps.Done()
 		}
 	}
 
@@ -395,12 +401,18 @@ func spawnSessionLogic(opts SpawnOptions) error {
 	if existingPanes < totalPanes {
 		toAdd := totalPanes - existingPanes
 		if !IsJSONOutput() {
-			fmt.Printf("Creating %d pane(s) (%d -> %d)...\n", toAdd, existingPanes, totalPanes)
+			steps.Start(fmt.Sprintf("Creating %d pane(s)", toAdd))
 		}
 		for i := 0; i < toAdd; i++ {
 			if _, err := tmux.SplitWindow(opts.Session, dir); err != nil {
+				if !IsJSONOutput() {
+					steps.Fail()
+				}
 				return outputError(fmt.Errorf("creating pane: %w", err))
 			}
+		}
+		if !IsJSONOutput() {
+			steps.Done()
 		}
 	}
 
@@ -418,7 +430,7 @@ func spawnSessionLogic(opts SpawnOptions) error {
 
 	agentNum := startIdx
 	if !IsJSONOutput() {
-		fmt.Printf("Launching agents...\n")
+		steps.Start(fmt.Sprintf("Launching %d agent(s)", len(opts.Agents)))
 	}
 
 	// Track launched agents for resilience monitor
@@ -606,6 +618,11 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		agentNum++
 	}
 
+	// Complete the launching step
+	if !IsJSONOutput() {
+		steps.Done()
+	}
+
 	// Get final pane list for output
 	finalPanes, _ := tmux.GetPanes(opts.Session)
 
@@ -648,8 +665,6 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		})
 	}
 
-	fmt.Printf("✓ Launched %d agent(s)\n", totalAgents)
-
 	// Print "What's next?" suggestions
 	output.SuccessFooter(output.SpawnSuggestions(opts.Session)...)
 
@@ -667,8 +682,9 @@ func spawnSessionLogic(opts SpawnOptions) error {
 
 	// Run post-spawn hooks
 	if hookExec != nil && hookExec.HasHooksForEvent(hooks.EventPostSpawn) {
+		postSteps := output.NewSteps()
 		if !IsJSONOutput() {
-			fmt.Println("Running post-spawn hooks...")
+			postSteps.Start("Running post-spawn hooks")
 		}
 
 		// Enrich hook context with final spawn state
@@ -689,13 +705,18 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		cancel()
 		if postErr != nil {
 			// Log error but don't fail (spawn already succeeded)
-			fmt.Printf("⚠ Post-spawn hook error: %v\n", postErr)
+			if !IsJSONOutput() {
+				postSteps.Warn()
+				output.PrintWarningf("Post-spawn hook error: %v", postErr)
+			}
 		} else if hooks.AnyFailed(results) {
 			// Log failures but don't fail (spawn already succeeded)
-			fmt.Printf("⚠ Post-spawn hook failed: %v\n", hooks.AllErrors(results))
+			if !IsJSONOutput() {
+				postSteps.Warn()
+				output.PrintWarningf("Post-spawn hook failed: %v", hooks.AllErrors(results))
+			}
 		} else if !IsJSONOutput() {
-			success, _, _ := hooks.CountResults(results)
-			fmt.Printf("✓ %d post-spawn hook(s) completed\n", success)
+			postSteps.Done()
 		}
 	}
 
@@ -707,7 +728,7 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		}
 		monitor.Start(context.Background())
 		if !IsJSONOutput() {
-			fmt.Printf("✓ Auto-restart enabled (health check every %ds, max %d restarts)\n",
+			output.PrintInfof("Auto-restart enabled (health check every %ds, max %d restarts)",
 				cfg.Resilience.HealthCheckSeconds, cfg.Resilience.MaxRestarts)
 		}
 		// Note: monitor runs in background, will continue until tmux session ends
@@ -777,10 +798,12 @@ func registerSessionAgent(sessionName, workingDir string) {
 	info, err := client.RegisterSessionAgent(ctx, sessionName, workingDir)
 	if err != nil {
 		// Log but don't fail
-		fmt.Printf("⚠ Agent Mail registration failed: %v\n", err)
+		if !IsJSONOutput() {
+			output.PrintWarningf("Agent Mail registration failed: %v", err)
+		}
 		return
 	}
-	if info != nil {
-		fmt.Printf("✓ Registered with Agent Mail as %s\n", info.AgentName)
+	if info != nil && !IsJSONOutput() {
+		output.PrintInfof("Registered with Agent Mail as %s", info.AgentName)
 	}
 }

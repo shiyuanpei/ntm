@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Dicklesworthstone/ntm/internal/output"
-	"github.com/Dicklesworthstone/ntm/internal/tui/theme"
 )
 
 func newQuickCmd() *cobra.Command {
@@ -75,8 +74,6 @@ type quickResponse struct {
 }
 
 func runQuick(name string, opts quickOptions) error {
-	t := theme.Current()
-
 	// Validate project name
 	if strings.ContainsAny(name, "/\\:*?\"<>|") {
 		return fmt.Errorf("invalid project name: contains forbidden characters")
@@ -110,7 +107,7 @@ func runQuick(name string, opts quickOptions) error {
 	}
 
 	if !IsJSONOutput() {
-		fmt.Printf("%s✓%s Created %s\n", colorize(t.Success), colorize(t.Text), projectDir)
+		output.PrintSuccessf("Created %s", projectDir)
 	}
 
 	// Initialize git
@@ -118,12 +115,12 @@ func runQuick(name string, opts quickOptions) error {
 		if err := initGit(projectDir); err != nil {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("git init failed: %v", err))
 			if !IsJSONOutput() {
-				fmt.Printf("%s⚠%s Git init failed: %v\n", colorize(t.Warning), colorize(t.Text), err)
+				output.PrintWarningf("Git init failed: %v", err)
 			}
 		} else {
 			res.GitInitialized = true
 			if !IsJSONOutput() {
-				fmt.Printf("%s✓%s Initialized git repository\n", colorize(t.Success), colorize(t.Text))
+				output.PrintSuccess("Initialized git repository")
 			}
 		}
 	}
@@ -132,12 +129,12 @@ func runQuick(name string, opts quickOptions) error {
 	if err := createGitignore(projectDir, opts.Template); err != nil {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("failed to create .gitignore: %v", err))
 		if !IsJSONOutput() {
-			fmt.Printf("%s⚠%s Failed to create .gitignore: %v\n", colorize(t.Warning), colorize(t.Text), err)
+			output.PrintWarningf("Failed to create .gitignore: %v", err)
 		}
 	} else {
 		res.GitignoreCreated = true
 		if !IsJSONOutput() {
-			fmt.Printf("%s✓%s Created .gitignore\n", colorize(t.Success), colorize(t.Text))
+			output.PrintSuccess("Created .gitignore")
 		}
 	}
 
@@ -146,12 +143,12 @@ func runQuick(name string, opts quickOptions) error {
 		if err := createVSCodeSettings(projectDir); err != nil {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("failed to create VSCode settings: %v", err))
 			if !IsJSONOutput() {
-				fmt.Printf("%s⚠%s Failed to create VSCode settings: %v\n", colorize(t.Warning), colorize(t.Text), err)
+				output.PrintWarningf("Failed to create VSCode settings: %v", err)
 			}
 		} else {
 			res.VSCodeCreated = true
 			if !IsJSONOutput() {
-				fmt.Printf("%s✓%s Created VSCode settings\n", colorize(t.Success), colorize(t.Text))
+				output.PrintSuccess("Created VSCode settings")
 			}
 		}
 	}
@@ -161,12 +158,12 @@ func runQuick(name string, opts quickOptions) error {
 		if err := createClaudeConfig(projectDir); err != nil {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("failed to create Claude config: %v", err))
 			if !IsJSONOutput() {
-				fmt.Printf("%s⚠%s Failed to create Claude config: %v\n", colorize(t.Warning), colorize(t.Text), err)
+				output.PrintWarningf("Failed to create Claude config: %v", err)
 			}
 		} else {
 			res.ClaudeCreated = true
 			if !IsJSONOutput() {
-				fmt.Printf("%s✓%s Created Claude Code config\n", colorize(t.Success), colorize(t.Text))
+				output.PrintSuccess("Created Claude Code config")
 			}
 		}
 	}
@@ -176,12 +173,12 @@ func runQuick(name string, opts quickOptions) error {
 		if err := applyTemplate(projectDir, opts.Template); err != nil {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("template setup failed: %v", err))
 			if !IsJSONOutput() {
-				fmt.Printf("%s⚠%s Template setup failed: %v\n", colorize(t.Warning), colorize(t.Text), err)
+				output.PrintWarningf("Template setup failed: %v", err)
 			}
 		} else {
 			res.TemplateApplied = opts.Template
 			if !IsJSONOutput() {
-				fmt.Printf("%s✓%s Applied %s template\n", colorize(t.Success), colorize(t.Text), opts.Template)
+				output.PrintSuccessf("Applied %s template", opts.Template)
 			}
 		}
 	}
@@ -190,7 +187,8 @@ func runQuick(name string, opts quickOptions) error {
 		return output.PrintJSON(res)
 	}
 
-	fmt.Printf("\n%s🎉%s Project ready at: %s\n", colorize(t.Primary), colorize(t.Text), projectDir)
+	fmt.Println()
+	output.PrintSuccessf("Project ready at: %s", projectDir)
 
 	// Print "What's next?" suggestions
 	output.SuccessFooter(output.QuickSuggestions(projectDir, name)...)
