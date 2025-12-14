@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Dicklesworthstone/ntm/internal/agentmail"
-	"github.com/Dicklesworthstone/ntm/internal/cass"
 	"github.com/Dicklesworthstone/ntm/internal/config"
 	"github.com/Dicklesworthstone/ntm/internal/events"
 	"github.com/Dicklesworthstone/ntm/internal/gemini"
@@ -422,11 +421,12 @@ func spawnSessionLogic(opts SpawnOptions) error {
 
 	// Track launched agents for resilience monitor
 	type launchedAgent struct {
-		paneID    string
-		paneIndex int
-		agentType string
-		model     string
-		command   string
+		paneID        string
+		paneIndex     int
+		agentType     string
+		model         string // alias
+		resolvedModel string // full name
+		command       string
 	}
 	var launchedAgents []launchedAgent
 
@@ -443,7 +443,7 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		}
 
 		if query != "" {
-			ctx, err := resolveCassContext(query, cfg.GetProjectDir(opts.Session))
+			ctx, err := ResolveCassContext(query, cfg.GetProjectDir(opts.Session))
 			if err == nil {
 				cassContext = ctx
 			}
@@ -595,11 +595,12 @@ func spawnSessionLogic(opts SpawnOptions) error {
 
 		// Track for resilience monitor
 		launchedAgents = append(launchedAgents, launchedAgent{
-			paneID:    pane.ID,
-			paneIndex: pane.Index,
-			agentType: string(agent.Type),
-			model:     agent.Model,
-			command:   safeAgentCmd,
+			paneID:        pane.ID,
+			paneIndex:     pane.Index,
+			agentType:     string(agent.Type),
+			model:         agent.Model,
+			resolvedModel: resolvedModel,
+			command:       safeAgentCmd,
 		})
 
 		agentNum++
@@ -662,7 +663,8 @@ func spawnSessionLogic(opts SpawnOptions) error {
 	for _, agent := range launchedAgents {
 		events.Emit(events.EventAgentSpawn, opts.Session, events.AgentSpawnData{
 			AgentType: agent.agentType,
-			Model:     agent.model,
+			Model:     agent.resolvedModel,
+			Variant:   agent.model,
 			PaneIndex: agent.paneIndex,
 		})
 	}
@@ -725,54 +727,6 @@ func spawnSessionLogic(opts SpawnOptions) error {
 	registerSessionAgent(opts.Session, dir)
 
 	return nil
-}
-
-func resolveCassContext(query, dir string) (string, error) {
-	client := cass.NewClient()
-	if !client.IsInstalled() {
-		return "", fmt.Errorf("cass not installed")
-	}
-
-	// Search
-	limit := cfg.CASS.Context.MaxSessions
-	if limit <= 0 {
-		limit = 3
-	}
-
-	since := fmt.Sprintf("%dd", cfg.CASS.Context.LookbackDays)
-	if cfg.CASS.Context.LookbackDays <= 0 {
-		since = "30d"
-	}
-
-	resp, err := client.Search(context.Background(), cass.SearchOptions{
-		Query:     query,
-		Workspace: dir,
-		Limit:     limit,
-		Since:     since,
-	})
-	if err != nil {
-		return "", err
-	}
-
-	if len(resp.Hits) == 0 {
-		return "", nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString("## Relevant Past Sessions (from CASS)\n\n")
-	for _, hit := range resp.Hits {
-		ts := ""
-		if hit.CreatedAt != nil {
-			ts = time.Unix(*hit.CreatedAt, 0).Format("2006-01-02")
-		}
-		sb.WriteString(fmt.Sprintf("- **%s** (%s, %s)\n", hit.Title, hit.Agent, ts))
-		if hit.Snippet != "" {
-			sb.WriteString(fmt.Sprintf("  %s\n", strings.TrimSpace(hit.Snippet)))
-		}
-		sb.WriteString("\n")
-	}
-
-	return sb.String(), nil
 }
 
 // registerSessionAgent registers the session with Agent Mail.

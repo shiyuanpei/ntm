@@ -1,16 +1,19 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/mattn/go-isatty"
 
+	"github.com/Dicklesworthstone/ntm/internal/cass"
 	"github.com/Dicklesworthstone/ntm/internal/config"
 	"github.com/Dicklesworthstone/ntm/internal/palette"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
@@ -261,4 +264,54 @@ func SanitizeFilename(name string) string {
 	}
 
 	return result
+}
+
+// ResolveCassContext queries CASS for relevant past sessions based on a query string
+// and returns a formatted markdown summary.
+func ResolveCassContext(query, dir string) (string, error) {
+	client := cass.NewClient()
+	if !client.IsInstalled() {
+		return "", fmt.Errorf("cass not installed")
+	}
+
+	// Search
+	limit := cfg.CASS.Context.MaxSessions
+	if limit <= 0 {
+		limit = 3
+	}
+
+	since := fmt.Sprintf("%dd", cfg.CASS.Context.LookbackDays)
+	if cfg.CASS.Context.LookbackDays <= 0 {
+		since = "30d"
+	}
+
+	resp, err := client.Search(context.Background(), cass.SearchOptions{
+		Query:     query,
+		Workspace: dir,
+		Limit:     limit,
+		Since:     since,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	if len(resp.Hits) == 0 {
+		return "", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Relevant Past Sessions (from CASS)\n\n")
+	for _, hit := range resp.Hits {
+		ts := ""
+		if hit.CreatedAt != nil {
+			ts = time.Unix(*hit.CreatedAt, 0).Format("2006-01-02")
+		}
+		sb.WriteString(fmt.Sprintf("- **%s** (%s, %s)\n", hit.Title, hit.Agent, ts))
+		if hit.Snippet != "" {
+			sb.WriteString(fmt.Sprintf("  %s\n", strings.TrimSpace(hit.Snippet)))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String(), nil
 }

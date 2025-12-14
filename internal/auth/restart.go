@@ -38,23 +38,34 @@ func (o *Orchestrator) RegisterAuthFlow(provider string, flow AuthFlow) {
 	o.authFlows[provider] = flow
 }
 
+// RestartContext holds context for restarting an agent
+type RestartContext struct {
+	PaneID      string
+	Provider    string
+	TargetEmail string
+	ModelAlias  string
+	SessionName string
+	PaneIndex   int
+	ProjectDir  string
+}
+
 // ExecuteRestartStrategy performs the terminate-switch-restart flow
-func (o *Orchestrator) ExecuteRestartStrategy(paneID string, provider string, targetEmail string) error {
+func (o *Orchestrator) ExecuteRestartStrategy(ctx RestartContext) error {
 	// 1. Terminate existing session gracefully
-	if err := o.TerminateSession(paneID, provider); err != nil {
+	if err := o.TerminateSession(ctx.PaneID, ctx.Provider); err != nil {
 		return fmt.Errorf("terminating session: %w", err)
 	}
 
 	// 2. Wait for shell prompt
-	if err := o.WaitForShellPrompt(paneID, 10*time.Second); err != nil {
+	if err := o.WaitForShellPrompt(ctx.PaneID, 10*time.Second); err != nil {
 		return fmt.Errorf("session did not terminate: %w", err)
 	}
 
 	// 3. Prompt user for browser auth (simulated here, would interact with UI/TUI in real app)
-	o.PromptBrowserAuth(targetEmail)
+	o.PromptBrowserAuth(ctx.TargetEmail)
 
 	// 4. Start new agent session
-	return o.StartNewAgentSession(paneID, provider)
+	return o.StartNewAgentSession(ctx)
 }
 
 // TerminateSession tries to gracefully stop the agent, then force kills if needed
@@ -84,9 +95,9 @@ func (o *Orchestrator) TerminateSession(paneID string, provider string) error {
 }
 
 var shellPromptRegexps = []*regexp.Regexp{
-	regexp.MustCompile(`\$\s*$`), // bash prompt
-	regexp.MustCompile(`%\s*$`),  // zsh prompt
-	regexp.MustCompile(`>\s*$`),  // generic prompt
+	regexp.MustCompile("\\$\\s*$"), // bash prompt
+	regexp.MustCompile("%\\s*$"),   // zsh prompt
+	regexp.MustCompile(">\\s*$"),   // generic prompt
 }
 
 // WaitForShellPrompt waits until the pane shows a shell prompt
@@ -120,24 +131,45 @@ func (o *Orchestrator) PromptBrowserAuth(email string) {
 }
 
 // StartNewAgentSession launches the agent command in the pane
-func (o *Orchestrator) StartNewAgentSession(paneID string, provider string) error {
-	prov := rotation.GetProvider(provider)
+func (o *Orchestrator) StartNewAgentSession(ctx RestartContext) error {
+	prov := rotation.GetProvider(ctx.Provider)
 	if prov == nil {
-		return fmt.Errorf("unknown provider: %s", provider)
+		return fmt.Errorf("unknown provider: %s", ctx.Provider)
 	}
 
-	var agentCmd string
+	var agentCmdTemplate string
+	var agentType string
+
 	switch prov.Name() {
 	case "Claude":
-		agentCmd = o.cfg.Agents.Claude
+		agentCmdTemplate = o.cfg.Agents.Claude
+		agentType = "cc"
 	case "Codex":
-		agentCmd = o.cfg.Agents.Codex
+		agentCmdTemplate = o.cfg.Agents.Codex
+		agentType = "cod"
 	case "Gemini":
-		agentCmd = o.cfg.Agents.Gemini
+		agentCmdTemplate = o.cfg.Agents.Gemini
+		agentType = "gmi"
 	default:
 		return fmt.Errorf("unsupported provider: %s", prov.Name())
 	}
 
+	// Resolve model
+	resolvedModel := o.cfg.Models.GetModelName(agentType, ctx.ModelAlias)
+
+	// Generate command
+	agentCmd, err := config.GenerateAgentCommand(agentCmdTemplate, config.AgentTemplateVars{
+		Model:       resolvedModel,
+		ModelAlias:  ctx.ModelAlias,
+		SessionName: ctx.SessionName,
+		PaneIndex:   ctx.PaneIndex,
+		AgentType:   agentType,
+		ProjectDir:  ctx.ProjectDir,
+	})
+	if err != nil {
+		return fmt.Errorf("generating command: %w", err)
+	}
+
 	// For now, just run the agent command
-	return tmux.SendKeys(paneID, agentCmd, true)
+	return tmux.SendKeys(ctx.PaneID, agentCmd, true)
 }

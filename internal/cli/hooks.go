@@ -17,21 +17,28 @@ import (
 func newHooksCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hooks",
-		Short: "Manage git hooks for quality checks",
-		Long: `Install and manage git hooks that run UBS (Ultimate Bug Scanner)
-before commits to catch bugs early.
+		Short: "Manage git hooks for quality checks and coordination",
+		Long: `Install and manage git hooks for quality checks (UBS) and coordination (Agent Mail).
 
-The pre-commit hook:
+UBS pre-commit hook:
 - Runs UBS on staged files only (fast path)
 - Blocks commits if critical or warning issues are found
 - Provides clear, actionable error messages
 
+Agent Mail pre-commit guard:
+- Blocks commits when files are reserved by other agents
+- Optional warn-only mode via AGENT_MAIL_GUARD_MODE=warn
+
 Examples:
-  ntm hooks install              # Install pre-commit hook
-  ntm hooks install --force      # Overwrite existing hook
-  ntm hooks status               # Check hook status
-  ntm hooks uninstall            # Remove hook
-  ntm hooks run pre-commit       # Run hook manually`,
+  ntm hooks install                 # Install UBS pre-commit hook
+  ntm hooks install --force         # Overwrite existing UBS hook
+  ntm hooks status                  # Check UBS hook status
+  ntm hooks uninstall               # Remove UBS hook
+  ntm hooks run pre-commit          # Run UBS hook manually
+
+  ntm hooks guard install           # Install Agent Mail pre-commit guard
+  ntm hooks guard install --warn-only  # Print warn-only setup instructions
+  ntm hooks guard uninstall          # Remove Agent Mail pre-commit guard`,
 	}
 
 	cmd.AddCommand(
@@ -365,7 +372,7 @@ func newHooksGuardInstallCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&warnOnly, "warn-only", false, "Warn instead of blocking (export AGENT_MAIL_GUARD_MODE=warn)")
+	cmd.Flags().BoolVar(&warnOnly, "warn-only", false, "Print instructions for warn-only mode (set AGENT_MAIL_GUARD_MODE=warn)")
 	return cmd
 }
 

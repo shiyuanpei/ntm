@@ -441,7 +441,21 @@ func runFileWatch(ctx context.Context, session string, opts watchOptions, t them
 		}
 	}
 
-	w, err := watcher.New(handler, watcher.WithRecursive(true))
+	w, err := watcher.New(handler,
+		watcher.WithRecursive(true),
+		watcher.WithIgnorePaths([]string{
+			".git",
+			"node_modules",
+			"dist",
+			"build",
+			"vendor",
+			"coverage",
+			"__pycache__",
+			".venv",
+			".idea",
+			".vscode",
+		}),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create watcher: %w", err)
 	}

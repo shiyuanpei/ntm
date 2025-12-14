@@ -21,9 +21,25 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
 )
 
+// AddOptions configures agent addition
+type AddOptions struct {
+	Session          string
+	Agents           AgentSpecs
+	PluginMap        map[string]plugins.AgentPlugin
+	PersonaMap       map[string]*persona.Persona
+	CassContextQuery string
+	NoCassContext    bool
+	Prompt           string
+}
+
 func newAddCmd() *cobra.Command {
 	var agentSpecs AgentSpecs
 	var personaSpecs PersonaSpecs
+	var contextQuery string
+	var noCassContext bool
+	var contextLimit int
+	var contextDays int
+	var prompt string
 
 	cmd := &cobra.Command{
 		Use:   "add <session-name>",
@@ -40,12 +56,24 @@ func newAddCmd() *cobra.Command {
 	  Built-in personas: architect, implementer, reviewer, tester, documenter
 	  ntm add myproject --persona=reviewer  # Add 1 reviewer agent
 
+		CASS Context Injection:
+	  Automatically finds relevant past sessions and injects context into new agents.
+	  Use --cass-context="query" to be specific.
+
 		Agent count syntax: N or N:model where N is count and model is optional.
 		Multiple flags of the same type accumulate.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sessionName := args[0]
 			dir := cfg.GetProjectDir(sessionName)
+
+			// Update CASS config from flags
+			if contextLimit > 0 {
+				cfg.CASS.Context.MaxSessions = contextLimit
+			}
+			if contextDays > 0 {
+				cfg.CASS.Context.LookbackDays = contextDays
+			}
 
 			// Load plugins (re-load here to ensure latest state and to pass map)
 			// Ideally we should share this logic or load once.
@@ -86,7 +114,17 @@ func newAddCmd() *cobra.Command {
 				}
 			}
 
-			return runAdd(sessionName, agentSpecs, pluginMap, personaMap)
+			opts := AddOptions{
+				Session:          sessionName,
+				Agents:           agentSpecs,
+				PluginMap:        pluginMap,
+				PersonaMap:       personaMap,
+				CassContextQuery: contextQuery,
+				NoCassContext:    noCassContext,
+				Prompt:           prompt,
+			}
+
+			return runAdd(opts)
 		},
 	}
 
@@ -94,6 +132,13 @@ func newAddCmd() *cobra.Command {
 	cmd.Flags().Var(NewAgentSpecsValue(AgentTypeCodex, &agentSpecs), "cod", "Codex agents (N or N:model)")
 	cmd.Flags().Var(NewAgentSpecsValue(AgentTypeGemini, &agentSpecs), "gmi", "Gemini agents (N or N:model)")
 	cmd.Flags().Var(&personaSpecs, "persona", "Persona-defined agents (name or name:count)")
+
+	// CASS context flags
+	cmd.Flags().StringVar(&contextQuery, "cass-context", "", "Explicit context query for CASS")
+	cmd.Flags().BoolVar(&noCassContext, "no-cass-context", false, "Disable CASS context injection")
+	cmd.Flags().IntVar(&contextLimit, "cass-context-limit", 0, "Max past sessions to include")
+	cmd.Flags().IntVar(&contextDays, "cass-context-days", 0, "Look back N days")
+	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to initialize agents with")
 
 	// Register plugin flags
 	configDir := filepath.Dir(config.DefaultPath())
@@ -110,8 +155,10 @@ func newAddCmd() *cobra.Command {
 	return cmd
 }
 
-func runAdd(session string, specs AgentSpecs, pluginMap map[string]plugins.AgentPlugin, personaMap map[string]*persona.Persona) error {
-	totalAgents := specs.TotalCount()
+func runAdd(opts AddOptions) error {
+	totalAgents := opts.Agents.TotalCount()
+	session := opts.Session
+
 	// Helper for JSON error output
 	outputError := func(err error) error {
 		if IsJSONOutput() {
@@ -164,7 +211,7 @@ func runAdd(session string, specs AgentSpecs, pluginMap map[string]plugins.Agent
 	}
 
 	if !IsJSONOutput() {
-		fmt.Printf("Adding %d agent(s) to session '%s'\n", totalAgents, session)
+		fmt.Printf("Adding %d agent(s) to session '%s'...\n", totalAgents, session)
 	}
 
 	// Auto-checkpoint before adding many agents
@@ -225,8 +272,26 @@ func runAdd(session string, specs AgentSpecs, pluginMap map[string]plugins.Agent
 		parseIndex(p.Title)
 	}
 
+	// Resolve CASS context if enabled
+	var cassContext string
+	if !opts.NoCassContext && cfg.CASS.Context.Enabled {
+		query := opts.CassContextQuery
+		if query == "" {
+			query = opts.Prompt // Use prompt if available
+		}
+		// Unlike spawn, we don't have a RecipeName fallback for context here easily
+		// unless we assume context from session name? No, that's risky.
+
+		if query != "" {
+			ctx, err := ResolveCassContext(query, dir)
+			if err == nil {
+				cassContext = ctx
+			}
+		}
+	}
+
 	// Add agents
-	flatAgents := specs.Flatten()
+	flatAgents := opts.Agents.Flatten()
 	ccCount, codCount, gmiCount := 0, 0, 0
 
 	for _, agent := range flatAgents {
@@ -261,7 +326,7 @@ func runAdd(session string, specs AgentSpecs, pluginMap map[string]plugins.Agent
 			agentCmd = cfg.Agents.Gemini
 			gmiCount++
 		default:
-			if p, ok := pluginMap[agentTypeStr]; ok {
+			if p, ok := opts.PluginMap[agentTypeStr]; ok {
 				agentCmd = p.Command
 				envVars = p.Env
 			} else {
@@ -275,8 +340,8 @@ func runAdd(session string, specs AgentSpecs, pluginMap map[string]plugins.Agent
 		// Check if this is a persona agent and prepare system prompt
 		var systemPromptFile string
 		var personaName string
-		if personaMap != nil {
-			if p, ok := personaMap[agent.Model]; ok {
+		if opts.PersonaMap != nil {
+			if p, ok := opts.PersonaMap[agent.Model]; ok {
 				personaName = p.Name
 				// Prepare system prompt file
 				promptFile, err := persona.PrepareSystemPrompt(p, dir)
@@ -354,6 +419,27 @@ func runAdd(session string, specs AgentSpecs, pluginMap map[string]plugins.Agent
 					}
 				}
 			}()
+		}
+
+		// Inject CASS context if available
+		if cassContext != "" {
+			// Wait a bit for agent to start
+			time.Sleep(500 * time.Millisecond)
+			if err := tmux.SendKeys(paneID, cassContext, true); err != nil {
+				if !IsJSONOutput() {
+					fmt.Printf("⚠ Warning: failed to inject context: %v\n", err)
+				}
+			}
+		}
+
+		// Inject user prompt if provided
+		if opts.Prompt != "" {
+			time.Sleep(200 * time.Millisecond)
+			if err := tmux.SendKeys(paneID, opts.Prompt, true); err != nil {
+				if !IsJSONOutput() {
+					fmt.Printf("⚠ Warning: failed to send prompt: %v\n", err)
+				}
+			}
 		}
 
 		// Emit agent_spawn event

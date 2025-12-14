@@ -72,10 +72,12 @@ Examples:
 			}
 			var paneID string
 			var provider string
+			var modelAlias string
 			for _, p := range panes {
 				if p.Index == paneIndex {
 					paneID = p.ID
 					provider = string(p.Type)
+					modelAlias = p.Variant
 					break
 				}
 			}
@@ -101,15 +103,15 @@ Examples:
 				if preserveContext {
 					strategy = "re-auth"
 				}
-				fmt.Printf("Dry run: rotate session=%s pane=%d provider=%s strategy=%s account=%s\n",
-					session, paneIndex, provider, strategy, targetAccount)
+				fmt.Printf("Dry run: rotate session=%s pane=%d provider=%s model=%s strategy=%s account=%s\n",
+					session, paneIndex, provider, modelAlias, strategy, targetAccount)
 				return nil
 			}
 
 			if preserveContext {
 				return executeReauthRotation(session, paneIndex, paneID, provider, time.Duration(timeout)*time.Second)
 			}
-			return executeRestartRotation(session, paneIndex, paneID, provider, targetAccount)
+			return executeRestartRotation(session, paneIndex, paneID, provider, targetAccount, modelAlias)
 		},
 	}
 
@@ -198,6 +200,7 @@ func rotateAllLimited(session, targetAccount string, dryRun bool) error {
 
 	// Batch Rotation Flow
 	orchestrator := auth.NewOrchestrator(cfg)
+	projectDir := cfg.GetProjectDir(session)
 
 	// 1. Terminate all
 	fmt.Println("\nStep 1/3: Terminating sessions...")
@@ -235,7 +238,16 @@ func rotateAllLimited(session, targetAccount string, dryRun bool) error {
 	fmt.Println("\nStep 3/3: Starting new sessions...")
 	for _, p := range limitedPanes {
 		fmt.Printf("  Starting %s...\n", p.Title)
-		if err := orchestrator.StartNewAgentSession(p.ID, string(p.Type)); err != nil {
+		ctx := auth.RestartContext{
+			PaneID:      p.ID,
+			Provider:    string(p.Type),
+			TargetEmail: targetAccount,
+			ModelAlias:  p.Variant,
+			SessionName: session,
+			PaneIndex:   p.Index,
+			ProjectDir:  projectDir,
+		}
+		if err := orchestrator.StartNewAgentSession(ctx); err != nil {
 			fmt.Printf("    Error starting: %v\n", err)
 		}
 	}
@@ -244,9 +256,10 @@ func rotateAllLimited(session, targetAccount string, dryRun bool) error {
 	return nil
 }
 
-func executeRestartRotation(session string, paneIdx int, paneID, provider, targetAccount string) error {
+func executeRestartRotation(session string, paneIdx int, paneID, provider, targetAccount, modelAlias string) error {
 	// Initialize Orchestrator
 	orchestrator := auth.NewOrchestrator(cfg)
+	projectDir := cfg.GetProjectDir(session)
 
 	fmt.Printf("╔════════════════════════════════════════════════════════╗\n")
 	fmt.Printf("║  ACCOUNT ROTATION - Restart Strategy                   ║\n")
@@ -256,43 +269,18 @@ func executeRestartRotation(session string, paneIdx int, paneID, provider, targe
 	fmt.Printf("║  Provider: %-43s ║\n", provider)
 	fmt.Printf("╚════════════════════════════════════════════════════════╝\n\n")
 
-	// Step 1: Terminate session
-	fmt.Println("Step 1/3: Terminating agent session...")
-	if err := orchestrator.TerminateSession(paneID, provider); err != nil {
-		return fmt.Errorf("terminating session: %w", err)
+	ctx := auth.RestartContext{
+		PaneID:      paneID,
+		Provider:    provider,
+		TargetEmail: targetAccount,
+		ModelAlias:  modelAlias,
+		SessionName: session,
+		PaneIndex:   paneIdx,
+		ProjectDir:  projectDir,
 	}
 
-	// Step 2: Wait for shell prompt
-	fmt.Println("Step 2/3: Waiting for shell prompt...")
-	if err := orchestrator.WaitForShellPrompt(paneID, 10*time.Second); err != nil {
-		return fmt.Errorf("session did not terminate cleanly: %w", err)
-	}
-	fmt.Println("  ✓ Session terminated")
-
-	// Step 3: Prompt user for browser auth
-	fmt.Printf("\n")
-	fmt.Printf("╔════════════════════════════════════════════════════════╗\n")
-	fmt.Printf("║  👉 ACTION REQUIRED                                    ║\n")
-	fmt.Printf("╠════════════════════════════════════════════════════════╣\n")
-	fmt.Printf("║  Switch your browser to:                               ║\n")
-	fmt.Printf("║    %s\n", targetAccount)
-	fmt.Printf("║                                                        ║\n")
-	fmt.Printf("║  Then press ENTER to continue...                       ║\n")
-	fmt.Printf("╚════════════════════════════════════════════════════════╝\n")
-
-	// Open browser to Google accounts if configured
-	if cfg != nil && cfg.Rotation.AutoOpenBrowser {
-		openAccountsPage()
-	}
-
-	// Wait for user confirmation
-	reader := bufio.NewReader(os.Stdin)
-	_, _ = reader.ReadString('\n')
-
-	// Step 4: Start new agent session
-	fmt.Println("\nStep 3/3: Starting new agent session...")
-	if err := orchestrator.StartNewAgentSession(paneID, provider); err != nil {
-		return fmt.Errorf("starting new session: %w", err)
+	if err := orchestrator.ExecuteRestartStrategy(ctx); err != nil {
+		return err
 	}
 
 	fmt.Println("\n✓ Rotation complete! New session started.")

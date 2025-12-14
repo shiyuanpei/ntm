@@ -551,7 +551,7 @@ func init() {
 	rootCmd.Flags().IntVar(&robotLines, "lines", 20, "Number of lines to capture (used with --robot-tail)")
 	rootCmd.Flags().StringVar(&robotPanes, "panes", "", "Comma-separated pane indices to filter (used with --robot-tail/--robot-send)")
 	rootCmd.Flags().BoolVar(&robotGraph, "robot-graph", false, "Output bv graph insights as JSON for AI agents")
-	rootCmd.Flags().BoolVar(&robotDashboard, "robot-dashboard", false, "Output dashboard summary as JSON for AI agents")
+	rootCmd.Flags().BoolVar(&robotDashboard, "robot-dashboard", false, "Output dashboard summary as markdown tables (or JSON with --json) for AI agents")
 	rootCmd.Flags().IntVar(&robotBeadLimit, "bead-limit", 5, "Limit for ready/in-progress beads in snapshot (used with --robot-snapshot)")
 
 	// Robot-send flags for batch messaging
