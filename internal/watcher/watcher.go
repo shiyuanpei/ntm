@@ -101,6 +101,7 @@ type Watcher struct {
 
 	mu            sync.Mutex
 	watchedPaths  map[string]bool
+	ignorePaths   []string
 	pendingEvents []Event
 	closed        bool
 }
@@ -185,6 +186,13 @@ func WithRecursive(recursive bool) Option {
 	}
 }
 
+// WithIgnorePaths sets patterns to ignore (matched against file/dir name).
+func WithIgnorePaths(patterns []string) Option {
+	return func(w *Watcher) {
+		w.ignorePaths = patterns
+	}
+}
+
 // WithErrorHandler sets the error handler.
 func WithErrorHandler(handler ErrorHandler) Option {
 	return func(w *Watcher) {
@@ -255,6 +263,17 @@ func (w *Watcher) Add(path string) error {
 	return nil
 }
 
+// isIgnored checks if the path should be ignored.
+func (w *Watcher) isIgnored(path string) bool {
+	name := filepath.Base(path)
+	for _, pattern := range w.ignorePaths {
+		if matched, _ := filepath.Match(pattern, name); matched {
+			return true
+		}
+	}
+	return false
+}
+
 // addRecursive adds a directory and all its subdirectories to the watcher.
 // Must be called with w.mu held.
 func (w *Watcher) addRecursive(root string) error {
@@ -267,6 +286,11 @@ func (w *Watcher) addRecursive(root string) error {
 			return filepath.SkipDir
 		}
 		if d.IsDir() {
+			// Check ignores
+			if w.isIgnored(path) {
+				return filepath.SkipDir
+			}
+
 			if w.watchedPaths[path] {
 				return nil
 			}
@@ -420,6 +444,11 @@ func (w *Watcher) handleEvent(fsEvent fsnotify.Event) {
 
 	// If recursive and a new directory was created, watch it
 	if w.recursive && isDir && eventType&Create != 0 {
+		// Check ignores
+		if w.isIgnored(fsEvent.Name) {
+			return
+		}
+
 		w.mu.Lock()
 		if !w.closed && !w.watchedPaths[fsEvent.Name] {
 			if err := w.fsWatcher.Add(fsEvent.Name); err != nil {

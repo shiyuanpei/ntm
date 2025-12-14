@@ -467,3 +467,66 @@ func TestEventTypeFromFsnotify(t *testing.T) {
 		}
 	}
 }
+
+func TestWatcherIgnorePaths(t *testing.T) {
+	tmpDir := t.TempDir()
+	ignoredDir := filepath.Join(tmpDir, "ignored")
+	if err := os.Mkdir(ignoredDir, 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+
+	var mu sync.Mutex
+	var received []Event
+	eventReceived := make(chan struct{}, 10)
+
+	w, err := New(
+		func(events []Event) {
+			mu.Lock()
+			received = append(received, events...)
+			mu.Unlock()
+			select {
+			case eventReceived <- struct{}{}:
+			default:
+			}
+		},
+		WithRecursive(true),
+		WithIgnorePaths([]string{"ignored"}),
+		WithDebouncer(NewDebouncer(50*time.Millisecond)),
+	)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer w.Close()
+
+	if err := w.Add(tmpDir); err != nil {
+		t.Fatalf("Add() failed: %v", err)
+	}
+
+	// Create file in ignored dir
+	ignoredFile := filepath.Join(ignoredDir, "should_be_ignored.txt")
+	if err := os.WriteFile(ignoredFile, []byte("ignored"), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	// Create file in root (should be detected)
+	rootFile := filepath.Join(tmpDir, "root.txt")
+	if err := os.WriteFile(rootFile, []byte("detected"), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	// Wait for event
+	select {
+	case <-eventReceived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	for _, e := range received {
+		if e.Path == ignoredFile {
+			t.Errorf("received event for ignored file: %s", e.Path)
+		}
+	}
+}
