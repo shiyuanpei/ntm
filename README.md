@@ -475,12 +475,13 @@ ntm upgrade         # Check for and install updates
 
 ### AI Agent Integration (Robot Mode)
 
-NTM provides machine-readable JSON output for integration with AI coding agents and automation pipelines:
+NTM provides machine-readable output for integration with AI coding agents and automation pipelines:
 
 ```bash
 ntm --robot-status    # Output all session info as JSON
 ntm --robot-plan      # Get recommended actions as JSON
 ntm --robot-version   # Version info as JSON
+ntm --robot-dashboard # Dashboard summary as markdown tables (use --json for JSON)
 ntm --robot-help      # Robot mode documentation
 ```
 
@@ -1226,6 +1227,23 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
     mkdir -p .agent-logs
     ntm save "$SESSION" -o .agent-logs 2>/dev/null
 fi
+```
+
+**Pre-commit: Block Conflicting Commits (Agent Mail Guard)**
+
+Install the Agent Mail pre-commit guard so commits fail when you’re about to commit files reserved by other agents:
+
+```bash
+ntm hooks guard install
+
+# Warn-only mode (doesn't block commits)
+export AGENT_MAIL_GUARD_MODE=warn
+```
+
+Remove it later:
+
+```bash
+ntm hooks guard uninstall
 ```
 
 ### Shell Scripts

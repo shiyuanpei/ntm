@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/Dicklesworthstone/ntm/internal/bv"
 	"github.com/Dicklesworthstone/ntm/internal/cass"
 	"github.com/Dicklesworthstone/ntm/internal/history"
 	"github.com/Dicklesworthstone/ntm/internal/status"
@@ -356,6 +357,75 @@ func TestSidebarRendersMetricsAndHistoryPanelsWhenSpaceAllows(t *testing.T) {
 	}
 	if !strings.Contains(out, "Command History") {
 		t.Fatalf("expected sidebar to include history panel title; got:\n%s", out)
+	}
+}
+
+func TestPaneGridRendersEnhancedBadges(t *testing.T) {
+	t.Parallel()
+
+	m := newTestModel(110) // below split threshold, uses grid view
+	m.animTick = 1
+
+	// Configure pane to look like a Claude agent with a model alias.
+	m.panes[0].Type = tmux.AgentClaude
+	m.panes[0].Variant = "opus"
+	m.panes[0].Title = "test__cc_1_opus"
+
+	// Beads + file changes are best-effort enrichments: wire minimal data to show badges.
+	m.beadsSummary = bv.BeadsSummary{
+		Available: true,
+		InProgressList: []bv.BeadInProgress{
+			{ID: "ntm-123", Title: "Do thing", Assignee: m.panes[0].Title},
+		},
+	}
+
+	m.fileChanges = []tracker.RecordedFileChange{
+		{
+			Timestamp: time.Now(),
+			Session:   "test",
+			Agents:    []string{m.panes[0].Title},
+			Change: tracker.FileChange{
+				Path: "/src/main.go",
+				Type: tracker.FileModified,
+			},
+		},
+	}
+
+	m.agentStatuses[m.panes[0].ID] = status.AgentStatus{
+		PaneID:     m.panes[0].ID,
+		PaneName:   m.panes[0].Title,
+		AgentType:  "cc",
+		State:      status.StateWorking,
+		LastActive: time.Now().Add(-1 * time.Minute),
+		LastOutput: "hello world",
+		UpdatedAt:  time.Now(),
+	}
+
+	out := status.StripANSI(m.renderPaneGrid())
+
+	// Model badge
+	if !strings.Contains(out, "opus") {
+		t.Fatalf("expected grid to include model badge; got:\n%s", out)
+	}
+	// Bead badge
+	if !strings.Contains(out, "ntm-123") {
+		t.Fatalf("expected grid to include bead badge; got:\n%s", out)
+	}
+	// File change badge
+	if !strings.Contains(out, "Δ1") {
+		t.Fatalf("expected grid to include file change badge; got:\n%s", out)
+	}
+	// Token velocity badge
+	if !strings.Contains(out, "tpm") {
+		t.Fatalf("expected grid to include token velocity badge; got:\n%s", out)
+	}
+	// Context usage (full bar includes percent)
+	if !strings.Contains(out, "50%") {
+		t.Fatalf("expected grid to include context percent; got:\n%s", out)
+	}
+	// Working spinner frame for animTick=1
+	if !strings.Contains(out, "◓") {
+		t.Fatalf("expected grid to include working spinner; got:\n%s", out)
 	}
 }
 
@@ -1039,12 +1109,12 @@ func TestTruncateRunes(t *testing.T) {
 		want   string
 	}{
 		{"hello", 10, "hello"},
-		{"hello world", 5, "hell…"},  // Uses Unicode ellipsis, keeps maxLen-1 chars
+		{"hello world", 5, "hell…"}, // Uses Unicode ellipsis, keeps maxLen-1 chars
 		{"hi", 10, "hi"},
 		{"", 5, ""},
 		{"日本語テスト", 4, "日本語…"}, // Keeps 3 runes + ellipsis
-		{"ab", 1, "…"},              // maxLen==1 and string is longer returns just ellipsis
-		{"a", 1, "a"},               // string fits, returns unchanged
+		{"ab", 1, "…"},        // maxLen==1 and string is longer returns just ellipsis
+		{"a", 1, "a"},         // string fits, returns unchanged
 	}
 
 	for _, tc := range tests {
