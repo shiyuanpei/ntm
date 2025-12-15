@@ -14,6 +14,7 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/history"
 	"github.com/Dicklesworthstone/ntm/internal/output"
 	"github.com/Dicklesworthstone/ntm/internal/tui/theme"
+	"github.com/Dicklesworthstone/ntm/internal/util"
 )
 
 func newHistoryCmd() *cobra.Command {
@@ -208,7 +209,7 @@ func runHistoryList(limit int, session, since, search, source string) error {
 
 	// Apply time filter
 	if since != "" {
-		duration, parseErr := parseDuration(since)
+		duration, parseErr := util.ParseDuration(since)
 		if parseErr != nil {
 			return fmt.Errorf("invalid --since value: %w", parseErr)
 		}
@@ -363,7 +364,7 @@ func runHistoryClear(force bool, before string) error {
 
 	if before != "" {
 		// Prune old entries
-		duration, err := parseDuration(before)
+		duration, err := util.ParseDuration(before)
 		if err != nil {
 			return fmt.Errorf("invalid --before value: %w", err)
 		}
@@ -548,35 +549,6 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
-}
-
-func parseDuration(s string) (time.Duration, error) {
-	// Support human-friendly formats: 1h, 1d, 1w
-	if len(s) < 2 {
-		return 0, fmt.Errorf("invalid duration: %s", s)
-	}
-
-	unit := s[len(s)-1]
-	value, err := strconv.Atoi(s[:len(s)-1])
-	if err != nil {
-		return 0, err
-	}
-
-	switch unit {
-	case 's':
-		return time.Duration(value) * time.Second, nil
-	case 'm':
-		return time.Duration(value) * time.Minute, nil
-	case 'h':
-		return time.Duration(value) * time.Hour, nil
-	case 'd':
-		return time.Duration(value) * 24 * time.Hour, nil
-	case 'w':
-		return time.Duration(value) * 7 * 24 * time.Hour, nil
-	default:
-		// Try standard Go duration
-		return time.ParseDuration(s)
-	}
 }
 
 func formatBytes(b int64) string {

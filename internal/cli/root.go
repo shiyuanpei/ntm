@@ -16,6 +16,7 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/robot"
 	"github.com/Dicklesworthstone/ntm/internal/startup"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
+	"github.com/Dicklesworthstone/ntm/internal/util"
 )
 
 var (
@@ -242,6 +243,12 @@ Shell Integration:
 
 			// Check if --track flag is set for combined send+ack mode
 			if robotAckTrack {
+				// Parse ack timeout duration
+				ackTimeout, err := util.ParseDurationWithDefault(robotAckTimeout, time.Millisecond, "ack-timeout")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: invalid --ack-timeout: %v\n", err)
+					os.Exit(1)
+				}
 				opts := robot.SendAndAckOptions{
 					SendOptions: robot.SendOptions{
 						Session:    robotSend,
@@ -252,7 +259,7 @@ Shell Integration:
 						Exclude:    excludeList,
 						DelayMs:    robotSendDelay,
 					},
-					AckTimeoutMs: robotAckTimeout,
+					AckTimeoutMs: int(ackTimeout.Milliseconds()),
 					AckPollMs:    robotAckPoll,
 				}
 				if err := robot.PrintSendAndAck(opts); err != nil {
@@ -297,11 +304,17 @@ Shell Integration:
 			if robotPanes != "" {
 				paneFilter = strings.Split(robotPanes, ",")
 			}
+			// Parse ack timeout duration
+			ackTimeout, err := util.ParseDurationWithDefault(robotAckTimeout, time.Millisecond, "ack-timeout")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: invalid --ack-timeout: %v\n", err)
+				os.Exit(1)
+			}
 			opts := robot.AckOptions{
 				Session:   robotAck,
 				Message:   robotSendMsg, // Reuse --msg flag for echo detection
 				Panes:     paneFilter,
-				TimeoutMs: robotAckTimeout,
+				TimeoutMs: int(ackTimeout.Milliseconds()),
 				PollMs:    robotAckPoll,
 			}
 			if err := robot.PrintAck(opts); err != nil {
@@ -321,6 +334,12 @@ Shell Integration:
 			return
 		}
 		if robotSpawn != "" {
+			// Parse spawn timeout duration (expects seconds)
+			spawnTimeout, err := util.ParseDurationWithDefault(robotSpawnTimeout, time.Second, "spawn-timeout")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: invalid --spawn-timeout: %v\n", err)
+				os.Exit(1)
+			}
 			opts := robot.SpawnOptions{
 				Session:      robotSpawn,
 				CCCount:      robotSpawnCC,
@@ -329,7 +348,7 @@ Shell Integration:
 				Preset:       robotSpawnPreset,
 				NoUserPane:   robotSpawnNoUser,
 				WaitReady:    robotSpawnWait,
-				ReadyTimeout: robotSpawnTimeout,
+				ReadyTimeout: int(spawnTimeout.Seconds()),
 			}
 			if err := robot.PrintSpawn(opts, cfg); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -343,6 +362,12 @@ Shell Integration:
 			if robotPanes != "" {
 				paneFilter = strings.Split(robotPanes, ",")
 			}
+			// Parse interrupt timeout duration
+			interruptTimeout, err := util.ParseDurationWithDefault(robotInterruptTimeout, time.Millisecond, "interrupt-timeout")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: invalid --interrupt-timeout: %v\n", err)
+				os.Exit(1)
+			}
 			opts := robot.InterruptOptions{
 				Session:   robotInterrupt,
 				Message:   robotInterruptMsg,
@@ -350,7 +375,7 @@ Shell Integration:
 				All:       robotInterruptAll,
 				Force:     robotInterruptForce,
 				NoWait:    robotInterruptNoWait,
-				TimeoutMs: robotInterruptTimeout,
+				TimeoutMs: int(interruptTimeout.Milliseconds()),
 			}
 			if err := robot.PrintInterrupt(opts); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -483,7 +508,7 @@ var (
 
 	// Robot-ack flags for send confirmation tracking
 	robotAck        string // session name for ack
-	robotAckTimeout int    // timeout in milliseconds
+	robotAckTimeout string // timeout (e.g., "30s", "5000ms")
 	robotAckPoll    int    // poll interval in milliseconds
 	robotAckTrack   bool   // combined send+ack mode
 
@@ -495,7 +520,7 @@ var (
 	robotSpawnPreset  string // recipe/preset name
 	robotSpawnNoUser  bool   // don't create user pane
 	robotSpawnWait    bool   // wait for agents to be ready
-	robotSpawnTimeout int    // timeout for ready detection in seconds
+	robotSpawnTimeout string // timeout for ready detection (e.g., "30s", "1m")
 
 	// Robot-interrupt flags for priority course correction
 	robotInterrupt        string // session name for interrupt
@@ -503,7 +528,7 @@ var (
 	robotInterruptAll     bool   // include all panes (including user)
 	robotInterruptForce   bool   // send Ctrl+C even if agent appears idle
 	robotInterruptNoWait  bool   // don't wait for ready state
-	robotInterruptTimeout int    // timeout for ready state in milliseconds
+	robotInterruptTimeout string // timeout for ready state (e.g., "10s", "5000ms")
 
 	// Robot-terse flag for ultra-compact output
 	robotTerse bool // single-line encoded state
@@ -583,7 +608,7 @@ func init() {
 
 	// Robot-ack flags for send confirmation tracking
 	rootCmd.Flags().StringVar(&robotAck, "robot-ack", "", "Watch panes for acknowledgment after send (JSON output)")
-	rootCmd.Flags().IntVar(&robotAckTimeout, "ack-timeout", 30000, "Timeout in milliseconds for acknowledgment (used with --robot-ack)")
+	rootCmd.Flags().StringVar(&robotAckTimeout, "ack-timeout", "30s", "Timeout for acknowledgment (e.g., 30s, 5000ms) (used with --robot-ack)")
 	rootCmd.Flags().IntVar(&robotAckPoll, "ack-poll", 500, "Poll interval in milliseconds (used with --robot-ack)")
 	rootCmd.Flags().BoolVar(&robotAckTrack, "track", false, "Combined send+ack mode: send message and wait for acknowledgment (used with --robot-send)")
 
@@ -595,7 +620,7 @@ func init() {
 	rootCmd.Flags().StringVar(&robotSpawnPreset, "spawn-preset", "", "Recipe/preset name (used with --robot-spawn)")
 	rootCmd.Flags().BoolVar(&robotSpawnNoUser, "spawn-no-user", false, "Don't create user pane (used with --robot-spawn)")
 	rootCmd.Flags().BoolVar(&robotSpawnWait, "spawn-wait", false, "Wait for agents to be ready (used with --robot-spawn)")
-	rootCmd.Flags().IntVar(&robotSpawnTimeout, "spawn-timeout", 30, "Timeout in seconds for ready detection (used with --robot-spawn)")
+	rootCmd.Flags().StringVar(&robotSpawnTimeout, "spawn-timeout", "30s", "Timeout for ready detection (e.g., 30s, 1m) (used with --robot-spawn)")
 
 	// Robot-interrupt flags for priority course correction
 	rootCmd.Flags().StringVar(&robotInterrupt, "robot-interrupt", "", "Interrupt agents with Ctrl+C and optionally send message (JSON output)")
@@ -603,7 +628,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&robotInterruptAll, "interrupt-all", false, "Include all panes including user (used with --robot-interrupt)")
 	rootCmd.Flags().BoolVar(&robotInterruptForce, "interrupt-force", false, "Send Ctrl+C even if agent appears idle (used with --robot-interrupt)")
 	rootCmd.Flags().BoolVar(&robotInterruptNoWait, "interrupt-no-wait", false, "Don't wait for ready state (used with --robot-interrupt)")
-	rootCmd.Flags().IntVar(&robotInterruptTimeout, "interrupt-timeout", 10000, "Timeout in ms for ready state (used with --robot-interrupt)")
+	rootCmd.Flags().StringVar(&robotInterruptTimeout, "interrupt-timeout", "10s", "Timeout for ready state (e.g., 10s, 5000ms) (used with --robot-interrupt)")
 
 	// Robot-terse flag for ultra-compact output
 	rootCmd.Flags().BoolVar(&robotTerse, "robot-terse", false, "Output ultra-compact single-line state (e.g., S:proj|A:2/3|W:2|I:1|E:0|C:0%|B:R10/I5/B2|M:3|!:1c,2w)")
