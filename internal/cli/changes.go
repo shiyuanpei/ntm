@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -120,10 +121,8 @@ func runChanges(sessionFilter string) error {
 		// Show relative path if possible
 		cwd, _ := os.Getwd()
 		path := c.Change.Path
-		if rel, err := os.Readlink(path); err == nil {
+		if rel, err := filepath.Rel(cwd, path); err == nil {
 			path = rel
-		} else if strings.HasPrefix(path, cwd) {
-			path = path[len(cwd)+1:]
 		}
 
 		fmt.Printf("  %s %-30s  %s%s  %s%s%s\n",

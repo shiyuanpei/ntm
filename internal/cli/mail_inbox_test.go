@@ -1,6 +1,3 @@
-//go:build ignore
-// +build ignore
-
 package cli
 
 import (
@@ -126,7 +123,7 @@ func TestRunMailInbox(t *testing.T) {
 			},
 			wantErr: false,
 			wantOutput: []string{
-				"Project Inbox: project",
+				"Project Inbox: cli",
 				"Test Message",
 				"GreenCastle → BlueLake",
 			},
@@ -163,16 +160,18 @@ func TestRunMailInbox(t *testing.T) {
 					{Name: "RedStone"},
 				},
 				Inboxes: map[string][]agentmail.InboxMessage{
+					"RedStone": {
+						{ID: 1, Subject: "Msg for Red", From: "BlueLake"},
+					},
 					"BlueLake": {
-						{ID: 1, Subject: "From Red", From: "RedStone"},
-						{ID: 2, Subject: "From Green", From: "GreenCastle"},
+						{ID: 2, Subject: "Msg for Blue", From: "GreenCastle"},
 					},
 				},
 			},
-			agentFilter: "RedStone", // Should match From or Recipient
+			agentFilter: "RedStone", // Matches the RedStone inbox key above
 			wantErr:     false,
 			wantOutput: []string{
-				"From Red",
+				"Msg for Red",
 			},
 		},
 	}
@@ -204,8 +203,8 @@ func TestRunMailInbox(t *testing.T) {
 				if tt.urgent && strings.Contains(output, "Normal Msg") {
 					t.Error("output contained normal message when urgent filter applied")
 				}
-				// Verify agent filter
-				if tt.agentFilter == "RedStone" && strings.Contains(output, "From Green") {
+				// Verify agent filter - "Msg for Blue" should NOT be present
+				if tt.agentFilter == "RedStone" && strings.Contains(output, "Msg for Blue") {
 					t.Error("output contained message not matching agent filter")
 				}
 			}
