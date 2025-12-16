@@ -174,7 +174,14 @@ func (m *HistoryPanel) View() string {
 	}
 
 	if len(m.entries) == 0 {
-		content.WriteString("\n" + components.EmptyState("No command history", w-4))
+		content.WriteString("\n" + components.RenderEmptyState(components.EmptyStateOptions{
+			Icon:        components.IconEmpty,
+			Title:       "No command history",
+			Description: "Send prompts to build history",
+			Action:      "Press 's' to send a prompt",
+			Width:       w - 4,
+			Centered:    true,
+		}))
 		// Ensure stable height to prevent layout jitter
 		return boxStyle.Render(FitToHeight(content.String(), h-4))
 	}

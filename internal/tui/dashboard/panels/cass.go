@@ -173,7 +173,13 @@ func (m *CASSPanel) View() string {
 	}
 
 	if len(m.hits) == 0 {
-		content.WriteString("\n" + components.EmptyState("No matches", w-4))
+		content.WriteString("\n" + components.RenderEmptyState(components.EmptyStateOptions{
+			Icon:        components.IconWaiting,
+			Title:       "No context found",
+			Description: "Relevant history will appear here",
+			Width:       w - 4,
+			Centered:    true,
+		}))
 		// Ensure stable height to prevent layout jitter
 		return boxStyle.Render(FitToHeight(content.String(), h-4))
 	}

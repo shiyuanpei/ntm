@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Dicklesworthstone/ntm/internal/alerts"
+	"github.com/Dicklesworthstone/ntm/internal/tui/components"
 	"github.com/Dicklesworthstone/ntm/internal/tui/layout"
 	"github.com/Dicklesworthstone/ntm/internal/tui/styles"
 	"github.com/Dicklesworthstone/ntm/internal/tui/theme"
@@ -181,8 +182,13 @@ func (m *AlertsPanel) View() string {
 	}
 
 	if len(m.alerts) == 0 && m.err == nil {
-		content.WriteString("\n  " + lipgloss.NewStyle().Foreground(t.Green).Render("✓ System Healthy") + "\n")
-		content.WriteString("  " + lipgloss.NewStyle().Foreground(t.Subtext).Render("No active alerts") + "\n")
+		content.WriteString("\n" + components.RenderEmptyState(components.EmptyStateOptions{
+			Icon:        components.IconSuccess,
+			Title:       "All clear",
+			Description: "No alerts to display",
+			Width:       w,
+			Centered:    true,
+		}))
 		// Ensure stable height to prevent layout jitter
 		return FitToHeight(content.String(), h)
 	} else if len(m.alerts) == 0 {

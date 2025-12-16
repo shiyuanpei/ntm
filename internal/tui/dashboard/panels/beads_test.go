@@ -274,8 +274,8 @@ func TestBeadsPanelViewUnavailableWithReason(t *testing.T) {
 	view := panel.View()
 
 	// "bv not installed" should show as empty/not initialized state
-	if !strings.Contains(view, "Not initialized") {
-		t.Error("expected view to contain 'Not initialized' for bv not installed case")
+	if !strings.Contains(view, "Beads not initialized") {
+		t.Error("expected view to contain 'Beads not initialized' for bv not installed case")
 	}
 
 	// Test actual error case - should show error with refresh hint

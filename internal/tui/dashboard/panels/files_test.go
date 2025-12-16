@@ -145,8 +145,8 @@ func TestFilesPanelViewNoChanges(t *testing.T) {
 		t.Error("expected non-empty view")
 	}
 
-	if !strings.Contains(view, "No file changes") {
-		t.Error("expected 'No file changes' in view")
+	if !strings.Contains(view, "No recent changes") {
+		t.Error("expected 'No recent changes' in view")
 	}
 }
 

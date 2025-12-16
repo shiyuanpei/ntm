@@ -152,7 +152,13 @@ func (m *MetricsPanel) View() string {
 
 	// Empty state: no agents
 	if m.data.TotalTokens == 0 && len(m.data.Agents) == 0 && m.err == nil {
-		content.WriteString("\n" + components.EmptyState("No metrics yet", w-4))
+		content.WriteString("\n" + components.RenderEmptyState(components.EmptyStateOptions{
+			Icon:        components.IconWaiting,
+			Title:       "No metrics yet",
+			Description: "Data appears when agents start",
+			Width:       w - 4,
+			Centered:    true,
+		}))
 		// Ensure stable height to prevent layout jitter
 		return boxStyle.Render(FitToHeight(content.String(), h-4))
 	}

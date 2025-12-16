@@ -144,7 +144,14 @@ func (m *BeadsPanel) View() string {
 				strings.Contains(reason, "bd not installed")
 			if isNotInitialized {
 				// Show subtle "not initialized" message instead of error
-				content.WriteString(components.EmptyState("Not initialized (run 'bd init')", w) + "\n")
+				content.WriteString(components.RenderEmptyState(components.EmptyStateOptions{
+					Icon:        components.IconExternal,
+					Title:       "Beads not initialized",
+					Description: "Run 'bd init' in your project",
+					Action:      "to enable issue tracking",
+					Width:       w,
+					Centered:    true,
+				}) + "\n")
 			} else {
 				// Actual error - show with refresh hint
 				truncReason := layout.TruncateRunes(reason, w-6, "…")

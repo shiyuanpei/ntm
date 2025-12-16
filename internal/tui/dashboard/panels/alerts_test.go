@@ -124,11 +124,11 @@ func TestAlertsPanelViewNoAlerts(t *testing.T) {
 
 	view := panel.View()
 
-	if !strings.Contains(view, "System Healthy") {
-		t.Error("expected view to contain 'System Healthy' when no alerts")
+	if !strings.Contains(view, "All clear") {
+		t.Error("expected view to contain 'All clear' when no alerts")
 	}
-	if !strings.Contains(view, "No active alerts") {
-		t.Error("expected view to contain 'No active alerts' when no alerts")
+	if !strings.Contains(view, "No alerts to display") {
+		t.Error("expected view to contain 'No alerts to display' when no alerts")
 	}
 }
 

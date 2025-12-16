@@ -1672,7 +1672,13 @@ func (m Model) View() string {
 			}
 			b.WriteString(components.LoadingState(message, stateWidth) + "\n")
 		} else {
-			b.WriteString(components.EmptyState("No panes found in session", stateWidth) + "\n")
+			b.WriteString(components.RenderEmptyState(components.EmptyStateOptions{
+				Icon:        components.IconEmpty,
+				Title:       "No panes found",
+				Description: "Session has no active panes",
+				Width:       stateWidth,
+				Centered:    true,
+			}) + "\n")
 		}
 	} else {
 		if m.err != nil {

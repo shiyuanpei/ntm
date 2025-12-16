@@ -249,7 +249,13 @@ func (m *FilesPanel) View() string {
 	content.WriteString(statsStyle.Render(stats) + "\n")
 
 	if len(m.changes) == 0 {
-		content.WriteString("\n" + components.EmptyState("No file changes", w-4))
+		content.WriteString("\n" + components.RenderEmptyState(components.EmptyStateOptions{
+			Icon:        components.IconEmpty,
+			Title:       "No recent changes",
+			Description: "File changes will appear here",
+			Width:       w - 4,
+			Centered:    true,
+		}))
 		// Ensure stable height to prevent layout jitter
 		return boxStyle.Render(FitToHeight(content.String(), h-4))
 	}

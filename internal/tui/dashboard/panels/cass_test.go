@@ -118,8 +118,8 @@ func TestCASSPanelViewNoHits(t *testing.T) {
 	if view == "" {
 		t.Fatal("expected non-empty view")
 	}
-	if !strings.Contains(view, "No matches") {
-		t.Error("expected 'No matches' in view")
+	if !strings.Contains(view, "No context found") {
+		t.Error("expected 'No context found' in view")
 	}
 }
 

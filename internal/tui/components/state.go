@@ -18,6 +18,128 @@ const (
 	StateError
 )
 
+// EmptyStateIcon represents contextual icons for empty states.
+type EmptyStateIcon string
+
+const (
+	// IconWaiting indicates data not yet available (◎)
+	IconWaiting EmptyStateIcon = "waiting"
+	// IconEmpty indicates checked but nothing found (○)
+	IconEmpty EmptyStateIcon = "empty"
+	// IconExternal indicates needs external action (◇)
+	IconExternal EmptyStateIcon = "external"
+	// IconSuccess indicates empty is good state (✓)
+	IconSuccess EmptyStateIcon = "success"
+	// IconUnknown indicates couldn't determine (?)
+	IconUnknown EmptyStateIcon = "unknown"
+)
+
+// EmptyStateOptions configures enhanced empty state rendering.
+type EmptyStateOptions struct {
+	Icon        EmptyStateIcon // Contextual icon type
+	Title       string         // Primary message (required)
+	Description string         // Explanatory text (optional)
+	Action      string         // Suggested action (optional)
+	Width       int            // Available width
+	Centered    bool           // Center in container (default: true)
+}
+
+// resolveEmptyIcon returns the appropriate icon string for an EmptyStateIcon.
+func resolveEmptyIcon(icon EmptyStateIcon) string {
+	ic := icons.Current()
+	switch icon {
+	case IconWaiting:
+		return ic.Target // ◎
+	case IconEmpty:
+		return ic.Circle // ○
+	case IconExternal:
+		return ic.Session // ◆ (diamond-like)
+	case IconSuccess:
+		return ic.Check // ✓
+	case IconUnknown:
+		return ic.Question // ?
+	default:
+		return ic.Info // fallback
+	}
+}
+
+// RenderEmptyState renders an enhanced multi-line empty state.
+// Format:
+//
+//	       ◎
+//	  No metrics yet
+//
+//	Data will appear when
+//	 agents start working
+func RenderEmptyState(opts EmptyStateOptions) string {
+	t := theme.Current()
+
+	// Resolve icon
+	icon := resolveEmptyIcon(opts.Icon)
+
+	// Styles
+	iconStyle := lipgloss.NewStyle().Foreground(t.Overlay)
+	titleStyle := lipgloss.NewStyle().Foreground(t.Subtext).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(t.Overlay).Italic(true)
+	actionStyle := lipgloss.NewStyle().Foreground(t.Blue).Italic(true)
+
+	// Special styling for success state
+	if opts.Icon == IconSuccess {
+		iconStyle = iconStyle.Foreground(t.Green)
+		titleStyle = titleStyle.Foreground(t.Green)
+	}
+
+	var lines []string
+
+	// Icon line
+	lines = append(lines, iconStyle.Render(icon))
+
+	// Title line
+	title := opts.Title
+	if title == "" {
+		title = "Nothing to show"
+	}
+	lines = append(lines, titleStyle.Render(title))
+
+	// Description line (if provided)
+	if opts.Description != "" {
+		lines = append(lines, "") // blank line before description
+		// Word wrap description if needed
+		desc := opts.Description
+		if opts.Width > 0 && len(desc) > opts.Width-4 {
+			desc = layout.TruncateRunes(desc, opts.Width-4, "…")
+		}
+		lines = append(lines, descStyle.Render(desc))
+	}
+
+	// Action line (if provided)
+	if opts.Action != "" {
+		action := opts.Action
+		if opts.Width > 0 && len(action) > opts.Width-4 {
+			action = layout.TruncateRunes(action, opts.Width-4, "…")
+		}
+		lines = append(lines, actionStyle.Render(action))
+	}
+
+	content := strings.Join(lines, "\n")
+
+	// Center if requested (default behavior)
+	centered := opts.Centered
+	if !centered && opts.Width > 0 {
+		// Left-aligned with some padding
+		return lipgloss.NewStyle().PaddingLeft(2).Render(content)
+	}
+
+	if opts.Width > 0 {
+		return lipgloss.NewStyle().
+			Width(opts.Width).
+			Align(lipgloss.Center).
+			Render(content)
+	}
+
+	return content
+}
+
 type StateOptions struct {
 	Kind    StateKind
 	Icon    string
