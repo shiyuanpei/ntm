@@ -486,6 +486,66 @@ func TestSendInterrupt(t *testing.T) {
 	}
 }
 
+func TestSendKeysMultiByteChunking(t *testing.T) {
+	skipIfNoTmux(t)
+
+	session := createTestSession(t)
+	panes, _ := GetPanes(session)
+	target := panes[0].ID
+
+	// Create a payload larger than 4096 bytes with multi-byte characters.
+	// '€' is 3 bytes (0xE2 0x82 0xAC).
+	const numChars = 2000
+	payload := strings.Repeat("€", numChars)
+
+	// Use 'cat' to echo back input, avoiding shell line-editor limits (readline/zle)
+	// which might choke on 6000+ byte lines or drop characters when flooded.
+	if err := SendKeys(target, "cat", true); err != nil {
+		t.Fatalf("Failed to start cat: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	// Send the payload
+	if err := SendKeys(target, payload, false); err != nil {
+		t.Fatalf("SendKeys failed: %v", err)
+	}
+	// Send EOF to cat
+	if err := SendKeys(target, "", true); err != nil { // Enter to ensure newline
+		t.Fatalf("Failed to send newline: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if err := SendInterrupt(target); err != nil {
+		t.Fatalf("Failed to interrupt cat: %v", err)
+	}
+
+	// Capture output
+	output, err := CapturePaneOutput(target, 500) // Increase capture lines
+	if err != nil {
+		t.Fatalf("CapturePaneOutput failed: %v", err)
+	}
+
+	// Analysis:
+	// If the fix works, we should NOT see UTF-8 replacement characters ().
+	// If the fix failed, naive splitting would break the multi-byte char '€'
+	// resulting in invalid UTF-8 sequences which are typically rendered as .
+	replacementCount := strings.Count(output, "\ufffd")
+	if replacementCount > 0 {
+		t.Errorf("Found %d UTF-8 replacement characters (), confirming corruption.", replacementCount)
+	}
+
+	// Due to shell/tmux buffer limits/rate-limiting, we might not get the full 6000 chars echoed back
+	// in a short test window. But we should get a significant amount (at least the first chunk).
+	// And crucially, it should be valid UTF-8 (no replacement chars).
+	if len(output) < 100 {
+		t.Errorf("Captured output too short: %d bytes", len(output))
+	}
+
+	// Verify we see our payload characters
+	if !strings.Contains(output, "€€€") {
+		t.Error("Output does not contain payload characters")
+	}
+}
+
 // ============== Output Capture Tests ==============
 
 func TestCapturePaneOutput(t *testing.T) {

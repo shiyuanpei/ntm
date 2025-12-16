@@ -20,8 +20,7 @@ import (
 //	session__cc_1
 //	session__cc_1[frontend]
 //	session__cc_1_opus[backend,api]
-//  session__custom-agent_1  (plugins can have dashes)
-var paneNameRegex = regexp.MustCompile(`^.+__([\w-]+)_\d+(?:_([A-Za-z0-9._/@:+-]+))?(?:\[([^\]]*)\])?$`)
+var paneNameRegex = regexp.MustCompile(`^.+__(\w+)_\d+(?:_([A-Za-z0-9._/@:+-]+))?(?:\[([^\]]*)\])?$`)
 
 // AgentType represents the type of AI agent
 type AgentType string
@@ -143,7 +142,7 @@ func SessionExists(name string) bool {
 
 // ListSessions returns all tmux sessions
 func (c *Client) ListSessions() ([]Session, error) {
-	sep := "|||||"
+	sep := "|===|"
 	format := fmt.Sprintf("#{session_name}%[1]s#{session_windows}%[1]s#{session_attached}%[1]s#{session_created_string}", sep)
 	output, err := c.Run("list-sessions", "-F", format)
 	if err != nil {
@@ -195,7 +194,7 @@ func (c *Client) GetSession(name string) (*Session, error) {
 	}
 
 	// Get session info
-	sep := "|||||"
+	sep := "|===|"
 	format := fmt.Sprintf("#{session_name}%[1]s#{session_windows}%[1]s#{session_attached}", sep)
 	output, err := c.Run("list-sessions", "-F", format, "-f", fmt.Sprintf("#{==:#{session_name},%s}", name))
 	if err != nil {
@@ -248,7 +247,7 @@ func (c *Client) GetPanes(session string) ([]Pane, error) {
 
 // GetPanesContext returns all panes in a session with cancellation support.
 func (c *Client) GetPanesContext(ctx context.Context, session string) ([]Pane, error) {
-	sep := "|||||"
+	sep := "|===|"
 	format := fmt.Sprintf("#{pane_id}%[1]s#{pane_index}%[1]s#{pane_title}%[1]s#{pane_current_command}%[1]s#{pane_width}%[1]s#{pane_height}%[1]s#{pane_active}", sep)
 	output, err := c.RunContext(ctx, "list-panes", "-s", "-t", session, "-F", format)
 	if err != nil {
@@ -299,61 +298,6 @@ func GetPanes(session string) ([]Pane, error) {
 // GetPanesContext returns all panes in a session with cancellation support (default client).
 func GetPanesContext(ctx context.Context, session string) ([]Pane, error) {
 	return DefaultClient.GetPanesContext(ctx, session)
-}
-
-// GetAllPanes returns all panes across all sessions grouped by session name
-func (c *Client) GetAllPanes() (map[string][]Pane, error) {
-	return c.GetAllPanesContext(context.Background())
-}
-
-// GetAllPanesContext returns all panes across all sessions with cancellation support.
-func (c *Client) GetAllPanesContext(ctx context.Context) (map[string][]Pane, error) {
-	sep := "|||||"
-	format := fmt.Sprintf("#{session_name}%[1]s#{pane_id}%[1]s#{pane_index}%[1]s#{pane_title}%[1]s#{pane_current_command}%[1]s#{pane_width}%[1]s#{pane_height}%[1]s#{pane_active}", sep)
-	output, err := c.RunContext(ctx, "list-panes", "-a", "-F", format)
-	if err != nil {
-		return nil, err
-	}
-
-	sessions := make(map[string][]Pane)
-	for _, line := range strings.Split(output, "\n") {
-		if line == "" {
-			continue
-		}
-
-		parts := strings.Split(line, sep)
-		if len(parts) < 8 {
-			continue
-		}
-
-		sessionName := parts[0]
-		index, _ := strconv.Atoi(parts[2])
-		width, _ := strconv.Atoi(parts[5])
-		height, _ := strconv.Atoi(parts[6])
-		active := parts[7] == "1"
-
-		pane := Pane{
-			ID:      parts[1],
-			Index:   index,
-			Title:   parts[3],
-			Command: parts[4],
-			Width:   width,
-			Height:  height,
-			Active:  active,
-		}
-
-		// Parse pane title using regex to extract type, variant, and tags
-		pane.Type, pane.Variant, pane.Tags = parseAgentFromTitle(pane.Title)
-
-		sessions[sessionName] = append(sessions[sessionName], pane)
-	}
-
-	return sessions, nil
-}
-
-// GetAllPanes returns all panes across all sessions (default client)
-func GetAllPanes() (map[string][]Pane, error) {
-	return DefaultClient.GetAllPanes()
 }
 
 // GetFirstWindow returns the first window index for a session
@@ -616,32 +560,20 @@ func (c *Client) SendKeys(target, keys string, enter bool) error {
 			return err
 		}
 	} else {
-		// Iterate through the string, chunking by bytes but respecting rune boundaries
 		start := 0
 		for start < len(keys) {
 			end := start + chunkSize
-			if end > len(keys) {
+			if end >= len(keys) {
 				end = len(keys)
 			} else {
-				// If we are cutting in the middle of a string, ensure we don't split a utf8 character.
-				// We back up from 'end' until we find the start of a valid utf8 sequence or hit 'start'.
-				// However, a simpler way in Go is to verify if keys[start:end] is valid,
-				// or just check the rune starting at 'end'.
-				// If keys[end] is a continuation byte (top two bits are 10xxxxxx), back up.
-				// UTF-8 continuation bytes are 0x80-0xBF (10000000-10111111).
-				if end < len(keys) {
-					for end > start && (keys[end]&0xC0 == 0x80) {
-						end--
-					}
+				// Backtrack end until it hits a rune start to avoid splitting multi-byte characters
+				for end > start && !utf8.RuneStart(keys[end]) {
+					end--
 				}
-			}
-
-			// Safety: if end == start after backing up, we must advance to include
-			// at least one complete UTF-8 character to avoid an infinite loop.
-			// This can happen if chunkSize is smaller than a UTF-8 character (max 4 bytes).
-			if end == start && start < len(keys) {
-				_, size := utf8.DecodeRuneInString(keys[start:])
-				end = start + size
+				// If we backtracked all the way (single char > chunkSize?), just split at chunk size
+				if end == start {
+					end = start + chunkSize
+				}
 			}
 
 			chunk := keys[start:end]
@@ -650,32 +582,6 @@ func (c *Client) SendKeys(target, keys string, enter bool) error {
 			}
 			start = end
 		}
-	}
-
-	if enter {
-		return c.RunSilent("send-keys", "-t", target, "C-m")
-	}
-	return nil
-}
-
-// PasteKeys sends keys to a pane wrapped in bracketed paste sequences.
-// This ensures multiline text is pasted as a single block without triggering execution.
-func (c *Client) PasteKeys(target, keys string, enter bool) error {
-	// Start bracketed paste: \e[200~
-	// We send "Escape" key then literal "[200~"
-	if err := c.RunSilent("send-keys", "-t", target, "Escape", "[200~"); err != nil {
-		return err
-	}
-
-	// Send content literally using SendKeys (reusing its chunking logic)
-	// We pass false for enter because we handle it at the end
-	if err := c.SendKeys(target, keys, false); err != nil {
-		return err
-	}
-
-	// End bracketed paste: \e[201~
-	if err := c.RunSilent("send-keys", "-t", target, "Escape", "[201~"); err != nil {
-		return err
 	}
 
 	if enter {
@@ -696,11 +602,6 @@ func FormatPaneName(session string, agentType string, index int, variant string)
 // SendKeys sends keys to a pane (default client)
 func SendKeys(target, keys string, enter bool) error {
 	return DefaultClient.SendKeys(target, keys, enter)
-}
-
-// PasteKeys sends keys to a pane wrapped in bracketed paste sequences (default client).
-func PasteKeys(target, keys string, enter bool) error {
-	return DefaultClient.PasteKeys(target, keys, enter)
 }
 
 // SendInterrupt sends Ctrl+C to a pane
@@ -954,7 +855,7 @@ type PaneActivity struct {
 
 // GetPanesWithActivityContext returns all panes in a session with their activity times with cancellation support.
 func (c *Client) GetPanesWithActivityContext(ctx context.Context, session string) ([]PaneActivity, error) {
-	sep := "|||||"
+	sep := "|===|"
 	format := fmt.Sprintf("#{pane_id}%[1]s#{pane_index}%[1]s#{pane_title}%[1]s#{pane_current_command}%[1]s#{pane_width}%[1]s#{pane_height}%[1]s#{pane_active}%[1]s#{pane_last_activity}", sep)
 	output, err := c.RunContext(ctx, "list-panes", "-s", "-t", session, "-F", format)
 	if err != nil {
