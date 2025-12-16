@@ -6,7 +6,8 @@ import (
 )
 
 // ansiEscapeRegex matches ANSI escape sequences for stripping
-var ansiEscapeRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+// Includes CSI sequences (with private mode ?) and OSC sequences (title setting etc)
+var ansiEscapeRegex = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\a\x1b]*(\a|\x1b\\)`)
 
 // PromptPattern defines a pattern for detecting idle state
 type PromptPattern struct {
