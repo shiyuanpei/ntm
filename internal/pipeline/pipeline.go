@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Dicklesworthstone/ntm/internal/status"
@@ -25,6 +26,7 @@ type Pipeline struct {
 // Execute runs the pipeline stages sequentially
 func Execute(ctx context.Context, p Pipeline) error {
 	var previousOutput string
+	var lastPaneID string
 
 	detector := status.NewDetector()
 
@@ -37,10 +39,24 @@ func Execute(ctx context.Context, p Pipeline) error {
 			return fmt.Errorf("stage %d failed: %w", i+1, err)
 		}
 
+		// Capture state BEFORE sending prompt to isolate the new response later
+		beforeOutput, err := tmux.CapturePaneOutput(paneID, 2000)
+		if err != nil {
+			// Non-fatal, just means we might capture too much context
+			beforeOutput = ""
+		}
+
 		// 2. Prepare prompt
 		prompt := stage.Prompt
 		if previousOutput != "" {
-			prompt = fmt.Sprintf("%s\n\nResult from previous stage:\n%s", prompt, previousOutput)
+			if paneID == lastPaneID {
+				// Same agent, context is already in the pane history.
+				// Add a reference to the previous output instead of duplicating it.
+				prompt = fmt.Sprintf("%s\n\n(See previous output above)", prompt)
+			} else {
+				// Different agent, inject the output from the previous stage
+				prompt = fmt.Sprintf("%s\n\nResult from previous stage:\n%s", prompt, previousOutput)
+			}
 		}
 
 		// 3. Send prompt
@@ -61,14 +77,60 @@ func Execute(ctx context.Context, p Pipeline) error {
 		// 6. Capture output
 		// We capture a larger buffer to ensure we get the full response.
 		// 2000 lines should cover most responses without being excessive.
-		output, err := tmux.CapturePaneOutput(paneID, 2000)
+		afterOutput, err := tmux.CapturePaneOutput(paneID, 2000)
 		if err != nil {
 			return fmt.Errorf("stage %d capturing output: %w", i+1, err)
 		}
+
+		// Extract only the new content
+		output := extractNewOutput(beforeOutput, afterOutput)
 		previousOutput = output
+		lastPaneID = paneID
 	}
 
 	return nil
+}
+
+// extractNewOutput isolates the text added to the pane after the before state.
+func extractNewOutput(before, after string) string {
+	if before == "" {
+		return after
+	}
+	if after == "" {
+		return ""
+	}
+
+	// Simple suffix check: if 'after' ends with 'before' (unlikely as new text is appended),
+	// or 'after' starts with 'before' (likely).
+	if len(after) >= len(before) && after[:len(before)] == before {
+		return after[len(before):]
+	}
+
+	// If history scrolled (before is not a strict prefix), try to overlap.
+	// Find the longest suffix of 'before' that matches a prefix of 'after'.
+	// This is O(N^2) in worst case but N=2000 chars/lines is small.
+	// Optimization: limit search window.
+	
+	// Actually, tmux capture is usually stable. If buffer shifted, 'before' start is gone.
+	// But 'after' should contain the tail of 'before'.
+	// Find where 'before' ends inside 'after'.
+	
+	// Heuristic: take the last 100 chars of 'before' and find them in 'after'.
+	const overlapSize = 100
+	if len(before) > overlapSize {
+		tail := before[len(before)-overlapSize:]
+		if idx := strings.Index(after, tail); idx != -1 {
+			// Found the overlap point
+			return after[idx+len(tail):]
+		}
+	} else {
+		if idx := strings.Index(after, before); idx != -1 {
+			return after[idx+len(before):]
+		}
+	}
+
+	// Fallback: return everything if we can't match (better than nothing)
+	return after
 }
 
 func findPaneForStage(session, agentType, model string) (string, error) {

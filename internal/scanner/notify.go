@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -20,7 +21,7 @@ func NotifyScanResults(ctx context.Context, result *ScanResult, projectKey strin
 	reservations, err := client.ListReservations(ctx, projectKey, "", true)
 	if err != nil {
 		// Log error but continue with summary
-		fmt.Printf("Warning: failed to fetch reservations: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: failed to fetch reservations: %v\n", err)
 	}
 
 	// Group findings by file
