@@ -132,13 +132,16 @@ func (m *HistoryPanel) View() string {
 	w, h := m.Width(), m.Height()
 
 	borderColor := t.Surface1
+	bgColor := t.Base
 	if m.IsFocused() {
 		borderColor = t.Primary
+		bgColor = t.Surface0 // Subtle tint for focused panel
 	}
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
+		Background(bgColor).
 		Width(w-2).
 		Height(h-2).
 		Padding(0, 1)

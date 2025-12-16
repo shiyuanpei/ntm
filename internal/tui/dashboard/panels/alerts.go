@@ -143,9 +143,17 @@ func (m *AlertsPanel) View() string {
 	tick := int((now.UnixMilli() / 100) % 10_000)
 
 	borderColor := t.Surface1
+	bgColor := t.Base
 	if m.IsFocused() {
 		borderColor = t.Pink
+		bgColor = t.Surface0 // Subtle tint for focused panel
 	}
+
+	// Create box style for background tint
+	boxStyle := lipgloss.NewStyle().
+		Background(bgColor).
+		Width(w).
+		Height(h)
 
 	// Build header with error badge if needed
 	title := m.Config().Title
@@ -190,10 +198,10 @@ func (m *AlertsPanel) View() string {
 			Centered:    true,
 		}))
 		// Ensure stable height to prevent layout jitter
-		return FitToHeight(content.String(), h)
+		return boxStyle.Render(FitToHeight(content.String(), h))
 	} else if len(m.alerts) == 0 {
 		// Ensure stable height to prevent layout jitter
-		return FitToHeight(content.String(), h)
+		return boxStyle.Render(FitToHeight(content.String(), h))
 	}
 
 	// Group by severity
@@ -252,5 +260,5 @@ func (m *AlertsPanel) View() string {
 	}
 
 	// Ensure stable height to prevent layout jitter
-	return FitToHeight(content.String(), h)
+	return boxStyle.Render(FitToHeight(content.String(), h))
 }

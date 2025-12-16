@@ -98,9 +98,17 @@ func (m *BeadsPanel) View() string {
 	}
 
 	borderColor := t.Surface1
+	bgColor := t.Base
 	if m.IsFocused() {
 		borderColor = t.Pink
+		bgColor = t.Surface0 // Subtle tint for focused panel
 	}
+
+	// Create box style for background tint
+	boxStyle := lipgloss.NewStyle().
+		Background(bgColor).
+		Width(w).
+		Height(h)
 
 	// Build header with error badge if needed
 	title := m.Config().Title
@@ -158,7 +166,7 @@ func (m *BeadsPanel) View() string {
 				content.WriteString(components.ErrorState(truncReason, "Press r to refresh", w) + "\n")
 			}
 		}
-		return content.String()
+		return boxStyle.Render(FitToHeight(content.String(), h))
 	}
 
 	// Stats row
@@ -238,5 +246,5 @@ func (m *BeadsPanel) View() string {
 	}
 
 	// Ensure stable height to prevent layout jitter
-	return FitToHeight(content.String(), h)
+	return boxStyle.Render(FitToHeight(content.String(), h))
 }
