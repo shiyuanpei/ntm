@@ -2502,6 +2502,9 @@ func (m Model) renderHeaderContextLine(width int) string {
 	if m.refreshPaused {
 		parts = append(parts, "paused")
 	}
+	if m.scanDisabled {
+		parts = append(parts, "scan off")
+	}
 
 	line := strings.Join(parts, " · ")
 	line = truncateRunes(line, width-4)
