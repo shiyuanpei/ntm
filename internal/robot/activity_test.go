@@ -1340,7 +1340,7 @@ func TestClassifyState_ErrorTakesPriority(t *testing.T) {
 	}
 }
 
-func TestApplyHysteresis_SameStateResetssPending(t *testing.T) {
+func TestApplyHysteresis_SameStateResetsPending(t *testing.T) {
 	t.Parallel()
 
 	sc := NewStateClassifier("test", &ClassifierConfig{
@@ -1753,10 +1753,14 @@ func TestClassifyStateVelocityBoundaries(t *testing.T) {
 	sc := NewStateClassifier("test", nil)
 
 	// Test exactly at VelocityHighThreshold
-	state, _, _ := sc.classifyState(VelocityHighThreshold, nil)
-	if state != StateUnknown {
-		// At boundary (not above), should not be high velocity generating
-		// Actually testing > not >=, so at exactly threshold it's not high
+	// At boundary: 10.0 > 10.0 is false, but 10.0 > 2.0 (medium) is true
+	// So it's GENERATING but via medium threshold (0.70 conf, not 0.85)
+	state, conf, _ := sc.classifyState(VelocityHighThreshold, nil)
+	if state != StateGenerating {
+		t.Errorf("at exact high threshold, expected GENERATING via medium path, got %s", state)
+	}
+	if conf != 0.70 {
+		t.Errorf("at exact high threshold, expected 0.70 confidence (medium), got %f", conf)
 	}
 
 	// Test just above VelocityHighThreshold
@@ -1766,8 +1770,11 @@ func TestClassifyStateVelocityBoundaries(t *testing.T) {
 	}
 
 	// Test exactly at VelocityMediumThreshold
-	state, _, _ = sc.classifyState(VelocityMediumThreshold, nil)
 	// At exactly medium, should not be generating (need > not >=)
+	state, _, _ = sc.classifyState(VelocityMediumThreshold, nil)
+	if state == StateGenerating {
+		t.Errorf("at exact medium threshold, should not be GENERATING (uses > not >=), got %s", state)
+	}
 
 	// Test just above VelocityMediumThreshold
 	state, _, _ = sc.classifyState(VelocityMediumThreshold+0.1, nil)
@@ -1784,8 +1791,11 @@ func TestClassifyStateIdleAtBoundary(t *testing.T) {
 	// Idle prompt pattern with velocity exactly at idle threshold
 	matches := []PatternMatch{{Pattern: "claude_prompt", Category: CategoryIdle}}
 
+	// At boundary, should not be waiting (uses < not <=)
 	state, _, _ := sc.classifyState(VelocityIdleThreshold, nil)
-	// At boundary, should be unknown (not below threshold)
+	if state == StateWaiting {
+		t.Errorf("at exact idle threshold without prompt, should not be WAITING (uses < not <=), got %s", state)
+	}
 
 	// With idle prompt and below threshold
 	state, _, _ = sc.classifyState(VelocityIdleThreshold-0.1, matches)
