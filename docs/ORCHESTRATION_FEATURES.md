@@ -1028,17 +1028,157 @@ ntm --robot-pipeline-cancel=run-abc123
 
 ---
 
+## Feature 7: Thundering Herd Prevention
+
+### Problem Statement
+
+When multiple agents spawn simultaneously and self-select work via `bv --robot-triage` or `bd ready`, they race to claim the same beads:
+
+```
+T=0:    Agent1, Agent2, Agent3 all spawn
+T=30s:  All finish reading codebase
+T=35s:  All run `bv --robot-triage`
+T=36s:  All see "ntm-g2lq" as top recommendation
+T=37s:  All start working on ntm-g2lq
+Result: Duplicate work, file conflicts, wasted tokens
+```
+
+The race window between `bd ready` (read) and `bd update --status in_progress` (write) has no atomicity.
+
+### Solution: Staggered Spawn
+
+Introduce configurable delay between agents starting their work selection:
+
+```bash
+# Spawn 3 agents with 90s stagger between prompts
+ntm spawn myproject --cc 3 --stagger
+
+# Custom stagger duration
+ntm spawn myproject --cc 3 --stagger=2m
+```
+
+Timing:
+```
+Agent 1: Receives prompt immediately (T+0)
+Agent 2: Receives prompt at T+90s
+Agent 3: Receives prompt at T+180s
+```
+
+This gives each agent time to:
+1. Complete initial codebase analysis
+2. Query available work
+3. Select and claim a bead (mark in_progress)
+4. Begin visible generation
+
+By the time Agent 2 starts selecting, Agent 1 has already claimed its work.
+
+### Why 90 Seconds Default?
+
+Typical agent startup sequence:
+- 10-20s: Read AGENTS.md, understand project
+- 20-40s: Run initial codebase exploration
+- 10-20s: Query bv/bd for work recommendations
+- 5-10s: Claim bead and begin work
+
+Total: ~60-90s. The 90s default provides margin for variance.
+
+### Spawn Order Awareness
+
+Each agent knows its position in the spawn batch:
+
+```bash
+# Environment variables set per agent
+NTM_SPAWN_ORDER=2      # This is agent 2
+NTM_SPAWN_TOTAL=4      # Of 4 total
+NTM_SPAWN_BATCH_ID=spawn-abc123
+```
+
+Enables:
+- Self-stagger backup (agent can wait extra if needed)
+- Work coordination ("I'm agent 2, pick something different")
+- Reporting ("Agent 2 completed task X")
+
+### Alternative: Orchestrator Work Assignment
+
+Instead of agents self-selecting, ntm can assign work:
+
+```bash
+# ntm picks work and assigns to each agent
+ntm spawn myproject --cc 3 --assign-work
+```
+
+Flow:
+1. ntm runs `bv --robot-triage`
+2. ntm selects top 3 beads
+3. ntm claims each bead (marks in_progress)
+4. ntm sends customized prompt to each agent with assigned work
+
+No race possible - work claimed before prompt sent.
+
+### Optional: Soft-Claim Protocol
+
+For high-contention scenarios (many agents, short stagger), agents can "soft-claim" beads:
+
+1. Write claim file: `.ntm/claims/ntm-g2lq.json`
+2. Wait 5-10 seconds
+3. Check for conflicts (another agent claimed first)
+4. Confirm or abandon
+
+This is optional and for edge cases only.
+
+### API Design
+
+```bash
+# Stagger flags
+ntm spawn myproject --cc 3 --stagger          # default 90s
+ntm spawn myproject --cc 3 --stagger=2m       # custom
+ntm spawn myproject --cc 3 --stagger=0        # disabled
+
+# Assignment mode
+ntm spawn myproject --cc 3 --assign-work
+ntm spawn myproject --cc 3 --assign-work --assign-strategy=diverse
+
+# Robot mode
+ntm --robot-spawn=myproject --spawn-cc=3 --spawn-stagger=90s
+```
+
+Response includes schedule:
+```json
+{
+  "success": true,
+  "stagger": {
+    "enabled": true,
+    "duration_seconds": 90,
+    "schedule": [
+      {"pane": "proj__cc_1", "prompt_at": "2025-01-15T10:00:00Z"},
+      {"pane": "proj__cc_2", "prompt_at": "2025-01-15T10:01:30Z"}
+    ]
+  }
+}
+```
+
+### Configuration
+
+```toml
+[spawn]
+default_stagger = "90s"           # used when --stagger has no value
+auto_stagger_threshold = 2        # auto-enable stagger when >= N agents
+```
+
+---
+
 ## Implementation Order
 
 **Phase 1: Foundation**
 1. Activity Detection (enables everything else)
-2. Health & Resilience (can start after Activity basics)
-3. Smart Routing (can start after Activity basics)
+2. Thundering Herd Prevention (immediate value for parallel spawns)
+3. Health & Resilience (can start after Activity basics)
+4. Smart Routing (can start after Activity basics)
 
 **Phase 2: Power Features**
-4. Output Synthesis (mostly independent)
-5. CASS Injection (mostly independent)
-6. Workflow Pipelines (needs Activity + Routing)
+5. Output Synthesis (mostly independent)
+6. CASS Injection (mostly independent)
+7. Workflow Pipelines (needs Activity + Routing)
 
 ---
 
