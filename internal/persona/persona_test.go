@@ -3,6 +3,7 @@ package persona
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -290,4 +291,228 @@ model = "gpt-4"
 
 func ptrFloat64(v float64) *float64 {
 	return &v
+}
+
+func TestPersonaInheritance(t *testing.T) {
+	r := NewRegistry()
+
+	// Add parent persona
+	parent := &Persona{
+		Name:        "base-claude",
+		AgentType:   "claude",
+		Model:       "sonnet",
+		Description: "Base Claude persona",
+		SystemPrompt: "You are a helpful assistant.",
+		Tags:        []string{"base", "claude"},
+	}
+	r.Add(parent)
+
+	// Add child that extends parent
+	child := &Persona{
+		Name:               "senior-claude",
+		Extends:            "base-claude",
+		Model:              "opus", // Override model
+		SystemPromptAppend: "You have 15+ years of experience.",
+		Tags:               []string{"senior"},
+	}
+	r.Add(child)
+
+	// Resolve inheritance
+	if err := r.ResolveInheritance(); err != nil {
+		t.Fatalf("ResolveInheritance failed: %v", err)
+	}
+
+	// Check resolved child
+	resolved, ok := r.Get("senior-claude")
+	if !ok {
+		t.Fatal("expected to find senior-claude")
+	}
+
+	// Should have overridden model
+	if resolved.Model != "opus" {
+		t.Errorf("expected model 'opus', got %q", resolved.Model)
+	}
+
+	// Should have inherited agent type
+	if resolved.AgentType != "claude" {
+		t.Errorf("expected agent_type 'claude', got %q", resolved.AgentType)
+	}
+
+	// Should have inherited description
+	if resolved.Description != "Base Claude persona" {
+		t.Errorf("expected inherited description, got %q", resolved.Description)
+	}
+
+	// Should have merged system prompt
+	if !strings.Contains(resolved.SystemPrompt, "helpful assistant") {
+		t.Error("expected inherited system prompt")
+	}
+	if !strings.Contains(resolved.SystemPrompt, "15+ years") {
+		t.Error("expected appended system prompt")
+	}
+
+	// Should have merged tags
+	if len(resolved.Tags) < 2 {
+		t.Errorf("expected merged tags, got %v", resolved.Tags)
+	}
+}
+
+func TestPersonaInheritanceCycle(t *testing.T) {
+	r := NewRegistry()
+
+	// Create a cycle: A extends B, B extends A
+	r.Add(&Persona{Name: "cycle-a", Extends: "cycle-b", AgentType: "claude"})
+	r.Add(&Persona{Name: "cycle-b", Extends: "cycle-a", AgentType: "claude"})
+
+	err := r.ResolveInheritance()
+	if err == nil {
+		t.Fatal("expected error for circular inheritance")
+	}
+	if !strings.Contains(err.Error(), "circular") {
+		t.Errorf("expected circular error, got: %v", err)
+	}
+}
+
+func TestPersonaSets(t *testing.T) {
+	r := NewRegistry()
+
+	// Add a persona set
+	set := &PersonaSet{
+		Name:        "test-team",
+		Description: "Test team set",
+		Personas:    []string{"implementer", "tester"},
+	}
+	r.AddSet(set)
+
+	// Retrieve it
+	got, ok := r.GetSet("test-team")
+	if !ok {
+		t.Fatal("expected to find test-team set")
+	}
+	if len(got.Personas) != 2 {
+		t.Errorf("expected 2 personas in set, got %d", len(got.Personas))
+	}
+
+	// Test case insensitivity
+	got2, ok := r.GetSet("TEST-TEAM")
+	if !ok {
+		t.Fatal("expected case-insensitive lookup to work")
+	}
+	if got2.Name != got.Name {
+		t.Error("expected same set from case-insensitive lookup")
+	}
+
+	// List sets
+	sets := r.ListSets()
+	if len(sets) != 1 {
+		t.Errorf("expected 1 set, got %d", len(sets))
+	}
+}
+
+func TestBuiltinPersonaSets(t *testing.T) {
+	sets := BuiltinPersonaSets()
+
+	if len(sets) < 3 {
+		t.Errorf("expected at least 3 builtin sets, got %d", len(sets))
+	}
+
+	// Check expected sets exist
+	names := make(map[string]bool)
+	for _, s := range sets {
+		names[s.Name] = true
+	}
+
+	expected := []string{"backend-team", "review-team", "full-stack"}
+	for _, name := range expected {
+		if !names[name] {
+			t.Errorf("expected builtin set %q not found", name)
+		}
+	}
+}
+
+func TestFocusPatterns(t *testing.T) {
+	personas := BuiltinPersonas()
+
+	// Check that builtin personas have focus patterns
+	for _, p := range personas {
+		if len(p.FocusPatterns) == 0 {
+			t.Errorf("persona %q should have focus patterns", p.Name)
+		}
+	}
+
+	// Check architect has expected patterns
+	for _, p := range personas {
+		if p.Name == "architect" {
+			found := false
+			for _, pattern := range p.FocusPatterns {
+				if pattern == "docs/**" {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Error("expected architect to have docs/** focus pattern")
+			}
+		}
+	}
+}
+
+func TestTemplateContext(t *testing.T) {
+	// Create temp directory with a go.mod
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := LoadTemplateContext(tmpDir)
+
+	// Should detect Go language
+	if ctx.Language != "Go" {
+		t.Errorf("expected language 'Go', got %q", ctx.Language)
+	}
+
+	// Should have project name from directory
+	if ctx.ProjectName == "" {
+		t.Error("expected project name to be set")
+	}
+}
+
+func TestExpandPromptVarsWithContext(t *testing.T) {
+	p := &Persona{
+		Name:        "test",
+		Description: "Test persona",
+		AgentType:   "claude",
+		Model:       "sonnet",
+	}
+
+	ctx := &TemplateContext{
+		ProjectName:     "MyProject",
+		Language:        "Go",
+		CodebaseSummary: "A test project",
+		CustomVars: map[string]string{
+			"custom_key": "custom_value",
+		},
+	}
+
+	content := `Hello {{.Name}}, you work on {{project_name}} written in {{language}}.
+Summary: {{codebase_summary}}
+Custom: {{custom_key}}`
+
+	expanded := ExpandPromptVarsWithContext(content, p, ctx)
+
+	if !strings.Contains(expanded, "Hello test") {
+		t.Error("expected persona name expansion")
+	}
+	if !strings.Contains(expanded, "MyProject") {
+		t.Error("expected project_name expansion")
+	}
+	if !strings.Contains(expanded, "Go") {
+		t.Error("expected language expansion")
+	}
+	if !strings.Contains(expanded, "A test project") {
+		t.Error("expected codebase_summary expansion")
+	}
+	if !strings.Contains(expanded, "custom_value") {
+		t.Error("expected custom_key expansion")
+	}
 }
