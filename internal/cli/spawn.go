@@ -25,6 +25,69 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
 )
 
+// optionalDurationValue implements pflag.Value for a duration flag with optional value.
+// When the flag is used without a value, it uses the default duration.
+// When the flag is used with a value, it parses the duration.
+// When the flag is not used, enabled remains false.
+type optionalDurationValue struct {
+	defaultDuration time.Duration
+	duration        *time.Duration
+	enabled         *bool
+}
+
+func newOptionalDurationValue(defaultDur time.Duration, dur *time.Duration, enabled *bool) *optionalDurationValue {
+	*dur = defaultDur // Set default
+	return &optionalDurationValue{
+		defaultDuration: defaultDur,
+		duration:        dur,
+		enabled:         enabled,
+	}
+}
+
+func (v *optionalDurationValue) String() string {
+	if v.duration != nil && *v.enabled {
+		return v.duration.String()
+	}
+	return ""
+}
+
+func (v *optionalDurationValue) Set(s string) error {
+	*v.enabled = true
+	if s == "" {
+		*v.duration = v.defaultDuration
+		return nil
+	}
+	// Handle "0" as disable
+	if s == "0" {
+		*v.enabled = false
+		*v.duration = 0
+		return nil
+	}
+	dur, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("invalid duration: %w", err)
+	}
+	if dur < 0 {
+		return fmt.Errorf("stagger duration cannot be negative")
+	}
+	*v.duration = dur
+	return nil
+}
+
+func (v *optionalDurationValue) Type() string {
+	return "duration"
+}
+
+// IsBoolFlag allows --stagger without =value
+func (v *optionalDurationValue) IsBoolFlag() bool {
+	return false
+}
+
+// NoOptDefVal is the default when --stagger is used without a value
+func (v *optionalDurationValue) NoOptDefVal() string {
+	return v.defaultDuration.String()
+}
+
 // SpawnOptions configures session creation and agent spawning
 type SpawnOptions struct {
 	Session     string
@@ -38,6 +101,9 @@ type SpawnOptions struct {
 	PersonaMap  map[string]*persona.Persona
 	PluginMap   map[string]plugins.AgentPlugin
 
+	// Profile mapping: list of persona names to map to agents in order
+	ProfileList []*persona.Persona
+
 	// CASS Context
 	CassContextQuery string
 	NoCassContext    bool
@@ -45,6 +111,10 @@ type SpawnOptions struct {
 
 	// Hooks
 	NoHooks bool
+
+	// Stagger configuration for thundering herd prevention
+	Stagger        time.Duration // Delay between agent prompt delivery
+	StaggerEnabled bool          // True if --stagger flag was provided
 }
 
 func newSpawnCmd() *cobra.Command {
@@ -59,6 +129,10 @@ func newSpawnCmd() *cobra.Command {
 	var contextDays int
 	var prompt string
 	var noHooks bool
+	var profilesFlag string
+	var profileSetFlag string
+	var staggerDuration time.Duration
+	var staggerEnabled bool
 
 	// Pre-load plugins to avoid double loading in RunE
 	configDir := filepath.Dir(config.DefaultPath())
@@ -102,6 +176,12 @@ CASS Context Injection:
   Automatically finds relevant past sessions and injects context into agents.
   Use --cass-context="query" to be specific, or rely on prompt/recipe context.
 
+Stagger mode (--stagger):
+  Prevents thundering herd when agents receive identical prompts. All panes
+  are created immediately for dashboard visibility, but prompts are delivered
+  with delays: Agent 1 immediately, Agent 2 after 90s, Agent 3 after 180s, etc.
+  Use --stagger for default 90s interval, --stagger=2m for custom duration.
+
 Examples:
   ntm spawn myproject --cc=2 --cod=2           # 2 Claude, 2 Codex + user pane
   ntm spawn myproject --cc=3 --cod=3 --gmi=1   # 3 Claude, 3 Codex, 1 Gemini
@@ -110,7 +190,8 @@ Examples:
   ntm spawn myproject --cc=2:opus --cc=1:sonnet  # 2 Opus + 1 Sonnet
   ntm spawn myproject --cc=2 --auto-restart    # With auto-restart enabled
   ntm spawn myproject --persona=architect --persona=implementer:2  # Using personas
-  ntm spawn myproject --cc=1 --prompt="fix auth" # Inject context about auth`,
+  ntm spawn myproject --cc=1 --prompt="fix auth" # Inject context about auth
+  ntm spawn myproject --cc=3 --stagger --prompt="find bugs"  # Staggered prompts`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sessionName := args[0]
@@ -199,6 +280,60 @@ Examples:
 				}
 			}
 
+			// Handle --profiles and --profile-set flags for profile assignment
+			var profileList []*persona.Persona
+			if profilesFlag != "" && profileSetFlag != "" {
+				return fmt.Errorf("cannot use both --profiles and --profile-set; pick one")
+			}
+			if profilesFlag != "" || profileSetFlag != "" {
+				registry, err := persona.LoadRegistry(dir)
+				if err != nil {
+					return fmt.Errorf("loading persona registry: %w", err)
+				}
+
+				var profileNames []string
+				if profileSetFlag != "" {
+					// Resolve profile set to list of names
+					pset, ok := registry.GetSet(profileSetFlag)
+					if !ok {
+						sets := registry.ListSets()
+						var available []string
+						for _, s := range sets {
+							available = append(available, s.Name)
+						}
+						return fmt.Errorf("profile set %q not found; available: %s", profileSetFlag, strings.Join(available, ", "))
+					}
+					profileNames = pset.Personas
+				} else {
+					// Parse comma-separated profile names
+					profileNames = strings.Split(profilesFlag, ",")
+					for i := range profileNames {
+						profileNames[i] = strings.TrimSpace(profileNames[i])
+					}
+				}
+
+				// Look up each persona in registry
+				for _, name := range profileNames {
+					if name == "" {
+						continue
+					}
+					p, ok := registry.Get(name)
+					if !ok {
+						return fmt.Errorf("profile %q not found in registry", name)
+					}
+					profileList = append(profileList, p)
+				}
+
+				// Warn if profile count doesn't match agent count
+				totalAgents := ccCount + codCount + gmiCount
+				if len(profileList) > 0 && totalAgents > 0 && len(profileList) != totalAgents {
+					if !IsJSONOutput() {
+						fmt.Printf("Warning: %d profiles for %d agents; profiles will be assigned in order\n",
+							len(profileList), totalAgents)
+					}
+				}
+			}
+
 			opts := SpawnOptions{
 				Session:          sessionName,
 				Agents:           agentSpecs.Flatten(),
@@ -214,6 +349,9 @@ Examples:
 				NoCassContext:    noCassContext,
 				Prompt:           prompt,
 				NoHooks:          noHooks,
+				Stagger:          staggerDuration,
+				StaggerEnabled:   staggerEnabled,
+				ProfileList:      profileList,
 			}
 
 			return spawnSessionLogic(opts)
@@ -229,6 +367,11 @@ Examples:
 	cmd.Flags().StringVarP(&recipeName, "recipe", "r", "", "use a recipe for agent configuration")
 	cmd.Flags().BoolVar(&autoRestart, "auto-restart", false, "monitor and auto-restart crashed agents")
 
+	// Stagger flag for thundering herd prevention
+	// Custom handling: --stagger enables with default 90s, --stagger=2m for custom duration
+	staggerValue := newOptionalDurationValue(90*time.Second, &staggerDuration, &staggerEnabled)
+	cmd.Flags().Var(staggerValue, "stagger", "Stagger prompt delivery between agents (default 90s when enabled)")
+
 	// CASS context flags
 	cmd.Flags().StringVar(&contextQuery, "cass-context", "", "Explicit context query for CASS")
 	cmd.Flags().BoolVar(&noCassContext, "no-cass-context", false, "Disable CASS context injection")
@@ -236,6 +379,10 @@ Examples:
 	cmd.Flags().IntVar(&contextDays, "cass-context-days", 0, "Look back N days")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to initialize agents with")
 	cmd.Flags().BoolVar(&noHooks, "no-hooks", false, "Disable command hooks")
+
+	// Profile flags for mapping personas to agents
+	cmd.Flags().StringVar(&profilesFlag, "profiles", "", "Comma-separated list of profile/persona names to map to agents in order")
+	cmd.Flags().StringVar(&profileSetFlag, "profile-set", "", "Predefined profile set name (e.g., backend-team, review-team)")
 
 	// Register plugin flags dynamically
 	// Note: We scan for plugins here to register flags.
@@ -417,6 +564,7 @@ func spawnSessionLogic(opts SpawnOptions) error {
 	}
 
 	agentNum := startIdx
+	profileIdx := 0 // Track which profile from ProfileList to assign
 	if !IsJSONOutput() {
 		steps.Start(fmt.Sprintf("Launching %d agent(s)", len(opts.Agents)))
 	}
@@ -429,8 +577,12 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		model         string // alias
 		resolvedModel string // full name
 		command       string
+		promptDelay   time.Duration // Stagger delay before prompt delivery
 	}
 	var launchedAgents []launchedAgent
+
+	// Track agent index for stagger calculation (0-based, regardless of user pane)
+	staggerAgentIdx := 0
 
 	// Resolve CASS context if enabled
 	var cassContext string
@@ -512,6 +664,35 @@ func spawnSessionLogic(opts SpawnOptions) error {
 			}
 		}
 
+		// Check if there's a profile to assign from ProfileList (--profiles/--profile-set)
+		// ProfileList takes precedence over PersonaMap for system prompt
+		if len(opts.ProfileList) > profileIdx {
+			profile := opts.ProfileList[profileIdx]
+			personaName = profile.Name
+			// Prepare system prompt file for the profile
+			promptFile, err := persona.PrepareSystemPrompt(profile, dir)
+			if err != nil {
+				if !IsJSONOutput() {
+					fmt.Printf("⚠ Warning: could not prepare system prompt for profile %s: %v\n", profile.Name, err)
+				}
+			} else {
+				systemPromptFile = promptFile
+			}
+			if !IsJSONOutput() {
+				fmt.Printf("  → Assigning profile '%s' to agent %d\n", profile.Name, profileIdx+1)
+			}
+		}
+
+		// Update pane title with profile name if assigned
+		if personaName != "" {
+			title := tmux.FormatPaneName(opts.Session, string(agent.Type), agent.Index, personaName)
+			if err := tmux.SetPaneTitle(pane.ID, title); err != nil {
+				if !IsJSONOutput() {
+					fmt.Printf("⚠ Warning: could not update pane title with profile name: %v\n", err)
+				}
+			}
+		}
+
 		// Generate command using template
 		agentCmd, err := config.GenerateAgentCommand(agentCmdTemplate, config.AgentTemplateVars{
 			Model:            resolvedModel,
@@ -585,12 +766,38 @@ func spawnSessionLogic(opts SpawnOptions) error {
 			}
 		}
 
+		// Calculate stagger delay for this agent
+		var promptDelay time.Duration
+		if opts.StaggerEnabled && opts.Stagger > 0 {
+			promptDelay = time.Duration(staggerAgentIdx) * opts.Stagger
+		}
+
 		// Inject user prompt if provided
 		if opts.Prompt != "" {
-			time.Sleep(200 * time.Millisecond)
-			if err := tmux.SendKeys(pane.ID, opts.Prompt, true); err != nil {
+			if promptDelay > 0 {
+				// Staggered delivery: schedule for later
+				paneID := pane.ID
+				prompt := opts.Prompt
+				delay := promptDelay
+				go func() {
+					time.Sleep(delay)
+					if err := tmux.SendKeys(paneID, prompt, true); err != nil {
+						// Log error but don't fail - agent is already running
+						if !IsJSONOutput() {
+							fmt.Printf("⚠ Warning: staggered prompt delivery failed for pane %s: %v\n", paneID, err)
+						}
+					}
+				}()
 				if !IsJSONOutput() {
-					fmt.Printf("⚠ Warning: failed to send prompt: %v\n", err)
+					fmt.Printf("  → Agent %d prompt scheduled in %v\n", staggerAgentIdx+1, delay)
+				}
+			} else {
+				// Immediate delivery for first agent
+				time.Sleep(200 * time.Millisecond)
+				if err := tmux.SendKeys(pane.ID, opts.Prompt, true); err != nil {
+					if !IsJSONOutput() {
+						fmt.Printf("⚠ Warning: failed to send prompt: %v\n", err)
+					}
 				}
 			}
 		}
@@ -603,8 +810,11 @@ func spawnSessionLogic(opts SpawnOptions) error {
 			model:         agent.Model,
 			resolvedModel: resolvedModel,
 			command:       safeAgentCmd,
+			promptDelay:   promptDelay,
 		})
 
+		staggerAgentIdx++
+		profileIdx++
 		agentNum++
 	}
 
@@ -618,18 +828,25 @@ func spawnSessionLogic(opts SpawnOptions) error {
 
 	// JSON output mode
 	if IsJSONOutput() {
+		// Build map of pane index -> stagger delay for lookup
+		paneDelays := make(map[int]time.Duration)
+		for _, agent := range launchedAgents {
+			paneDelays[agent.paneIndex] = agent.promptDelay
+		}
+
 		paneResponses := make([]output.PaneResponse, len(finalPanes))
 		agentCounts := output.AgentCountsResponse{}
 		for i, p := range finalPanes {
 			paneResponses[i] = output.PaneResponse{
-				Index:   p.Index,
-				Title:   p.Title,
-				Type:    agentTypeToString(p.Type),
-				Variant: p.Variant, // Model alias or persona name
-				Active:  p.Active,
-				Width:   p.Width,
-				Height:  p.Height,
-				Command: p.Command,
+				Index:         p.Index,
+				Title:         p.Title,
+				Type:          agentTypeToString(p.Type),
+				Variant:       p.Variant, // Model alias or persona name
+				Active:        p.Active,
+				Width:         p.Width,
+				Height:        p.Height,
+				Command:       p.Command,
+				PromptDelayMs: paneDelays[p.Index].Milliseconds(),
 			}
 			switch p.Type {
 			case tmux.AgentClaude:
@@ -645,6 +862,15 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		}
 		agentCounts.Total = agentCounts.Claude + agentCounts.Codex + agentCounts.Gemini
 
+		// Build stagger config if enabled
+		var staggerCfg *output.StaggerConfig
+		if opts.StaggerEnabled {
+			staggerCfg = &output.StaggerConfig{
+				Enabled:    true,
+				IntervalMs: opts.Stagger.Milliseconds(),
+			}
+		}
+
 		return output.PrintJSON(output.SpawnResponse{
 			TimestampedResponse: output.NewTimestamped(),
 			Session:             opts.Session,
@@ -652,6 +878,7 @@ func spawnSessionLogic(opts SpawnOptions) error {
 			WorkingDirectory:    dir,
 			Panes:               paneResponses,
 			AgentCounts:         agentCounts,
+			Stagger:             staggerCfg,
 		})
 	}
 

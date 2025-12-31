@@ -65,15 +65,16 @@ type SessionResponse struct {
 
 // PaneResponse is the standard format for pane-related output
 type PaneResponse struct {
-	Index   int    `json:"index"`
-	Title   string `json:"title"`
-	Type    string `json:"type"`              // claude, codex, gemini, user
-	Variant string `json:"variant,omitempty"` // model alias or persona name
-	Active  bool   `json:"active,omitempty"`
-	Width   int    `json:"width,omitempty"`
-	Height  int    `json:"height,omitempty"`
-	Command string `json:"command,omitempty"`
-	Status  string `json:"status,omitempty"` // idle, working, error
+	Index         int    `json:"index"`
+	Title         string `json:"title"`
+	Type          string `json:"type"`                      // claude, codex, gemini, user
+	Variant       string `json:"variant,omitempty"`         // model alias or persona name
+	Active        bool   `json:"active,omitempty"`
+	Width         int    `json:"width,omitempty"`
+	Height        int    `json:"height,omitempty"`
+	Command       string `json:"command,omitempty"`
+	Status        string `json:"status,omitempty"`          // idle, working, error
+	PromptDelayMs int64  `json:"prompt_delay_ms,omitempty"` // Stagger delay in milliseconds
 }
 
 // AgentCountsResponse is the standard format for agent counts
@@ -85,6 +86,12 @@ type AgentCountsResponse struct {
 	Total  int `json:"total"`
 }
 
+// StaggerConfig represents stagger settings in spawn response
+type StaggerConfig struct {
+	Enabled    bool  `json:"enabled"`
+	IntervalMs int64 `json:"interval_ms,omitempty"`
+}
+
 // SpawnResponse is the output format for spawn command (with agents)
 type SpawnResponse struct {
 	TimestampedResponse
@@ -93,6 +100,7 @@ type SpawnResponse struct {
 	WorkingDirectory string              `json:"working_directory,omitempty"`
 	Panes            []PaneResponse      `json:"panes"`
 	AgentCounts      AgentCountsResponse `json:"agent_counts"`
+	Stagger          *StaggerConfig      `json:"stagger,omitempty"`
 }
 
 // CreateResponse is the output format for create command (basic session)
