@@ -446,6 +446,45 @@ func TestValidate_CycleWithExternalDependency(t *testing.T) {
 	}
 }
 
+func TestValidate_CycleInLoopSubsteps(t *testing.T) {
+	t.Parallel()
+
+	// This tests that cycles within loop sub-steps are detected
+	w := &Workflow{
+		SchemaVersion: "2.0",
+		Name:          "test",
+		Steps: []Step{
+			{
+				ID: "loop_step",
+				Loop: &LoopConfig{
+					Items: "items",
+					As:    "item",
+					Steps: []Step{
+						{ID: "inner_a", Prompt: "test", DependsOn: []string{"inner_b"}}, // Part of cycle
+						{ID: "inner_b", Prompt: "test", DependsOn: []string{"inner_a"}}, // Part of cycle
+					},
+				},
+			},
+		},
+	}
+
+	result := Validate(w)
+	if result.Valid {
+		t.Error("expected validation to fail for circular dependency in loop sub-steps")
+	}
+
+	found := false
+	for _, e := range result.Errors {
+		if e.Field == "depends_on" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected error for depends_on field in loop sub-steps")
+	}
+}
+
 func TestValidate_ValidWorkflow(t *testing.T) {
 	t.Parallel()
 

@@ -223,8 +223,8 @@ func validateStep(step *Step, stepField string, stepIDs map[string]bool, result 
 	if !hasPrompt && !hasParallel && step.Loop == nil {
 		result.addError(ParseError{
 			Field:   stepField,
-			Message: "step must have prompt, prompt_file, or parallel",
-			Hint:    "Add a prompt for this step",
+			Message: "step must have prompt, prompt_file, parallel, or loop",
+			Hint:    "Add a prompt, parallel steps, or loop for this step",
 		})
 	}
 
@@ -329,13 +329,23 @@ func validateStep(step *Step, stepField string, stepIDs map[string]bool, result 
 func detectCycles(steps []Step) [][]string {
 	// Build dependency graph
 	graph := make(map[string][]string)
-	for _, step := range steps {
-		graph[step.ID] = step.DependsOn
-		// Include parallel sub-steps
-		for _, pStep := range step.Parallel {
-			graph[pStep.ID] = pStep.DependsOn
+
+	var addToGraph func(steps []Step)
+	addToGraph = func(steps []Step) {
+		for _, step := range steps {
+			graph[step.ID] = step.DependsOn
+			// Include parallel sub-steps
+			if len(step.Parallel) > 0 {
+				addToGraph(step.Parallel)
+			}
+			// Include loop sub-steps
+			if step.Loop != nil {
+				addToGraph(step.Loop.Steps)
+			}
 		}
 	}
+
+	addToGraph(steps)
 
 	var cycles [][]string
 	visited := make(map[string]bool)
