@@ -122,6 +122,9 @@ Examples:
 	cmd.Flags().IntVar(&timeout, "timeout", 300, "Timeout in seconds for auth completion")
 	cmd.Flags().BoolVar(&allLimited, "all-limited", false, "Rotate all rate-limited panes in the session")
 
+	// Add context rotation management subcommand
+	cmd.AddCommand(newRotateContextCmd())
+
 	return cmd
 }
 

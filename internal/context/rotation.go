@@ -426,6 +426,24 @@ func (r *Rotator) rotateAgent(session, agentID, workDir string) RotationResult {
 	result.State = RotationStateCompleted
 	result.Duration = time.Since(startTime)
 
+	// Record to persistent history (for audit log)
+	historyRecord := &RotationRecord{
+		ID:               newRecordID(),
+		Timestamp:        startTime,
+		SessionName:      session,
+		AgentID:          agentID,
+		AgentType:        agentType,
+		ContextBefore:    contextBefore,
+		EstimationMethod: "token_count",
+		Method:           result.Method,
+		Success:          true,
+		SummaryTokens:    result.SummaryTokens,
+		ContextAfter:     0,
+		DurationMs:       result.Duration.Milliseconds(),
+	}
+	// Best-effort persist - don't fail rotation if history write fails
+	_ = RecordRotation(historyRecord)
+
 	return result
 }
 
