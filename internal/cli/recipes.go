@@ -214,7 +214,7 @@ func runRecipesShow(name string) error {
 
 	fmt.Printf("  %sAgents:%s\n", "\033[1m", "\033[0m")
 	for _, a := range r.Agents {
-		agentType := formatAgentType(a.Type)
+		agentType := formatAgentTypeSimple(a.Type)
 		line := fmt.Sprintf("    %s%s%s x %d", colorize(t.Primary), agentType, "\033[0m", a.Count)
 		if a.Model != "" {
 			line += fmt.Sprintf(" (model: %s)", a.Model)
@@ -245,8 +245,8 @@ func sourceDescription(source string) string {
 	}
 }
 
-// formatAgentType returns a formatted agent type name.
-func formatAgentType(t string) string {
+// formatAgentTypeSimple returns a formatted agent type name (simple version without styling).
+func formatAgentTypeSimple(t string) string {
 	switch t {
 	case "cc":
 		return "Claude"

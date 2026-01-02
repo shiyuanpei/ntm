@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func stripANSI(str string) string {
+func stripANSIForTest(str string) string {
 	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	return ansi.ReplaceAllString(str, "")
 }
@@ -20,7 +20,7 @@ func TestPrintStunningHelp(t *testing.T) {
 	PrintStunningHelp(&buf)
 
 	// Read output
-	output := stripANSI(buf.String())
+	output := stripANSIForTest(buf.String())
 
 	// Verify key components exist
 	expected := []string{
@@ -47,7 +47,7 @@ func TestPrintCompactHelp(t *testing.T) {
 	PrintCompactHelp(&buf)
 
 	// Read output
-	output := stripANSI(buf.String())
+	output := stripANSIForTest(buf.String())
 
 	// Verify key components exist
 	expected := []string{
