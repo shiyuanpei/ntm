@@ -143,7 +143,8 @@ func PrintRoute(opts RouteOptions) int {
 		}
 
 		// Filter by agent type if specified
-		if opts.AgentType != "" && !strings.EqualFold(agentType, normalizeAgentType(opts.AgentType)) {
+		// Normalize both sides: agentType from title is "cc/cod/gmi", user input could be "claude/codex/gemini"
+		if opts.AgentType != "" && !strings.EqualFold(normalizeAgentType(agentType), normalizeAgentType(opts.AgentType)) {
 			continue
 		}
 
@@ -351,7 +352,8 @@ func GetRouteRecommendation(opts RouteOptions) (*RouteRecommendation, error) {
 		}
 
 		// Filter by agent type if specified
-		if opts.AgentType != "" && !strings.EqualFold(agentType, normalizeAgentType(opts.AgentType)) {
+		// Normalize both sides: agentType from title is "cc/cod/gmi", user input could be "claude/codex/gemini"
+		if opts.AgentType != "" && !strings.EqualFold(normalizeAgentType(agentType), normalizeAgentType(opts.AgentType)) {
 			continue
 		}
 

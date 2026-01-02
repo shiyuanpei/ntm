@@ -57,6 +57,7 @@ type Executor struct {
 	// Runtime state (reset per execution)
 	state     *ExecutionState
 	stateMu   sync.RWMutex // Protects state.Steps for concurrent access
+	varMu     sync.RWMutex // Protects state.Variables for concurrent access
 	graph     *DependencyGraph
 	progress  chan<- ProgressEvent
 	cancelFn  context.CancelFunc
@@ -836,16 +837,17 @@ func (e *Executor) executeParallelStep(ctx context.Context, step *Step, workflow
 		}
 	}
 
-	// Store output in variable if specified
+	// Store output in variable if specified (protected by varMu for parallel execution)
+	e.varMu.Lock()
 	if step.OutputVar != "" {
 		e.state.Variables[step.OutputVar] = result.Output
 		if result.ParsedData != nil {
 			e.state.Variables[step.OutputVar+"_parsed"] = result.ParsedData
 		}
 	}
-
 	// Store step output for variable access
 	StoreStepOutput(e.state, step.ID, result.Output, result.ParsedData)
+	e.varMu.Unlock()
 
 	return result
 }
@@ -1030,7 +1032,10 @@ func (e *Executor) resolvePrompt(step *Step) (string, error) {
 // - Default values (${vars.x | "default"})
 // - Escaping (\${literal})
 // - Loop variables (${loop.item}, ${loop.index})
+// Thread-safe: acquires read lock on Variables for concurrent access during parallel execution.
 func (e *Executor) substituteVariables(s string) string {
+	e.varMu.RLock()
+	defer e.varMu.RUnlock()
 	sub := NewSubstitutor(e.state, e.config.Session, e.state.WorkflowID)
 	result, _ := sub.Substitute(s)
 	return result
@@ -1045,7 +1050,10 @@ func (e *Executor) substituteVariables(s string) string {
 // - Contains operator (contains)
 // - Logical operators (AND, OR, NOT)
 // - Type coercion for numeric comparisons
+// Thread-safe: acquires read lock on Variables for concurrent access during parallel execution.
 func (e *Executor) evaluateCondition(condition string) (bool, error) {
+	e.varMu.RLock()
+	defer e.varMu.RUnlock()
 	sub := NewSubstitutor(e.state, e.config.Session, e.state.WorkflowID)
 	return EvaluateCondition(condition, sub)
 }
