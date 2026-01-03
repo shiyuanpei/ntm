@@ -84,7 +84,9 @@ func WithProjectKey(key string) Option {
 // WithTimeout sets the default timeout for HTTP requests.
 func WithTimeout(timeout time.Duration) Option {
 	return func(c *Client) {
-		c.httpClient.Timeout = timeout
+		if c.httpClient != nil {
+			c.httpClient.Timeout = timeout
+		}
 	}
 }
 

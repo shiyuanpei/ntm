@@ -306,6 +306,29 @@ func PrintInterrupt(opts InterruptOptions) error {
 
 // getLastMeaningfulOutput extracts the last meaningful output lines up to maxLen chars
 func getLastMeaningfulOutput(lines []string, maxLen int) string {
+	// Guard against invalid maxLen values that would cause slice panic
+	if maxLen < 4 {
+		if maxLen <= 0 {
+			return ""
+		}
+		// Too small for ellipsis, just truncate without it
+		var meaningful []string
+		totalLen := 0
+		for i := len(lines) - 1; i >= 0 && totalLen < maxLen; i-- {
+			line := strings.TrimSpace(lines[i])
+			if line == "" || isIdlePrompt(line) {
+				continue
+			}
+			meaningful = append([]string{line}, meaningful...)
+			totalLen += len(line) + 1
+		}
+		result := strings.Join(meaningful, "\n")
+		if len(result) > maxLen {
+			return result[:maxLen]
+		}
+		return result
+	}
+
 	var meaningful []string
 	totalLen := 0
 

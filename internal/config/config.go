@@ -505,14 +505,22 @@ func DefaultPath() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 		return filepath.Join(xdg, "ntm", "config.toml")
 	}
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		// Fallback to /tmp when home directory is unavailable (e.g., containers)
+		home = os.TempDir()
+	}
 	return filepath.Join(home, ".config", "ntm", "config.toml")
 }
 
 // DefaultProjectsBase returns the default projects directory
 func DefaultProjectsBase() string {
-	home, _ := os.UserHomeDir()
 	if runtime.GOOS == "darwin" {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			// Fallback to /tmp when home directory is unavailable
+			return filepath.Join(os.TempDir(), "Developer")
+		}
 		return filepath.Join(home, "Developer")
 	}
 	return "/data/projects"

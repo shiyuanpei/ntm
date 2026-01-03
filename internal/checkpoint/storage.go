@@ -33,8 +33,13 @@ type Storage struct {
 }
 
 // NewStorage creates a new Storage with the default directory.
+// Falls back to /tmp if the user's home directory cannot be determined.
 func NewStorage() *Storage {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		// Fallback to /tmp when home directory is unavailable (e.g., containers)
+		home = os.TempDir()
+	}
 	return &Storage{
 		BaseDir: filepath.Join(home, DefaultCheckpointDir),
 	}
