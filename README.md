@@ -52,7 +52,7 @@ ntm palette myproject
 
 ### The Problem
 
-Modern AI-assisted development often involves running multiple coding agents simultaneously—Claude for architecture decisions, Codex for implementation, Gemini for testing. But managing these agents across terminal windows is painful:
+Modern AI-assisted development often involves running multiple coding agents simultaneously: Claude for architecture decisions, Codex for implementation, Gemini for testing. But managing these agents across terminal windows is painful:
 
 - **Window chaos**: Each agent needs its own terminal, leading to cluttered desktops
 - **Context switching**: Jumping between windows breaks flow and loses context
@@ -742,7 +742,7 @@ myproject/
 
 ## Configuration
 
-NTM works out of the box with sensible defaults—no configuration file is required. When no config file exists, NTM uses built-in defaults appropriate for your platform.
+NTM works out of the box with sensible defaults; no configuration file is required. When no config file exists, NTM uses built-in defaults appropriate for your platform.
 
 Optional configuration lives in `~/.config/ntm/config.toml`:
 
@@ -1149,7 +1149,7 @@ When an agent is rotated, the old agent is asked for a structured summary contai
 - Active files being modified
 - Any blockers or issues
 
-This summary is passed to the fresh agent so it can continue seamlessly.
+This summary is passed to the fresh agent so it can continue where the old one left off.
 
 ### Dashboard Integration
 
@@ -1250,7 +1250,7 @@ ntm hooks guard uninstall  # Remove later
 
 ## Notifications
 
-NTM includes a comprehensive notification system that alerts you when important events occur in your agent sessions. Notifications can be delivered through multiple channels simultaneously.
+NTM can notify you when important events occur in your agent sessions. Notifications can be delivered through multiple channels at once.
 
 ### Notification Channels
 
@@ -1856,7 +1856,7 @@ If you're new to tmux, here are the key bindings (default prefix is `Ctrl+B`):
 
 ## Auto-Scanner (UBS Integration)
 
-NTM integrates with [UBS (Ultimate Bug Scanner)](https://github.com/...) to automatically scan your project for bugs when files change. This provides continuous code quality monitoring without manual intervention.
+NTM integrates with [UBS (Ultimate Bug Scanner)](https://github.com/...) to automatically scan your project for bugs when files change.
 
 ### How It Works
 
@@ -2006,7 +2006,7 @@ retention_days = 30        # Delete logs older than this
 
 ## Performance Profiler
 
-NTM includes a built-in profiler for measuring startup performance and command execution times. This helps identify bottlenecks and optimize your workflow.
+NTM includes a built-in profiler for measuring startup performance and command execution times.
 
 ### Enabling Profiling
 
