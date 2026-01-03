@@ -729,7 +729,7 @@ func (m *Model) startSessionFetch() tea.Cmd {
 	m.fetchingSession = true
 	m.lastPaneFetch = time.Now()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	m.sessionFetchCancel = cancel
 
 	return m.fetchSessionDataWithOutputsCtx(ctx)
@@ -998,7 +998,7 @@ func copyTimeMap(src map[string]time.Time) map[string]time.Time {
 func (m Model) fetchStatuses() tea.Cmd {
 	return func() tea.Msg {
 		start := time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()
 
 		statuses, err := m.detector.DetectAllContext(ctx, m.session)
@@ -2605,7 +2605,7 @@ func hintForSessionFetchError(err error) string {
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "tmux is responding slowly. Press r to retry or p to pause auto-refresh"
+		return "tmux is responding slowly. Press r to retry, p to pause auto-refresh, or try running ntm outside of tmux"
 	}
 
 	msg := err.Error()
