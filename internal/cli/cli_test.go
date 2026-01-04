@@ -30,6 +30,16 @@ func resetFlags() {
 	robotSendDelay = 0
 }
 
+// sessionAutoSelectPossible returns true if the CLI would auto-select a session.
+// This happens when exactly one tmux session is running.
+func sessionAutoSelectPossible() bool {
+	sessions, err := tmux.ListSessions()
+	if err != nil {
+		return false
+	}
+	return len(sessions) == 1
+}
+
 // TestExecuteHelp verifies that the root command executes successfully
 func TestExecuteHelp(t *testing.T) {
 	resetFlags()
@@ -428,7 +438,12 @@ func TestViewCmdRequiresSession(t *testing.T) {
 }
 
 // TestCopyCmdRequiresSession tests copy command requires session name
+// when no session can be auto-selected (0 or 2+ sessions running).
 func TestCopyCmdRequiresSession(t *testing.T) {
+	if sessionAutoSelectPossible() {
+		t.Skip("Skipping: exactly one tmux session running (auto-selection applies)")
+	}
+
 	resetFlags()
 	rootCmd.SetArgs([]string{"copy"})
 
@@ -439,7 +454,12 @@ func TestCopyCmdRequiresSession(t *testing.T) {
 }
 
 // TestSaveCmdRequiresSession tests save command requires session name
+// when no session can be auto-selected (0 or 2+ sessions running).
 func TestSaveCmdRequiresSession(t *testing.T) {
+	if sessionAutoSelectPossible() {
+		t.Skip("Skipping: exactly one tmux session running (auto-selection applies)")
+	}
+
 	resetFlags()
 	rootCmd.SetArgs([]string{"save"})
 

@@ -245,7 +245,8 @@ func (r *Rotator) CheckAndRotate(sessionName, workDir string) ([]RotationResult,
 	}
 
 	// Find agents above rotate threshold
-	agentsToRotate := r.monitor.AgentsAboveThreshold(r.config.RotateThreshold)
+	// Note: r.config.RotateThreshold is 0.0-1.0, but AgentsAboveThreshold expects 0-100 percentage
+	agentsToRotate := r.monitor.AgentsAboveThreshold(r.config.RotateThreshold * 100)
 	if len(agentsToRotate) == 0 {
 		return nil, nil // No agents need rotation
 	}
@@ -571,7 +572,7 @@ func (r *Rotator) NeedsRotation() ([]string, string) {
 		return nil, "rotation disabled"
 	}
 
-	agentInfos := r.monitor.AgentsAboveThreshold(r.config.RotateThreshold)
+	agentInfos := r.monitor.AgentsAboveThreshold(r.config.RotateThreshold * 100)
 	if len(agentInfos) == 0 {
 		return nil, "no agents above threshold"
 	}
@@ -595,7 +596,7 @@ func (r *Rotator) NeedsWarning() ([]string, string) {
 		return nil, "rotation disabled"
 	}
 
-	agentInfos := r.monitor.AgentsAboveThreshold(r.config.WarningThreshold)
+	agentInfos := r.monitor.AgentsAboveThreshold(r.config.WarningThreshold * 100)
 	if len(agentInfos) == 0 {
 		return nil, "no agents above warning threshold"
 	}
