@@ -1,7 +1,6 @@
 #!/bin/bash
-# Fake am tool for testing (Agent Mail launcher)
-# Note: Agent Mail is typically accessed via MCP, not CLI
-# This fake simulates the launcher script
+# Fake mcp-agent-mail tool for testing (Agent Mail MCP server binary)
+# This is the actual binary name the AMAdapter looks for
 
 MODE="${FAKE_TOOL_MODE:-normal}"
 
@@ -10,7 +9,7 @@ case "$MODE" in
         sleep 3600
         ;;
     error)
-        echo "am: simulated error" >&2
+        echo "mcp-agent-mail: simulated error" >&2
         exit 1
         ;;
 esac
@@ -18,7 +17,7 @@ esac
 # Normal mode - check arguments
 case "$1" in
     --version)
-        echo "am 1.0.0 (fake)"
+        echo "mcp-agent-mail 1.0.0 (fake)"
         exit 0
         ;;
     status)
@@ -34,8 +33,8 @@ case "$1" in
         exit 0
         ;;
     --help|-h)
-        echo "am - Agent Mail launcher (fake for testing)"
-        echo "Usage: am [command] [options]"
+        echo "mcp-agent-mail - Agent Mail MCP server (fake for testing)"
+        echo "Usage: mcp-agent-mail [command] [options]"
         echo "Commands:"
         echo "  status    Check server status"
         echo "  start     Start the server"
@@ -43,7 +42,7 @@ case "$1" in
         exit 0
         ;;
     *)
-        echo "am: unknown command: $1" >&2
+        echo "mcp-agent-mail: unknown command: $1" >&2
         exit 1
         ;;
 esac
