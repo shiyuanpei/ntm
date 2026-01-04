@@ -318,10 +318,23 @@ func formatPriority(sev Severity) string {
 	}
 }
 
-// truncate truncates a string to maxLen with ellipsis.
+// truncate truncates a string to maxLen with ellipsis, respecting UTF-8 boundaries.
 func truncate(s string, maxLen int) string {
+	if maxLen <= 3 {
+		if maxLen <= 0 {
+			return ""
+		}
+		return s[:min(len(s), maxLen)]
+	}
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	// Find first rune boundary at or after maxLen-3 bytes
+	targetLen := maxLen - 3
+	for i := range s {
+		if i >= targetLen {
+			return s[:i] + "..."
+		}
+	}
+	return s
 }

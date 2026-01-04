@@ -312,14 +312,14 @@ func waitForAgentsReady(output *SpawnOutput, timeout time.Duration) {
 				continue // Already detected as ready
 			}
 
-			// Parse pane ID
-			paneID := output.Agents[i].Pane
-			if strings.HasPrefix(paneID, "0.") {
-				paneID = "%" + paneID[2:] // Convert "0.1" to "%1"
-			}
+			// Build tmux target from session and pane reference
+			// The Pane field is in "window.index" format (e.g., "0.1")
+			// We need a fully qualified target: "session:window.index"
+			paneRef := output.Agents[i].Pane
+			target := output.Session + ":" + paneRef
 
 			// Capture pane output
-			captured, err := tmux.CapturePaneOutput(paneID, 10)
+			captured, err := tmux.CapturePaneOutput(target, 10)
 			if err != nil {
 				allReady = false
 				continue

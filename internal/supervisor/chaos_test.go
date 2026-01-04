@@ -152,14 +152,27 @@ func TestMaxRestartBackoff(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	// Wait for max restarts to exhaust
-	time.Sleep(10 * time.Second)
-	elapsed := time.Since(startTime)
+	// Poll until daemon exhausts all restarts (with timeout)
+	// The supervisor sets StateFailed before each backoff wait, then restarts.
+	// We need to wait until restarts exceed maxRestarts (meaning no more restarts will happen).
+	deadline := time.Now().Add(15 * time.Second)
+	var restarts int
+	var state DaemonState
+	for time.Now().Before(deadline) {
+		d, _ := s.GetDaemon("backoff-daemon")
+		d.mu.RLock()
+		restarts = d.Restarts
+		state = d.State
+		d.mu.RUnlock()
 
-	d, _ := s.GetDaemon("backoff-daemon")
-	d.mu.RLock()
-	restarts := d.Restarts
-	d.mu.RUnlock()
+		// With MaxRestarts=2, restarts will be 1, 2, then 3 (when it stops)
+		// restarts > maxRestarts means no more restarts will happen
+		if restarts > int(s.maxRestarts) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	elapsed := time.Since(startTime)
 
 	// The daemon should have attempted at least one restart
 	if restarts == 0 {
@@ -168,9 +181,13 @@ func TestMaxRestartBackoff(t *testing.T) {
 
 	// With max 2 restarts and exponential backoff (1s, 2s), we expect
 	// at least 2 seconds to pass before giving up (initial + first backoff)
-	// Note: Using 2s as minimum since timing can vary
-	if elapsed < 2*time.Second && restarts > 0 {
+	if elapsed < 2*time.Second {
 		t.Errorf("backoff too fast: elapsed %v with %d restarts (expected >= 2s)", elapsed, restarts)
+	}
+
+	// Daemon should be in failed state after exhausting restarts
+	if state != StateFailed {
+		t.Errorf("daemon should be in StateFailed after exhausting restarts, but state = %v", state)
 	}
 }
 

@@ -333,7 +333,7 @@ func getContentAfterEcho(content, message string) string {
 // isPromptLine checks if a line looks like a prompt
 func isPromptLine(line, paneTitle string) bool {
 	promptSuffixes := []string{
-		"> ", "$ ", "% ", "# ", "> ", ">>> ",
+		"> ", "$ ", "% ", "# ", ">>> ",
 		"claude>", "codex>", "gemini>",
 	}
 	for _, suffix := range promptSuffixes {

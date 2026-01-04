@@ -2,7 +2,7 @@ package checkpoint
 
 import (
 	"fmt"
-	"os"
+	"log"
 	"strings"
 	"time"
 )
@@ -77,7 +77,7 @@ func (a *AutoCheckpointer) Create(opts AutoCheckpointOptions) (*Checkpoint, erro
 	if opts.MaxCheckpoints > 0 {
 		if err := a.rotateAutoCheckpoints(opts.SessionName, opts.MaxCheckpoints); err != nil {
 			// Log but don't fail - checkpoint was created successfully
-			fmt.Fprintf(os.Stderr, "Warning: failed to rotate auto-checkpoints: %v\n", err)
+			log.Printf("Warning: failed to rotate auto-checkpoints: %v", err)
 		}
 	}
 
@@ -111,7 +111,7 @@ func (a *AutoCheckpointer) rotateAutoCheckpoints(sessionName string, maxCount in
 	for _, cp := range toDelete {
 		if err := a.storage.Delete(sessionName, cp.ID); err != nil {
 			// Log but continue
-			fmt.Fprintf(os.Stderr, "Warning: failed to delete old auto-checkpoint %s: %v\n", cp.ID, err)
+			log.Printf("Warning: failed to delete old auto-checkpoint %s: %v", cp.ID, err)
 		}
 	}
 
