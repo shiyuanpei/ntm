@@ -173,7 +173,8 @@ func AssertJSONField(t *testing.T, logger *TestLogger, output []byte, field stri
 }
 
 // AssertEventually retries an assertion until it passes or timeout.
-func AssertEventually(t *testing.T, logger *TestLogger, timeout time.Duration, interval time.Duration, description string, assertion func() bool) {
+// Returns true if the assertion passed, false if it timed out.
+func AssertEventually(t *testing.T, logger *TestLogger, timeout time.Duration, interval time.Duration, description string, assertion func() bool) bool {
 	t.Helper()
 	logger.Log("VERIFY (eventually, timeout=%s): %s", timeout, description)
 
@@ -183,13 +184,14 @@ func AssertEventually(t *testing.T, logger *TestLogger, timeout time.Duration, i
 		attempt++
 		if assertion() {
 			logger.Log("PASS: %s (attempt %d)", description, attempt)
-			return
+			return true
 		}
 		time.Sleep(interval)
 	}
 
 	logger.Log("FAIL: %s (timed out after %d attempts)", description, attempt)
 	t.Errorf("%s: timed out after %s (%d attempts)", description, timeout, attempt)
+	return false
 }
 
 // AssertNTMStatus verifies ntm status output for a session.

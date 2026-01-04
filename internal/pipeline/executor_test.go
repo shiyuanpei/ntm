@@ -605,34 +605,44 @@ func TestTruncatePrompt(t *testing.T) {
 			want:  "hello world",
 		},
 		{
-			// UTF-8 edge case: "αβγ" is 6 bytes (2 per char), n=4 means content max is 1 byte
-			// Must return "..." (3 bytes) since no full rune fits in 1 byte
+			// UTF-8: "αβγδ" is 8 bytes (2 per char), n=4 means content max is 1 byte
+			// No full 2-byte rune fits in 1 byte, so return just "..."
 			name:  "utf8 multibyte truncate small",
-			input: "αβγ", // 6 bytes
+			input: "αβγδ", // 8 bytes
 			n:     4,
 			want:  "...", // Can't fit any full rune + "..."
 		},
 		{
-			// UTF-8: "αβγ" is 6 bytes, n=5 means content max is 2 bytes (exactly one α)
+			// UTF-8: "αβγδ" is 8 bytes, n=5 means content max is 2 bytes (exactly one α)
 			name:  "utf8 multibyte exact rune boundary",
-			input: "αβγ", // 6 bytes
+			input: "αβγδ", // 8 bytes
 			n:     5,
 			want:  "α...", // 2 + 3 = 5 bytes
 		},
 		{
-			// UTF-8: "αβγ" is 6 bytes, n=6 means content max is 3 bytes
-			// Only one 2-byte rune fits, result should be 5 bytes not 6
+			// UTF-8: "αβγδ" is 8 bytes, n=6 means content max is 3 bytes
+			// Only one 2-byte rune fits (can't fit β which starts at byte 2)
+			// This tests the edge case where targetLen falls between rune boundaries
 			name:  "utf8 multibyte between boundaries",
-			input: "αβγ", // 6 bytes
+			input: "αβγδ", // 8 bytes
 			n:     6,
-			want:  "α...", // 2 + 3 = 5 bytes (not 7 which would be "αβ...")
+			want:  "α...", // 2 + 3 = 5 bytes (must not exceed 6)
 		},
 		{
-			// Mixed ASCII and UTF-8: "aβc" is 4 bytes (a=1, β=2, c=1)
-			name:  "utf8 mixed ascii",
-			input: "aβc",
-			n:     6,
-			want:  "aβ...", // a(1) + β(2) + ... (3) = 6 bytes
+			// UTF-8: "αβγδ" is 8 bytes, n=7 means content max is 4 bytes
+			// Two 2-byte runes fit exactly
+			name:  "utf8 multibyte two runes fit",
+			input: "αβγδ", // 8 bytes
+			n:     7,
+			want:  "αβ...", // 4 + 3 = 7 bytes
+		},
+		{
+			// Mixed ASCII and UTF-8: "aβcδe" is 6 bytes (a=1, β=2, c=1, δ=2)
+			// n=5 means content max is 2 bytes
+			name:  "utf8 mixed ascii needs truncation",
+			input: "aβcδ", // 5 bytes (a=1, β=2, c=1, δ=2 = 6 bytes total)
+			n:     5,
+			want:  "a...", // Only 'a' (1 byte) fits in content, total 4 bytes
 		},
 	}
 

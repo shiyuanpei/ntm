@@ -138,15 +138,15 @@ claude = "echo '` + customMarker + `' && sleep 30"
 		t.Fatalf("cc pane not found in session %s", result.Session)
 	}
 
-	testutil.AssertEventually(t, logger, 5*time.Second, 150*time.Millisecond, "cc pane outputs custom marker", func() bool {
+	if testutil.AssertEventually(t, logger, 5*time.Second, 150*time.Millisecond, "cc pane outputs custom marker", func() bool {
 		captured, err := tmux.CapturePaneOutput(ccPaneID, 200)
 		if err != nil {
 			return false
 		}
 		return strings.Contains(captured, customMarker)
-	})
-
-	logger.Log("PASS: Custom agent command was used")
+	}) {
+		logger.Log("PASS: Custom agent command was used")
+	}
 }
 
 // TestConfigPaletteFromConfig verifies palette commands from config are loaded
