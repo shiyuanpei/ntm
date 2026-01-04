@@ -982,6 +982,8 @@ func init() {
 		newCassCmd(),
 		newHooksCmd(),
 		newHealthCmd(),
+		newDoctorCmd(),
+		newActivityCmd(),
 		newHistoryCmd(),
 		newAnalyticsCmd(),
 

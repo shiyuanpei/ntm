@@ -328,3 +328,327 @@ func calculateOutputRate(lastActivitySec int) string {
 		return "none"
 	}
 }
+
+// =============================================================================
+// Agent Health States and Activity Detection Integration
+// =============================================================================
+//
+// Note: HealthState enum is defined in routing.go with values:
+// - HealthHealthy, HealthDegraded, HealthUnhealthy, HealthRateLimited
+
+// HealthCheck contains the result of a comprehensive health check
+type HealthCheck struct {
+	PaneID       string      `json:"pane_id"`
+	AgentType    string      `json:"agent_type"`
+	HealthState  HealthState `json:"health_state"`
+	ProcessCheck *ProcessCheckResult `json:"process_check"`
+	StallCheck   *StallCheckResult   `json:"stall_check"`
+	ErrorCheck   *ErrorCheckResult   `json:"error_check"`
+	Confidence   float64     `json:"confidence"`
+	Reason       string      `json:"reason"`
+	CheckedAt    time.Time   `json:"checked_at"`
+}
+
+// ProcessCheckResult contains the result of process-level health check
+type ProcessCheckResult struct {
+	Running    bool   `json:"running"`
+	Crashed    bool   `json:"crashed"`
+	ExitStatus string `json:"exit_status,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+// StallCheckResult contains the result of stall detection using activity detection
+type StallCheckResult struct {
+	Stalled        bool          `json:"stalled"`
+	ActivityState  string        `json:"activity_state"` // from StateClassifier
+	Velocity       float64       `json:"velocity"`       // chars/sec
+	IdleSeconds    int           `json:"idle_seconds"`
+	Confidence     float64       `json:"confidence"`
+	Reason         string        `json:"reason,omitempty"`
+}
+
+// ErrorCheckResult contains the result of error pattern detection
+type ErrorCheckResult struct {
+	HasErrors   bool     `json:"has_errors"`
+	RateLimited bool     `json:"rate_limited"`
+	Patterns    []string `json:"patterns,omitempty"`
+	WaitSeconds int      `json:"wait_seconds,omitempty"` // suggested wait time for rate limit
+	Reason      string   `json:"reason,omitempty"`
+}
+
+// Error patterns for detailed detection
+var healthErrorPatterns = []struct {
+	Pattern string
+	Type    string
+}{
+	{"rate.?limit", "rate_limit"},
+	{"429", "rate_limit"},
+	{"too.?many.?requests", "rate_limit"},
+	{"quota.?exceeded", "rate_limit"},
+	{"authentication.?(failed|error)", "auth_error"},
+	{"401", "auth_error"},
+	{"unauthorized", "auth_error"},
+	{"panic:", "crash"},
+	{"fatal.?error", "crash"},
+	{"segmentation.?fault", "crash"},
+	{"stack.?trace", "crash"},
+	{"connection.?(refused|reset|timeout)", "network_error"},
+	{"network.?(error|unreachable)", "network_error"},
+}
+
+// CheckAgentHealthWithActivity performs a comprehensive health check using activity detection
+func CheckAgentHealthWithActivity(paneID string, agentType string) (*HealthCheck, error) {
+	check := &HealthCheck{
+		PaneID:      paneID,
+		AgentType:   agentType,
+		HealthState: HealthHealthy,
+		Confidence:  1.0,
+		CheckedAt:   time.Now().UTC(),
+	}
+
+	// 1. Process check - is the agent still running or crashed?
+	check.ProcessCheck = checkProcess(paneID)
+
+	// 2. Stall check - use activity detection for stall detection
+	check.StallCheck = checkStallWithActivity(paneID, agentType)
+
+	// 3. Error check - detect error patterns
+	check.ErrorCheck = checkErrors(paneID)
+
+	// Calculate overall health state
+	check.HealthState, check.Reason = calculateHealthState(check)
+
+	// Calculate confidence based on checks
+	check.Confidence = calculateHealthConfidence(check)
+
+	return check, nil
+}
+
+// checkProcess checks if the agent process is running or crashed
+func checkProcess(paneID string) *ProcessCheckResult {
+	result := &ProcessCheckResult{
+		Running: true,
+		Crashed: false,
+	}
+
+	// Capture pane output to check for exit indicators
+	output, err := tmux.CapturePaneOutput(paneID, 30)
+	if err != nil {
+		result.Reason = "failed to capture pane output"
+		return result
+	}
+
+	output = stripANSI(output)
+	outputLower := strings.ToLower(output)
+
+	// Check for exit indicators
+	exitPatterns := []string{
+		"exit status", "exited with", "process exited",
+		"connection closed", "session ended", "terminated",
+		"bash$", "zsh$", "$", // shell prompt (agent crashed to shell)
+	}
+
+	for _, pattern := range exitPatterns {
+		if strings.Contains(outputLower, pattern) {
+			// Check if it's really a crash (shell prompt at end)
+			lines := splitLines(output)
+			if len(lines) > 0 {
+				lastLine := strings.TrimSpace(lines[len(lines)-1])
+				// If the last line looks like a shell prompt, agent may have crashed
+				if lastLine == "$" || lastLine == "bash$" || lastLine == "zsh$" ||
+					strings.HasSuffix(lastLine, "$") && !strings.Contains(lastLine, ">") {
+					result.Running = false
+					result.Crashed = true
+					result.ExitStatus = pattern
+					result.Reason = "detected shell prompt - agent may have crashed"
+					return result
+				}
+			}
+		}
+	}
+
+	// Check for explicit exit messages
+	if strings.Contains(outputLower, "exited with code") || strings.Contains(outputLower, "exit code:") {
+		result.Running = false
+		result.Crashed = true
+		result.Reason = "exit code detected"
+	}
+
+	return result
+}
+
+// checkStallWithActivity uses the StateClassifier for stall detection
+func checkStallWithActivity(paneID string, agentType string) *StallCheckResult {
+	result := &StallCheckResult{
+		Stalled:    false,
+		Confidence: 0.5,
+	}
+
+	// Create a classifier for this pane
+	classifier := NewStateClassifier(paneID, &ClassifierConfig{
+		AgentType:      agentType,
+		StallThreshold: DefaultStallThreshold,
+	})
+
+	// Classify the current state
+	activity, err := classifier.Classify()
+	if err != nil {
+		result.Reason = "failed to classify activity: " + err.Error()
+		return result
+	}
+
+	// Extract activity state
+	result.ActivityState = string(activity.State)
+	result.Velocity = activity.Velocity
+	result.Confidence = activity.Confidence
+
+	// Calculate idle time from StateSince if in waiting state
+	if activity.State == StateWaiting && !activity.StateSince.IsZero() {
+		result.IdleSeconds = int(time.Since(activity.StateSince).Seconds())
+	}
+
+	// Check for stall conditions
+	switch activity.State {
+	case StateStalled:
+		result.Stalled = true
+		result.Reason = "agent stalled - no output for extended period"
+	case StateError:
+		result.Stalled = true
+		result.Reason = "agent in error state"
+	case StateUnknown:
+		// Unknown might indicate a stall if velocity is 0
+		if activity.Velocity == 0 && result.IdleSeconds > int(DefaultStallThreshold.Seconds()) {
+			result.Stalled = true
+			result.Reason = "unknown state with no output"
+		}
+	}
+
+	return result
+}
+
+// checkErrors detects error patterns in pane output
+func checkErrors(paneID string) *ErrorCheckResult {
+	result := &ErrorCheckResult{
+		HasErrors:   false,
+		RateLimited: false,
+		Patterns:    []string{},
+	}
+
+	// Capture pane output
+	output, err := tmux.CapturePaneOutput(paneID, 50)
+	if err != nil {
+		result.Reason = "failed to capture pane output"
+		return result
+	}
+
+	output = stripANSI(output)
+	outputLower := strings.ToLower(output)
+
+	// Check for error patterns
+	seenPatterns := make(map[string]bool)
+	for _, ep := range healthErrorPatterns {
+		if strings.Contains(outputLower, strings.ToLower(ep.Pattern)) {
+			if !seenPatterns[ep.Type] {
+				result.Patterns = append(result.Patterns, ep.Type)
+				seenPatterns[ep.Type] = true
+
+				if ep.Type == "rate_limit" {
+					result.RateLimited = true
+					result.WaitSeconds = parseRateLimitWait(output)
+				}
+
+				if ep.Type == "crash" || ep.Type == "auth_error" || ep.Type == "network_error" {
+					result.HasErrors = true
+				}
+			}
+		}
+	}
+
+	if result.RateLimited {
+		result.HasErrors = true
+		result.Reason = "rate limit detected"
+	} else if len(result.Patterns) > 0 {
+		result.Reason = fmt.Sprintf("detected: %v", result.Patterns)
+	}
+
+	return result
+}
+
+// parseRateLimitWait extracts wait time from rate limit messages
+func parseRateLimitWait(output string) int {
+	// Common patterns: "wait 60 seconds", "retry in 30s", "try again in 60s"
+	patterns := []string{
+		`wait\s+(\d+)\s*(?:second|sec|s)`,
+		`retry\s+(?:in|after)\s+(\d+)\s*(?:second|sec|s)`,
+		`try\s+again\s+in\s+(\d+)\s*(?:second|sec|s)`,
+		`(\d+)\s*(?:second|sec|s)\s+(?:cooldown|delay)`,
+	}
+
+	outputLower := strings.ToLower(output)
+	for _, pattern := range patterns {
+		if idx := strings.Index(outputLower, pattern[:10]); idx >= 0 {
+			// Simple number extraction after the pattern start
+			remaining := outputLower[idx:]
+			for i := 0; i < len(remaining); i++ {
+				if remaining[i] >= '0' && remaining[i] <= '9' {
+					var num int
+					fmt.Sscanf(remaining[i:], "%d", &num)
+					if num > 0 && num < 3600 { // Reasonable wait time
+						return num
+					}
+					break
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// calculateHealthState determines the overall health state from all checks
+func calculateHealthState(check *HealthCheck) (HealthState, string) {
+	// Priority order: unhealthy > rate_limited > degraded > healthy
+
+	// Check for crash (unhealthy)
+	if check.ProcessCheck != nil && check.ProcessCheck.Crashed {
+		return HealthUnhealthy, "agent crashed"
+	}
+
+	// Check for error state (unhealthy)
+	if check.ErrorCheck != nil && check.ErrorCheck.HasErrors && !check.ErrorCheck.RateLimited {
+		return HealthUnhealthy, "error detected: " + check.ErrorCheck.Reason
+	}
+
+	// Check for rate limit
+	if check.ErrorCheck != nil && check.ErrorCheck.RateLimited {
+		return HealthRateLimited, "rate limit detected"
+	}
+
+	// Check for stall (degraded)
+	if check.StallCheck != nil && check.StallCheck.Stalled {
+		return HealthDegraded, "agent stalled: " + check.StallCheck.Reason
+	}
+
+	// Check for low velocity (degraded)
+	if check.StallCheck != nil && check.StallCheck.IdleSeconds > 300 { // 5 minutes
+		return HealthDegraded, "agent idle for extended period"
+	}
+
+	return HealthHealthy, "all checks passed"
+}
+
+// calculateHealthConfidence determines confidence in the health assessment
+func calculateHealthConfidence(check *HealthCheck) float64 {
+	confidence := 1.0
+
+	// Lower confidence if stall check has low confidence
+	if check.StallCheck != nil && check.StallCheck.Confidence < 0.7 {
+		confidence *= check.StallCheck.Confidence
+	}
+
+	// Lower confidence if we couldn't perform all checks
+	if check.ProcessCheck == nil || check.StallCheck == nil || check.ErrorCheck == nil {
+		confidence *= 0.8
+	}
+
+	return confidence
+}
