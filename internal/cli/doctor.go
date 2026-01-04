@@ -298,30 +298,36 @@ func checkDependencies(ctx context.Context) []DepCheck {
 func checkDaemons(ctx context.Context) []DaemonCheck {
 	var checks []DaemonCheck
 
-	// Check common daemon ports
-	ports := map[string]int{
-		"agent-mail": 8765,
-		"cm-server":  8766,
-		"bd-daemon":  8767,
+	// Check common daemon ports in deterministic order
+	type daemonPort struct {
+		name string
+		port int
+	}
+	daemons := []daemonPort{
+		{"agent-mail", 8765},
+		{"cm-server", 8766},
+		{"bd-daemon", 8767},
 	}
 
-	for name, port := range ports {
+	dialer := &net.Dialer{Timeout: time.Second}
+
+	for _, dp := range daemons {
 		check := DaemonCheck{
-			Name: name,
-			Port: port,
+			Name: dp.name,
+			Port: dp.port,
 		}
 
-		// Check if port is in use
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
+		// Check if port is in use (use context for cancellation)
+		conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", dp.port))
 		if err == nil {
 			conn.Close()
 			check.Running = true
 			check.Status = "ok"
-			check.Message = fmt.Sprintf("listening on port %d", port)
+			check.Message = fmt.Sprintf("listening on port %d", dp.port)
 		} else {
 			check.Running = false
 			check.Status = "ok"
-			check.Message = fmt.Sprintf("port %d available", port)
+			check.Message = fmt.Sprintf("port %d available", dp.port)
 		}
 
 		checks = append(checks, check)
@@ -491,7 +497,7 @@ func renderDoctorTUI(report *DoctorReport) error {
 	var statusStyle lipgloss.Style
 	switch report.Overall {
 	case "healthy":
-		statusMsg = fmt.Sprintf("Overall: HEALTHY")
+		statusMsg = "Overall: HEALTHY"
 		statusStyle = okStyle
 	case "warning":
 		statusMsg = fmt.Sprintf("Overall: HEALTHY (%d warnings)", report.Warnings)
