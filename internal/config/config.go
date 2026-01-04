@@ -1490,3 +1490,263 @@ func upsertTOMLKey(contents, key, value string) string {
 	}
 	return result
 }
+
+// GetValue retrieves a configuration value by its dotted path (e.g., "alerts.enabled")
+func GetValue(cfg *Config, path string) (interface{}, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+
+	parts := strings.Split(path, ".")
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("empty path")
+	}
+
+	switch parts[0] {
+	case "projects_base":
+		return cfg.ProjectsBase, nil
+	case "theme":
+		return cfg.Theme, nil
+	case "agents":
+		if len(parts) < 2 {
+			return cfg.Agents, nil
+		}
+		switch parts[1] {
+		case "claude":
+			return cfg.Agents.Claude, nil
+		case "codex":
+			return cfg.Agents.Codex, nil
+		case "gemini":
+			return cfg.Agents.Gemini, nil
+		}
+	case "tmux":
+		if len(parts) < 2 {
+			return cfg.Tmux, nil
+		}
+		switch parts[1] {
+		case "default_panes":
+			return cfg.Tmux.DefaultPanes, nil
+		case "palette_key":
+			return cfg.Tmux.PaletteKey, nil
+		}
+	case "agent_mail":
+		if len(parts) < 2 {
+			return cfg.AgentMail, nil
+		}
+		switch parts[1] {
+		case "enabled":
+			return cfg.AgentMail.Enabled, nil
+		case "url":
+			return cfg.AgentMail.URL, nil
+		case "token":
+			return "[redacted]", nil
+		case "auto_register":
+			return cfg.AgentMail.AutoRegister, nil
+		}
+	case "alerts":
+		if len(parts) < 2 {
+			return cfg.Alerts, nil
+		}
+		switch parts[1] {
+		case "enabled":
+			return cfg.Alerts.Enabled, nil
+		case "agent_stuck_minutes":
+			return cfg.Alerts.AgentStuckMinutes, nil
+		case "disk_low_threshold_gb":
+			return cfg.Alerts.DiskLowThresholdGB, nil
+		}
+	case "checkpoints":
+		if len(parts) < 2 {
+			return cfg.Checkpoints, nil
+		}
+		switch parts[1] {
+		case "enabled":
+			return cfg.Checkpoints.Enabled, nil
+		case "before_broadcast":
+			return cfg.Checkpoints.BeforeBroadcast, nil
+		case "max_auto_checkpoints":
+			return cfg.Checkpoints.MaxAutoCheckpoints, nil
+		}
+	case "resilience":
+		if len(parts) < 2 {
+			return cfg.Resilience, nil
+		}
+		switch parts[1] {
+		case "auto_restart":
+			return cfg.Resilience.AutoRestart, nil
+		case "max_restarts":
+			return cfg.Resilience.MaxRestarts, nil
+		}
+	case "context_rotation":
+		if len(parts) < 2 {
+			return cfg.ContextRotation, nil
+		}
+		switch parts[1] {
+		case "enabled":
+			return cfg.ContextRotation.Enabled, nil
+		case "warning_threshold":
+			return cfg.ContextRotation.WarningThreshold, nil
+		case "rotate_threshold":
+			return cfg.ContextRotation.RotateThreshold, nil
+		}
+	case "cass":
+		if len(parts) < 2 {
+			return cfg.CASS, nil
+		}
+		switch parts[1] {
+		case "enabled":
+			return cfg.CASS.Enabled, nil
+		case "timeout":
+			return cfg.CASS.Timeout, nil
+		}
+	}
+
+	return nil, fmt.Errorf("unknown config path: %s", path)
+}
+
+// Reset removes the config file and creates a new one with defaults
+func Reset() error {
+	path := DefaultPath()
+
+	// Remove existing file
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing config file: %w", err)
+	}
+
+	// Create new default config
+	_, err := CreateDefault()
+	return err
+}
+
+// ConfigDiff represents a difference between current and default config
+type ConfigDiff struct {
+	Key     string      `json:"key"`
+	Path    string      `json:"path"`
+	Default interface{} `json:"default"`
+	Current interface{} `json:"current"`
+	Source  string      `json:"source"` // "global", "project", "env", "flag"
+}
+
+// Diff returns all configuration values that differ from defaults
+func Diff(cfg *Config) []ConfigDiff {
+	if cfg == nil {
+		return nil
+	}
+
+	defaults := Default()
+	var diffs []ConfigDiff
+
+	// Helper to add diff if values differ
+	addDiff := func(key, path string, def, cur interface{}) {
+		if fmt.Sprintf("%v", def) != fmt.Sprintf("%v", cur) {
+			diffs = append(diffs, ConfigDiff{
+				Key:     key,
+				Path:    path,
+				Default: def,
+				Current: cur,
+				Source:  "config", // Could be enhanced to track actual source
+			})
+		}
+	}
+
+	// Top-level settings
+	addDiff("projects_base", "projects_base", defaults.ProjectsBase, cfg.ProjectsBase)
+	addDiff("theme", "theme", defaults.Theme, cfg.Theme)
+
+	// Agents
+	addDiff("claude", "agents.claude", defaults.Agents.Claude, cfg.Agents.Claude)
+	addDiff("codex", "agents.codex", defaults.Agents.Codex, cfg.Agents.Codex)
+	addDiff("gemini", "agents.gemini", defaults.Agents.Gemini, cfg.Agents.Gemini)
+
+	// Tmux
+	addDiff("default_panes", "tmux.default_panes", defaults.Tmux.DefaultPanes, cfg.Tmux.DefaultPanes)
+	addDiff("palette_key", "tmux.palette_key", defaults.Tmux.PaletteKey, cfg.Tmux.PaletteKey)
+
+	// Agent Mail
+	addDiff("enabled", "agent_mail.enabled", defaults.AgentMail.Enabled, cfg.AgentMail.Enabled)
+	addDiff("url", "agent_mail.url", defaults.AgentMail.URL, cfg.AgentMail.URL)
+	addDiff("auto_register", "agent_mail.auto_register", defaults.AgentMail.AutoRegister, cfg.AgentMail.AutoRegister)
+
+	// Alerts
+	addDiff("enabled", "alerts.enabled", defaults.Alerts.Enabled, cfg.Alerts.Enabled)
+	addDiff("agent_stuck_minutes", "alerts.agent_stuck_minutes", defaults.Alerts.AgentStuckMinutes, cfg.Alerts.AgentStuckMinutes)
+	addDiff("disk_low_threshold_gb", "alerts.disk_low_threshold_gb", defaults.Alerts.DiskLowThresholdGB, cfg.Alerts.DiskLowThresholdGB)
+
+	// Checkpoints
+	addDiff("enabled", "checkpoints.enabled", defaults.Checkpoints.Enabled, cfg.Checkpoints.Enabled)
+	addDiff("before_broadcast", "checkpoints.before_broadcast", defaults.Checkpoints.BeforeBroadcast, cfg.Checkpoints.BeforeBroadcast)
+	addDiff("max_auto_checkpoints", "checkpoints.max_auto_checkpoints", defaults.Checkpoints.MaxAutoCheckpoints, cfg.Checkpoints.MaxAutoCheckpoints)
+
+	// Resilience
+	addDiff("auto_restart", "resilience.auto_restart", defaults.Resilience.AutoRestart, cfg.Resilience.AutoRestart)
+	addDiff("max_restarts", "resilience.max_restarts", defaults.Resilience.MaxRestarts, cfg.Resilience.MaxRestarts)
+
+	// Context Rotation
+	addDiff("enabled", "context_rotation.enabled", defaults.ContextRotation.Enabled, cfg.ContextRotation.Enabled)
+	addDiff("warning_threshold", "context_rotation.warning_threshold", defaults.ContextRotation.WarningThreshold, cfg.ContextRotation.WarningThreshold)
+	addDiff("rotate_threshold", "context_rotation.rotate_threshold", defaults.ContextRotation.RotateThreshold, cfg.ContextRotation.RotateThreshold)
+
+	// CASS
+	addDiff("enabled", "cass.enabled", defaults.CASS.Enabled, cfg.CASS.Enabled)
+	addDiff("timeout", "cass.timeout", defaults.CASS.Timeout, cfg.CASS.Timeout)
+
+	return diffs
+}
+
+// Validate checks the configuration for errors and returns all issues found
+func Validate(cfg *Config) []error {
+	if cfg == nil {
+		return []error{fmt.Errorf("config is nil")}
+	}
+
+	var errs []error
+
+	// Validate context rotation
+	if err := ValidateContextRotationConfig(&cfg.ContextRotation); err != nil {
+		errs = append(errs, fmt.Errorf("context_rotation: %w", err))
+	}
+
+	// Validate projects_base if set
+	if cfg.ProjectsBase != "" {
+		expanded := ExpandHome(cfg.ProjectsBase)
+		if !filepath.IsAbs(expanded) {
+			errs = append(errs, fmt.Errorf("projects_base: must be an absolute path, got %q", cfg.ProjectsBase))
+		}
+	}
+
+	// Validate alerts thresholds
+	if cfg.Alerts.AgentStuckMinutes < 0 {
+		errs = append(errs, fmt.Errorf("alerts.agent_stuck_minutes: must be non-negative, got %d", cfg.Alerts.AgentStuckMinutes))
+	}
+	if cfg.Alerts.DiskLowThresholdGB < 0 {
+		errs = append(errs, fmt.Errorf("alerts.disk_low_threshold_gb: must be non-negative, got %.1f", cfg.Alerts.DiskLowThresholdGB))
+	}
+
+	// Validate checkpoints
+	if cfg.Checkpoints.MaxAutoCheckpoints < 0 {
+		errs = append(errs, fmt.Errorf("checkpoints.max_auto_checkpoints: must be non-negative, got %d", cfg.Checkpoints.MaxAutoCheckpoints))
+	}
+	if cfg.Checkpoints.ScrollbackLines < 0 {
+		errs = append(errs, fmt.Errorf("checkpoints.scrollback_lines: must be non-negative, got %d", cfg.Checkpoints.ScrollbackLines))
+	}
+
+	// Validate resilience
+	if cfg.Resilience.MaxRestarts < 0 {
+		errs = append(errs, fmt.Errorf("resilience.max_restarts: must be non-negative, got %d", cfg.Resilience.MaxRestarts))
+	}
+	if cfg.Resilience.RestartDelaySeconds < 0 {
+		errs = append(errs, fmt.Errorf("resilience.restart_delay_seconds: must be non-negative, got %d", cfg.Resilience.RestartDelaySeconds))
+	}
+
+	// Validate CASS timeout
+	if cfg.CASS.Timeout < 0 {
+		errs = append(errs, fmt.Errorf("cass.timeout: must be non-negative, got %d", cfg.CASS.Timeout))
+	}
+
+	// Validate tmux settings
+	if cfg.Tmux.DefaultPanes < 1 {
+		errs = append(errs, fmt.Errorf("tmux.default_panes: must be at least 1, got %d", cfg.Tmux.DefaultPanes))
+	}
+
+	return errs
+}
