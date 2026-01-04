@@ -757,12 +757,12 @@ func (r *Router) RouteWithRelaxation(agents []ScoredAgent, strategy StrategyName
 		return result
 	}
 
-	// Relax constraint: include THINKING agents
+	// Relax constraint: include THINKING agents (which are close to WAITING)
+	// These agents might have been excluded but are nearly ready for work.
 	relaxedAgents := make([]ScoredAgent, len(agents))
 	copy(relaxedAgents, agents)
 	for i := range relaxedAgents {
-		if relaxedAgents[i].ExcludeReason == "agent is currently generating" &&
-			relaxedAgents[i].State == StateThinking {
+		if relaxedAgents[i].State == StateThinking && relaxedAgents[i].Excluded {
 			relaxedAgents[i].Excluded = false
 			relaxedAgents[i].ExcludeReason = ""
 		}
