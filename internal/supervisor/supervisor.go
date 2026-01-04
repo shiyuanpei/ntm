@@ -372,7 +372,12 @@ func (s *Supervisor) monitorDaemon(d *ManagedDaemon) {
 
 			if healthURL == "" {
 				// No health URL, just check if process is running
-				if d.cmd.ProcessState != nil && d.cmd.ProcessState.Exited() {
+				// Note: ProcessState access is inherently racy after Wait() but this is
+				// a best-effort check; the waitForExit goroutine handles actual exits.
+				d.mu.RLock()
+				cmd := d.cmd
+				d.mu.RUnlock()
+				if cmd != nil && cmd.ProcessState != nil && cmd.ProcessState.Exited() {
 					s.handleDaemonFailure(d)
 				}
 				continue
@@ -402,12 +407,13 @@ func (s *Supervisor) waitForExit(d *ManagedDaemon) {
 
 	d.mu.Lock()
 	state := d.State
+	logFile := d.logFile
 	d.mu.Unlock()
 
 	// Only handle as failure if we didn't stop it ourselves
 	if state != StateStopping && state != StateStopped {
-		if err != nil {
-			fmt.Fprintf(d.logFile, "[supervisor] daemon exited with error: %v\n", err)
+		if err != nil && logFile != nil {
+			fmt.Fprintf(logFile, "[supervisor] daemon exited with error: %v\n", err)
 		}
 		s.handleDaemonFailure(d)
 	}
@@ -419,11 +425,14 @@ func (s *Supervisor) handleDaemonFailure(d *ManagedDaemon) {
 	d.Restarts++
 	restarts := d.Restarts
 	d.State = StateFailed
+	logFile := d.logFile
 	d.mu.Unlock()
 
 	// Check if we should restart
 	if restarts > s.maxRestarts {
-		fmt.Fprintf(d.logFile, "[supervisor] max restarts (%d) exceeded, not restarting\n", s.maxRestarts)
+		if logFile != nil {
+			fmt.Fprintf(logFile, "[supervisor] max restarts (%d) exceeded, not restarting\n", s.maxRestarts)
+		}
 		return
 	}
 
@@ -433,7 +442,9 @@ func (s *Supervisor) handleDaemonFailure(d *ManagedDaemon) {
 		backoff = s.restartBackoffMax
 	}
 
-	fmt.Fprintf(d.logFile, "[supervisor] restarting in %v (attempt %d/%d)\n", backoff, restarts, s.maxRestarts)
+	if logFile != nil {
+		fmt.Fprintf(logFile, "[supervisor] restarting in %v (attempt %d/%d)\n", backoff, restarts, s.maxRestarts)
+	}
 
 	select {
 	case <-s.ctx.Done():
@@ -442,12 +453,22 @@ func (s *Supervisor) handleDaemonFailure(d *ManagedDaemon) {
 	}
 
 	d.mu.Lock()
+	// Don't restart if daemon was explicitly stopped
+	if d.State == StateStopping || d.State == StateStopped {
+		d.mu.Unlock()
+		return
+	}
 	d.State = StateRestarting
 	d.mu.Unlock()
 
 	// Restart the daemon
 	if err := s.Start(d.Spec); err != nil {
-		fmt.Fprintf(d.logFile, "[supervisor] restart failed: %v\n", err)
+		d.mu.RLock()
+		logFile = d.logFile
+		d.mu.RUnlock()
+		if logFile != nil {
+			fmt.Fprintf(logFile, "[supervisor] restart failed: %v\n", err)
+		}
 	}
 }
 
