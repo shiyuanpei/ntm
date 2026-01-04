@@ -29,7 +29,8 @@ func DefaultMarkdownOptions() MarkdownOptions {
 	}
 }
 
-// CompactMarkdownOptions returns ultra-compact options for token savings.
+// CompactMarkdownOptions returns options for condensed output.
+// Savings come from showing fewer items, not truncating text.
 func CompactMarkdownOptions() MarkdownOptions {
 	return MarkdownOptions{
 		Compact:            true,
@@ -74,7 +75,8 @@ func RenderTriageMarkdown(triage *TriageResponse, opts MarkdownOptions) string {
 	return sb.String()
 }
 
-// renderCompactTriage renders ultra-compact markdown.
+// renderCompactTriage renders condensed markdown with fewer items but NO truncation.
+// Token savings come from showing fewer items and simpler formatting, not destroying information.
 func renderCompactTriage(sb *strings.Builder, triage *TriageResponse, opts MarkdownOptions) {
 	qr := &triage.Triage.QuickRef
 
@@ -82,21 +84,17 @@ func renderCompactTriage(sb *strings.Builder, triage *TriageResponse, opts Markd
 	sb.WriteString(fmt.Sprintf("## Triage: %d ready, %d blocked, %d in_progress\n\n",
 		qr.ActionableCount, qr.BlockedCount, qr.InProgressCount))
 
-	// Top picks as compact list
+	// Top picks as compact list - FULL titles and reasons, no truncation
 	if len(qr.TopPicks) > 0 {
 		sb.WriteString("**Next:**\n")
 		for i, pick := range qr.TopPicks {
 			if i >= opts.MaxRecommendations {
 				break
 			}
-			// Format: ID(score) - title | reason
-			reason := ""
+			// Format: ID(score) - title | reason (NO TRUNCATION)
+			sb.WriteString(fmt.Sprintf("- `%s` (%.2f) %s", pick.ID, pick.Score, pick.Title))
 			if len(pick.Reasons) > 0 {
-				reason = pick.Reasons[0]
-			}
-			sb.WriteString(fmt.Sprintf("- `%s` (%.2f) %s", pick.ID, pick.Score, truncate(pick.Title, 40)))
-			if reason != "" {
-				sb.WriteString(fmt.Sprintf(" | %s", truncate(reason, 50)))
+				sb.WriteString(fmt.Sprintf(" | %s", pick.Reasons[0]))
 			}
 			sb.WriteString("\n")
 		}
@@ -237,17 +235,6 @@ func renderHealthSummary(sb *strings.Builder, health *ProjectHealth) {
 	sb.WriteString("\n")
 }
 
-// truncate shortens a string with ellipsis.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return s[:maxLen]
-	}
-	return s[:maxLen-3] + "..."
-}
-
 // AgentType represents the type of AI agent.
 type AgentType string
 
@@ -273,7 +260,7 @@ const (
 )
 
 // PreferredFormat returns the preferred triage format for an agent type.
-// Claude gets JSON (large context), Codex/Gemini get compact markdown (50% savings).
+// Claude gets JSON (large context), Codex/Gemini get markdown (more readable).
 func PreferredFormat(agent AgentType) TriageFormat {
 	switch agent {
 	case AgentClaude:
