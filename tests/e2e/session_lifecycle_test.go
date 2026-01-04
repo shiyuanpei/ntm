@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -417,21 +418,5 @@ func TestEventLogging(t *testing.T) {
 
 // containsMarker checks if content contains the marker string.
 func containsMarker(content, marker string) bool {
-	return len(content) > 0 && len(marker) > 0 &&
-		(len(content) >= len(marker)) &&
-		(content == marker ||
-		 (len(content) > len(marker) &&
-		  (content[:len(marker)] == marker ||
-		   content[len(content)-len(marker):] == marker ||
-		   findSubstring(content, marker))))
-}
-
-// findSubstring checks if s contains substr.
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(content, marker)
 }
