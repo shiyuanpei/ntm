@@ -179,7 +179,7 @@ func (e *Engine) Approve(ctx context.Context, id string, approverID string) erro
 	// Check expiry
 	if time.Now().After(approval.ExpiresAt) {
 		approval.Status = state.ApprovalExpired
-		e.store.UpdateApproval(approval)
+		_ = e.store.UpdateApproval(approval) // Best-effort update before returning error
 		return fmt.Errorf("approval has expired")
 	}
 
@@ -332,9 +332,9 @@ func (e *Engine) ListPending(ctx context.Context) ([]state.Approval, error) {
 	now := time.Now()
 	for _, a := range approvals {
 		if a.Status == state.ApprovalPending && now.After(a.ExpiresAt) {
-			// Mark as expired
+			// Mark as expired (best-effort, continue even if update fails)
 			a.Status = state.ApprovalExpired
-			e.store.UpdateApproval(&a)
+			_ = e.store.UpdateApproval(&a)
 
 			if e.eventBus != nil {
 				e.eventBus.Publish(events.BaseEvent{
@@ -402,7 +402,8 @@ func (e *Engine) notifyApprovalRequest(appr *state.Approval) {
 		slbNote = " [SLB: Two-person rule required]"
 	}
 
-	e.notifier.Notify(notify.Event{
+	// Notification is best-effort; don't fail the operation if it fails
+	_ = e.notifier.Notify(notify.Event{
 		Type:    "approval.requested",
 		Message: fmt.Sprintf("Approval needed: %s on %s%s", appr.Action, appr.Resource, slbNote),
 		Session: appr.CorrelationID,
@@ -434,7 +435,8 @@ func (e *Engine) notifyApprovalDecision(appr *state.Approval, decision string) {
 		details["reason"] = appr.DeniedReason
 	}
 
-	e.notifier.Notify(notify.Event{
+	// Notification is best-effort; don't fail the operation if it fails
+	_ = e.notifier.Notify(notify.Event{
 		Type:    notify.EventType(fmt.Sprintf("approval.%s", decision)),
 		Message: fmt.Sprintf("Approval %s: %s on %s", decision, appr.Action, appr.Resource),
 		Session: appr.CorrelationID,
