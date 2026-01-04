@@ -70,11 +70,12 @@ func (s *Storage) PanesDirPath(sessionName, checkpointID string) string {
 // GenerateID creates a unique checkpoint ID from timestamp and name.
 func GenerateID(name string) string {
 	// Use milliseconds + random suffix to prevent collisions
-	timestamp := time.Now().Format("20060102-150405.000")
+	now := time.Now()
+	timestamp := now.Format("20060102-150405.000")
 
 	// Add 4 random hex digits (pseudo-random based on time is sufficient here)
 	// We don't need crypto/rand complexity for this, just collision avoidance
-	randSuffix := time.Now().UnixNano() % 0xffff
+	randSuffix := now.UnixNano() % 0xffff
 	id := fmt.Sprintf("%s-%04x", timestamp, randSuffix)
 
 	// Sanitize name for filesystem safety
