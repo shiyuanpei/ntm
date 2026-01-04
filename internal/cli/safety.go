@@ -62,7 +62,10 @@ type SafetyStatusResponse struct {
 }
 
 func runSafetyStatus(cmd *cobra.Command, args []string) error {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("getting home directory: %w", err)
+	}
 	ntmDir := filepath.Join(home, ".ntm")
 	wrapperDir := filepath.Join(ntmDir, "bin")
 
@@ -470,19 +473,37 @@ func installWrapper(path, content string, force bool) error {
 }
 
 func writeDefaultPolicy(path string) error {
+	// NOTE: Allowed patterns are checked FIRST (take precedence over blocked).
+	// This is how we handle --force-with-lease: allow it explicitly, then block --force.
+	// Go's regexp doesn't support lookaheads (?!...), so we use precedence instead.
 	content := `# NTM Safety Policy
 # Patterns are regular expressions matched against commands
+#
+# IMPORTANT: Precedence order is: allowed > blocked > approval_required
+# This means you can use 'allowed' to create exceptions to 'blocked' patterns.
 
+# Explicitly allowed patterns (checked FIRST - use for exceptions)
+allowed:
+  - pattern: 'git\s+push\s+.*--force-with-lease'
+    reason: "Safe force push (prevents overwriting others' work)"
+  - pattern: 'git\s+reset\s+--soft'
+    reason: "Soft reset preserves changes in staging"
+  - pattern: 'git\s+reset\s+HEAD~?\d*$'
+    reason: "Mixed reset preserves working directory"
+
+# Blocked patterns (dangerous commands)
 blocked:
   - pattern: 'git\s+reset\s+--hard'
     reason: "Hard reset loses uncommitted changes"
   - pattern: 'git\s+clean\s+-fd'
     reason: "Removes untracked files permanently"
-  - pattern: 'git\s+push\s+.*--force(?!\s*-with-lease)'
+  - pattern: 'git\s+push\s+.*--force'
     reason: "Force push can overwrite remote history"
-  - pattern: 'git\s+push\s+.*-f(?:\s|$)'
+  - pattern: 'git\s+push\s+.*\s-f(\s|$)'
     reason: "Force push can overwrite remote history"
-  - pattern: 'rm\s+-rf\s+/'
+  - pattern: 'git\s+push\s+-f(\s|$)'
+    reason: "Force push can overwrite remote history"
+  - pattern: 'rm\s+-rf\s+/$'
     reason: "Recursive delete of root is catastrophic"
   - pattern: 'rm\s+-rf\s+~'
     reason: "Recursive delete of home directory"
@@ -495,21 +516,14 @@ blocked:
   - pattern: 'git\s+stash\s+clear'
     reason: "Clearing all stashes loses saved work"
 
+# Approval required (potentially dangerous, need confirmation)
 approval_required:
   - pattern: 'git\s+rebase\s+-i'
     reason: "Interactive rebase rewrites history"
   - pattern: 'git\s+commit\s+--amend'
     reason: "Amending rewrites history"
-  - pattern: 'rm\s+-rf'
+  - pattern: 'rm\s+-rf\s+\S'
     reason: "Recursive force delete"
-
-allowed:
-  - pattern: 'git\s+push\s+.*--force-with-lease'
-    reason: "Safe force push"
-  - pattern: 'git\s+reset\s+--soft'
-    reason: "Soft reset preserves changes"
-  - pattern: 'git\s+reset\s+HEAD~?\d*\s*$'
-    reason: "Mixed reset preserves working directory"
 `
 	return os.WriteFile(path, []byte(content), 0644)
 }
@@ -530,22 +544,23 @@ if [ -z "$REAL_GIT" ]; then
     REAL_GIT="/usr/bin/git"
 fi
 
-# Check command against policy
-check_result=$(ntm safety check "$@" --json 2>/dev/null)
-if [ $? -eq 0 ]; then
-    action=$(echo "$check_result" | jq -r '.action' 2>/dev/null)
-    if [ "$action" = "block" ]; then
-        reason=$(echo "$check_result" | jq -r '.reason' 2>/dev/null)
-        echo "NTM Safety: Command blocked" >&2
-        echo "  Reason: $reason" >&2
-        echo "  Command: git $*" >&2
+# Check command against policy (include "git" in the command string)
+check_result=$(ntm safety check "git $*" --json 2>&1)
+exit_code=$?
 
-        # Log the blocked command
-        mkdir -p "$HOME/.ntm/logs"
-        echo "{\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"command\":\"git $*\",\"reason\":\"$reason\",\"action\":\"block\"}" >> "$HOME/.ntm/logs/blocked.jsonl"
+# ntm safety check exits 0 for allow/approve, 1 for block
+if [ $exit_code -eq 1 ]; then
+    # Command was blocked
+    reason=$(echo "$check_result" | jq -r '.reason // "Policy violation"' 2>/dev/null)
+    echo "NTM Safety: Command blocked" >&2
+    echo "  Reason: $reason" >&2
+    echo "  Command: git $*" >&2
 
-        exit 1
-    fi
+    # Log the blocked command
+    mkdir -p "$HOME/.ntm/logs"
+    echo "{\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"command\":\"git $*\",\"reason\":\"$reason\",\"action\":\"block\"}" >> "$HOME/.ntm/logs/blocked.jsonl"
+
+    exit 1
 fi
 
 # Pass through to real git
@@ -562,21 +577,22 @@ if [ -z "$REAL_RM" ]; then
 fi
 
 # Check command against policy
-check_result=$(ntm safety check "rm $*" --json 2>/dev/null)
-if [ $? -eq 0 ]; then
-    action=$(echo "$check_result" | jq -r '.action' 2>/dev/null)
-    if [ "$action" = "block" ]; then
-        reason=$(echo "$check_result" | jq -r '.reason' 2>/dev/null)
-        echo "NTM Safety: Command blocked" >&2
-        echo "  Reason: $reason" >&2
-        echo "  Command: rm $*" >&2
+check_result=$(ntm safety check "rm $*" --json 2>&1)
+exit_code=$?
 
-        # Log the blocked command
-        mkdir -p "$HOME/.ntm/logs"
-        echo "{\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"command\":\"rm $*\",\"reason\":\"$reason\",\"action\":\"block\"}" >> "$HOME/.ntm/logs/blocked.jsonl"
+# ntm safety check exits 0 for allow/approve, 1 for block
+if [ $exit_code -eq 1 ]; then
+    # Command was blocked
+    reason=$(echo "$check_result" | jq -r '.reason // "Policy violation"' 2>/dev/null)
+    echo "NTM Safety: Command blocked" >&2
+    echo "  Reason: $reason" >&2
+    echo "  Command: rm $*" >&2
 
-        exit 1
-    fi
+    # Log the blocked command
+    mkdir -p "$HOME/.ntm/logs"
+    echo "{\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"command\":\"rm $*\",\"reason\":\"$reason\",\"action\":\"block\"}" >> "$HOME/.ntm/logs/blocked.jsonl"
+
+    exit 1
 fi
 
 # Pass through to real rm
@@ -600,22 +616,23 @@ if [ -z "$COMMAND" ]; then
 fi
 
 # Check against policy
-check_result=$(ntm safety check "$COMMAND" --json 2>/dev/null)
-if [ $? -eq 0 ]; then
-    action=$(echo "$check_result" | jq -r '.action' 2>/dev/null)
-    if [ "$action" = "block" ]; then
-        reason=$(echo "$check_result" | jq -r '.reason' 2>/dev/null)
+check_result=$(ntm safety check "$COMMAND" --json 2>&1)
+exit_code=$?
 
-        # Log the blocked command
-        mkdir -p "$HOME/.ntm/logs"
-        session="${NTM_SESSION:-unknown}"
-        agent="${CLAUDE_AGENT_TYPE:-claude}"
-        echo "{\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"session\":\"$session\",\"agent\":\"$agent\",\"command\":\"$COMMAND\",\"reason\":\"$reason\",\"action\":\"block\"}" >> "$HOME/.ntm/logs/blocked.jsonl"
+# ntm safety check exits 0 for allow/approve, 1 for block
+if [ $exit_code -eq 1 ]; then
+    # Command was blocked
+    reason=$(echo "$check_result" | jq -r '.reason // "Policy violation"' 2>/dev/null)
 
-        # Return error to Claude Code
-        echo "BLOCKED: $reason"
-        exit 1
-    fi
+    # Log the blocked command
+    mkdir -p "$HOME/.ntm/logs"
+    session="${NTM_SESSION:-unknown}"
+    agent="${CLAUDE_AGENT_TYPE:-claude}"
+    echo "{\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"session\":\"$session\",\"agent\":\"$agent\",\"command\":\"$COMMAND\",\"reason\":\"$reason\",\"action\":\"block\"}" >> "$HOME/.ntm/logs/blocked.jsonl"
+
+    # Return error to Claude Code
+    echo "BLOCKED: $reason"
+    exit 1
 fi
 
 exit 0
