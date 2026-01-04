@@ -242,6 +242,9 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("invalid reservation ID '%s': must be a number", reservationIDStr)
 			}
+			if reservationID < 1 {
+				return fmt.Errorf("invalid reservation ID '%s': must be a positive number", reservationIDStr)
+			}
 
 			return runForceRelease(session, reservationID, note, !noNotify, skipConfirm)
 		},
