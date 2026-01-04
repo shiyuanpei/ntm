@@ -136,3 +136,155 @@ func TestCheck_NoMatch(t *testing.T) {
 		t.Errorf("Check('ls -la') = %v, want nil", match)
 	}
 }
+
+func TestAutomationConfig(t *testing.T) {
+	p := DefaultPolicy()
+
+	// Test default automation settings
+	if !p.Automation.AutoCommit {
+		t.Error("expected AutoCommit to be true by default")
+	}
+	if p.Automation.AutoPush {
+		t.Error("expected AutoPush to be false by default")
+	}
+	if p.Automation.ForceRelease != "approval" {
+		t.Errorf("expected ForceRelease to be 'approval', got %q", p.Automation.ForceRelease)
+	}
+}
+
+func TestAutomationEnabled(t *testing.T) {
+	p := DefaultPolicy()
+
+	if !p.AutomationEnabled("auto_commit") {
+		t.Error("expected auto_commit to be enabled")
+	}
+	if p.AutomationEnabled("auto_push") {
+		t.Error("expected auto_push to be disabled")
+	}
+	if p.AutomationEnabled("unknown_feature") {
+		t.Error("expected unknown feature to be disabled")
+	}
+}
+
+func TestForceReleasePolicy(t *testing.T) {
+	p := DefaultPolicy()
+
+	// Default should be "approval"
+	if got := p.ForceReleasePolicy(); got != "approval" {
+		t.Errorf("ForceReleasePolicy() = %q, want 'approval'", got)
+	}
+
+	// Test with empty value
+	p.Automation.ForceRelease = ""
+	if got := p.ForceReleasePolicy(); got != "approval" {
+		t.Errorf("ForceReleasePolicy() with empty = %q, want 'approval'", got)
+	}
+
+	// Test explicit values
+	for _, val := range []string{"never", "approval", "auto"} {
+		p.Automation.ForceRelease = val
+		if got := p.ForceReleasePolicy(); got != val {
+			t.Errorf("ForceReleasePolicy() = %q, want %q", got, val)
+		}
+	}
+}
+
+func TestNeedsSLBApproval(t *testing.T) {
+	p := DefaultPolicy()
+
+	// force_release rule has SLB=true in default policy
+	if !p.NeedsSLBApproval("force_release lock-123") {
+		t.Error("expected force_release to require SLB approval")
+	}
+
+	// Regular commands don't need SLB
+	if p.NeedsSLBApproval("git commit --amend") {
+		t.Error("git commit --amend should not require SLB approval")
+	}
+
+	// Unmatched commands don't need SLB
+	if p.NeedsSLBApproval("ls -la") {
+		t.Error("ls -la should not require SLB approval")
+	}
+}
+
+func TestMatchSLBFlag(t *testing.T) {
+	p := DefaultPolicy()
+
+	match := p.Check("force_release lock-123")
+	if match == nil {
+		t.Fatal("expected match for force_release")
+	}
+	if !match.SLB {
+		t.Error("expected SLB flag to be true for force_release match")
+	}
+
+	// Non-SLB rule should have SLB=false
+	match = p.Check("git commit --amend")
+	if match == nil {
+		t.Fatal("expected match for git commit --amend")
+	}
+	if match.SLB {
+		t.Error("expected SLB flag to be false for git commit --amend")
+	}
+}
+
+func TestValidate(t *testing.T) {
+	cases := []struct {
+		name    string
+		policy  func() *Policy
+		wantErr bool
+	}{
+		{
+			name: "default policy is valid",
+			policy: func() *Policy {
+				return DefaultPolicy()
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid force_release value",
+			policy: func() *Policy {
+				p := DefaultPolicy()
+				p.Automation.ForceRelease = "invalid"
+				return p
+			},
+			wantErr: true,
+		},
+		{
+			name: "zero version is corrected",
+			policy: func() *Policy {
+				p := DefaultPolicy()
+				p.Version = 0
+				return p
+			},
+			wantErr: false, // Should not error, just default to 1
+		},
+		{
+			name: "valid force_release values",
+			policy: func() *Policy {
+				p := DefaultPolicy()
+				p.Automation.ForceRelease = "never"
+				return p
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := tc.policy()
+			err := p.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestPolicyVersion(t *testing.T) {
+	p := DefaultPolicy()
+	if p.Version != 1 {
+		t.Errorf("expected Version to be 1, got %d", p.Version)
+	}
+}
