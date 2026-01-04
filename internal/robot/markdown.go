@@ -508,8 +508,20 @@ func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
+	// When maxLen too small for content + ellipsis, just return first maxLen chars
 	if maxLen <= 3 {
-		return "..."[:maxLen]
+		// Find last rune boundary at or before maxLen bytes
+		lastValid := 0
+		for i := range s {
+			if i > maxLen {
+				break
+			}
+			lastValid = i
+		}
+		if lastValid == 0 && len(s) > 0 {
+			return ""
+		}
+		return s[:lastValid]
 	}
 	// Find first rune boundary at or after maxLen-3 bytes
 	targetLen := maxLen - 3

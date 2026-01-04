@@ -216,8 +216,20 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
+	// When n too small for content + ellipsis, just return first n chars
 	if n <= 3 {
-		return "..."[:n]
+		// Find last rune boundary at or before n bytes
+		lastValid := 0
+		for i := range s {
+			if i > n {
+				break
+			}
+			lastValid = i
+		}
+		if lastValid == 0 && len(s) > 0 {
+			return ""
+		}
+		return s[:lastValid]
 	}
 	// Find first rune boundary at or after n-3 bytes
 	targetLen := n - 3
