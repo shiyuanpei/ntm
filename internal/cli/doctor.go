@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
+	"github.com/Dicklesworthstone/ntm/internal/invariants"
 	"github.com/Dicklesworthstone/ntm/internal/tools"
 )
 
@@ -48,14 +49,24 @@ This command helps diagnose issues before spawning sessions.`,
 
 // DoctorReport contains the full health check report
 type DoctorReport struct {
-	Timestamp     time.Time     `json:"timestamp"`
-	Overall       string        `json:"overall"` // "healthy", "warning", "unhealthy"
-	Tools         []ToolCheck   `json:"tools"`
-	Dependencies  []DepCheck    `json:"dependencies"`
-	Daemons       []DaemonCheck `json:"daemons"`
-	Configuration []ConfigCheck `json:"configuration"`
-	Warnings      int           `json:"warnings"`
-	Errors        int           `json:"errors"`
+	Timestamp     time.Time        `json:"timestamp"`
+	Overall       string           `json:"overall"` // "healthy", "warning", "unhealthy"
+	Tools         []ToolCheck      `json:"tools"`
+	Dependencies  []DepCheck       `json:"dependencies"`
+	Daemons       []DaemonCheck    `json:"daemons"`
+	Configuration []ConfigCheck    `json:"configuration"`
+	Invariants    []InvariantCheck `json:"invariants"`
+	Warnings      int              `json:"warnings"`
+	Errors        int              `json:"errors"`
+}
+
+// InvariantCheck represents a design invariant check result
+type InvariantCheck struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Status  string   `json:"status"` // "ok", "warning", "error"
+	Message string   `json:"message,omitempty"`
+	Details []string `json:"details,omitempty"`
 }
 
 // ToolCheck represents a tool health check result
@@ -129,6 +140,9 @@ func performDoctorCheck(ctx context.Context) *DoctorReport {
 	// Check configuration
 	report.Configuration = checkConfiguration()
 
+	// Check design invariants
+	report.Invariants = checkInvariants(ctx)
+
 	// Calculate overall status
 	for _, t := range report.Tools {
 		switch t.Status {
@@ -156,6 +170,14 @@ func performDoctorCheck(ctx context.Context) *DoctorReport {
 	}
 	for _, c := range report.Configuration {
 		switch c.Status {
+		case "error":
+			report.Errors++
+		case "warning":
+			report.Warnings++
+		}
+	}
+	for _, i := range report.Invariants {
+		switch i.Status {
 		case "error":
 			report.Errors++
 		case "warning":
@@ -399,6 +421,39 @@ func checkConfiguration() []ConfigCheck {
 	return checks
 }
 
+func checkInvariants(ctx context.Context) []InvariantCheck {
+	var checks []InvariantCheck
+
+	// Get current working directory for the checker
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+
+	checker := invariants.NewChecker(cwd)
+	report := checker.CheckAll(ctx)
+
+	// Convert invariant results to InvariantCheck format
+	defs := invariants.Definitions()
+	for _, id := range invariants.AllInvariants() {
+		result, ok := report.Results[id]
+		if !ok {
+			continue
+		}
+
+		def := defs[id]
+		checks = append(checks, InvariantCheck{
+			ID:      string(id),
+			Name:    def.Name,
+			Status:  result.Status,
+			Message: result.Message,
+			Details: result.Details,
+		})
+	}
+
+	return checks
+}
+
 func outputDoctorJSON(report *DoctorReport) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
@@ -490,6 +545,18 @@ func renderDoctorTUI(report *DoctorReport) error {
 	for _, c := range report.Configuration {
 		icon := statusIcon(c.Status)
 		fmt.Printf("  %s %s %s\n", icon, c.Name, mutedStyle.Render(c.Message))
+	}
+
+	// Invariants section
+	fmt.Println(sectionStyle.Render("Design Invariants:"))
+	for _, i := range report.Invariants {
+		icon := statusIcon(i.Status)
+		fmt.Printf("  %s %s %s\n", icon, i.Name, mutedStyle.Render(i.Message))
+		if doctorVerbose && len(i.Details) > 0 {
+			for _, detail := range i.Details {
+				fmt.Printf("      %s\n", mutedStyle.Render(detail))
+			}
+		}
 	}
 
 	// Overall status box
