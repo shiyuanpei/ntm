@@ -1243,10 +1243,25 @@ func PrintBeadCreate(opts BeadCreateOptions) error {
 	}
 
 	// Parse the result to get the bead ID
-	var result []struct {
+	// bd create returns a single object, not an array
+	var singleResult struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal([]byte(createOutput), &result); err != nil || len(result) == 0 {
+	if err := json.Unmarshal([]byte(createOutput), &singleResult); err != nil {
+		// Try array format as fallback
+		var arrayResult []struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(createOutput), &arrayResult); err != nil || len(arrayResult) == 0 {
+			return RobotError(
+				fmt.Errorf("failed to parse created bead ID"),
+				ErrCodeInternalError,
+				"Bead may have been created but ID not returned",
+			)
+		}
+		singleResult.ID = arrayResult[0].ID
+	}
+	if singleResult.ID == "" {
 		return RobotError(
 			fmt.Errorf("failed to parse created bead ID"),
 			ErrCodeInternalError,
@@ -1254,7 +1269,7 @@ func PrintBeadCreate(opts BeadCreateOptions) error {
 		)
 	}
 
-	output.BeadID = result[0].ID
+	output.BeadID = singleResult.ID
 	output.Created = true
 
 	// Add dependencies if specified
@@ -1338,19 +1353,24 @@ func PrintBeadShow(opts BeadShowOptions) error {
 	}
 
 	// Parse bead info - bd show returns an array with detailed info
+	// Dependencies/dependents are arrays of objects with id/title/etc.
+	type depInfo struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+	}
 	var beadInfo []struct {
-		ID          string   `json:"id"`
-		Title       string   `json:"title"`
-		Status      string   `json:"status"`
-		IssueType   string   `json:"issue_type"`
-		Priority    int      `json:"priority"`
-		Assignee    string   `json:"assignee"`
-		Description string   `json:"description"`
-		Labels      []string `json:"labels"`
-		CreatedAt   string   `json:"created_at"`
-		UpdatedAt   string   `json:"updated_at"`
-		DependsOn   []string `json:"depends_on"`
-		Blocks      []string `json:"blocks"`
+		ID           string    `json:"id"`
+		Title        string    `json:"title"`
+		Status       string    `json:"status"`
+		IssueType    string    `json:"issue_type"`
+		Priority     int       `json:"priority"`
+		Assignee     string    `json:"assignee"`
+		Description  string    `json:"description"`
+		Labels       []string  `json:"labels"`
+		CreatedAt    string    `json:"created_at"`
+		UpdatedAt    string    `json:"updated_at"`
+		Dependencies []depInfo `json:"dependencies"`
+		Dependents   []depInfo `json:"dependents"`
 	}
 
 	if err := json.Unmarshal([]byte(showOutput), &beadInfo); err != nil || len(beadInfo) == 0 {
@@ -1371,8 +1391,14 @@ func PrintBeadShow(opts BeadShowOptions) error {
 	output.Labels = info.Labels
 	output.CreatedAt = info.CreatedAt
 	output.UpdatedAt = info.UpdatedAt
-	output.DependsOn = info.DependsOn
-	output.Blocks = info.Blocks
+
+	// Extract dependency IDs from the nested objects
+	for _, dep := range info.Dependencies {
+		output.DependsOn = append(output.DependsOn, dep.ID)
+	}
+	for _, dep := range info.Dependents {
+		output.Blocks = append(output.Blocks, dep.ID)
+	}
 
 	// Generate hints based on status
 	var suggestions []RobotAction
