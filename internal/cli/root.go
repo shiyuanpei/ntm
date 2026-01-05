@@ -682,6 +682,36 @@ Shell Integration:
 			return
 		}
 
+		// Robot-alerts handler for alert listing (TUI parity)
+		if robotAlerts {
+			opts := robot.TUIAlertsOptions{
+				Session:  robotAlertsSession,
+				Severity: robotAlertsSeverity,
+				Type:     robotAlertsType,
+			}
+			if err := robot.PrintAlertsTUI(cfg, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+
+		// Robot-beads-list handler for bead listing (TUI parity)
+		if robotBeadsList {
+			opts := robot.BeadsListOptions{
+				Status:   robotBeadsStatus,
+				Priority: robotBeadsPriority,
+				Assignee: robotBeadsAssignee,
+				Type:     robotBeadsType,
+				Limit:    robotBeadsLimit,
+			}
+			if err := robot.PrintBeadsList(opts); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+
 		// Robot-bead handlers for bead management
 		if robotBeadClaim != "" {
 			opts := robot.BeadClaimOptions{
@@ -927,6 +957,20 @@ var (
 	robotDismissSession  string // session scope for alert dismissal
 	robotDismissAll      bool   // dismiss all matching alerts
 
+	// Robot-alerts flags for alert listing
+	robotAlerts         bool   // list alerts
+	robotAlertsSeverity string // filter by severity
+	robotAlertsType     string // filter by alert type
+	robotAlertsSession  string // filter by session
+
+	// Robot-beads-list flags for bead listing
+	robotBeadsList       bool   // list beads
+	robotBeadsStatus     string // filter by status: open, in_progress, closed, blocked
+	robotBeadsPriority   string // filter by priority: 0-4 or P0-P4
+	robotBeadsAssignee   string // filter by assignee
+	robotBeadsType       string // filter by type: task, bug, feature, epic, chore
+	robotBeadsLimit      int    // max beads to return
+
 	// Robot-bead flags for bead management
 	robotBeadClaim    string   // bead ID to claim
 	robotBeadCreate   bool     // create a new bead
@@ -1119,6 +1163,20 @@ func init() {
 	rootCmd.Flags().StringVar(&robotDismissAlert, "robot-dismiss-alert", "", "Dismiss an alert by ID. Example: ntm --robot-dismiss-alert=alert-abc123")
 	rootCmd.Flags().StringVar(&robotDismissSession, "dismiss-session", "", "Scope dismissal to session. Optional with --robot-dismiss-alert")
 	rootCmd.Flags().BoolVar(&robotDismissAll, "dismiss-all", false, "Dismiss all matching alerts. Optional with --robot-dismiss-alert")
+
+	// Robot-alerts flags for alert listing (TUI parity)
+	rootCmd.Flags().BoolVar(&robotAlerts, "robot-alerts", false, "List active alerts with filtering. TUI parity for Alerts panel. Example: ntm --robot-alerts --alerts-severity=critical")
+	rootCmd.Flags().StringVar(&robotAlertsSeverity, "alerts-severity", "", "Filter by severity: info, warning, error, critical. Optional with --robot-alerts")
+	rootCmd.Flags().StringVar(&robotAlertsType, "alerts-type", "", "Filter by type: agent_stuck, agent_crashed, rate_limit, disk_low, etc. Optional with --robot-alerts")
+	rootCmd.Flags().StringVar(&robotAlertsSession, "alerts-session", "", "Filter to specific session. Optional with --robot-alerts")
+
+	// Robot-beads-list flags for bead listing (TUI parity)
+	rootCmd.Flags().BoolVar(&robotBeadsList, "robot-beads-list", false, "List beads with filtering. TUI parity for Beads panel. Example: ntm --robot-beads-list --beads-status=open")
+	rootCmd.Flags().StringVar(&robotBeadsStatus, "beads-status", "", "Filter by status: open, in_progress, closed, blocked. Optional with --robot-beads-list")
+	rootCmd.Flags().StringVar(&robotBeadsPriority, "beads-priority", "", "Filter by priority: 0-4 or P0-P4. Optional with --robot-beads-list")
+	rootCmd.Flags().StringVar(&robotBeadsAssignee, "beads-assignee", "", "Filter by assignee. Optional with --robot-beads-list")
+	rootCmd.Flags().StringVar(&robotBeadsType, "beads-type", "", "Filter by type: task, bug, feature, epic, chore. Optional with --robot-beads-list")
+	rootCmd.Flags().IntVar(&robotBeadsLimit, "beads-limit", 20, "Max beads to return (default 20). Optional with --robot-beads-list")
 
 	// Robot-bead flags for programmatic bead management
 	rootCmd.Flags().StringVar(&robotBeadClaim, "robot-bead-claim", "", "Claim a bead by ID. Example: ntm --robot-bead-claim=ntm-abc123")
@@ -1662,7 +1720,7 @@ func needsConfigLoading(cmdName string) bool {
 			robotSend != "" || robotAck != "" || robotSpawn != "" ||
 			robotInterrupt != "" || robotGraph || robotMail || robotHealth != "" ||
 			robotTerse || robotMarkdown || robotSave != "" || robotRestore != "" ||
-			robotContext != "" {
+			robotContext != "" || robotAlerts {
 			return true
 		}
 	}

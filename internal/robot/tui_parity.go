@@ -1066,6 +1066,226 @@ func truncateString(s string, max int) string {
 }
 
 // =============================================================================
+// Bead Listing (--robot-beads-list)
+// =============================================================================
+// Provides programmatic bead listing for AI agents, mirroring TUI beads panel.
+
+// BeadsListOptions configures the bead listing query
+type BeadsListOptions struct {
+	Status   string // Filter by status: open, in_progress, closed, blocked
+	Priority string // Filter by priority: 0-4 or P0-P4
+	Assignee string // Filter by assignee
+	Type     string // Filter by type: task, bug, feature, epic, chore
+	Limit    int    // Max beads to return
+}
+
+// BeadListItem represents a single bead in the list output
+type BeadListItem struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Status      string   `json:"status"`
+	Priority    string   `json:"priority"`
+	Type        string   `json:"type"`
+	Assignee    string   `json:"assignee,omitempty"`
+	Labels      []string `json:"labels,omitempty"`
+	BlockedBy   []string `json:"blocked_by,omitempty"`
+	CreatedAt   string   `json:"created_at,omitempty"`
+	UpdatedAt   string   `json:"updated_at,omitempty"`
+	IsReady     bool     `json:"is_ready"`
+	IsBlocked   bool     `json:"is_blocked"`
+	Description string   `json:"description,omitempty"`
+}
+
+// BeadsListOutput represents the result of listing beads
+type BeadsListOutput struct {
+	RobotResponse
+	Beads      []BeadListItem    `json:"beads"`
+	Total      int               `json:"total"`
+	Filtered   int               `json:"filtered"`
+	Summary    BeadsListSummary  `json:"summary"`
+	AgentHints *AgentHints       `json:"_agent_hints,omitempty"`
+}
+
+// BeadsListSummary provides counts by status for bead listing
+type BeadsListSummary struct {
+	Open       int `json:"open"`
+	InProgress int `json:"in_progress"`
+	Blocked    int `json:"blocked"`
+	Closed     int `json:"closed"`
+	Ready      int `json:"ready"`
+}
+
+// PrintBeadsList lists beads with optional filtering
+func PrintBeadsList(opts BeadsListOptions) error {
+	output := BeadsListOutput{
+		RobotResponse: NewRobotResponse(true),
+		Beads:         []BeadListItem{},
+	}
+
+	// Check if bv/bd is installed
+	if !bv.IsInstalled() {
+		return RobotError(
+			fmt.Errorf("beads system not available"),
+			ErrCodeDependencyMissing,
+			"Install bv/bd or run 'bd init' in your project",
+		)
+	}
+
+	// Build bd list command with filters
+	args := []string{"list", "--json"}
+
+	// Add status filter
+	if opts.Status != "" {
+		args = append(args, "--status="+opts.Status)
+	}
+
+	// Add priority filter (normalize P0-P4 to 0-4)
+	if opts.Priority != "" {
+		priority := opts.Priority
+		if len(priority) == 2 && (priority[0] == 'P' || priority[0] == 'p') {
+			priority = string(priority[1])
+		}
+		args = append(args, "--priority="+priority)
+	}
+
+	// Add assignee filter
+	if opts.Assignee != "" {
+		args = append(args, "--assignee="+opts.Assignee)
+	}
+
+	// Add type filter
+	if opts.Type != "" {
+		args = append(args, "--type="+opts.Type)
+	}
+
+	// Execute bd list
+	result, err := bv.RunBd("", args...)
+	if err != nil {
+		// Check if this is just "no beads" vs actual error
+		if strings.Contains(err.Error(), "no .beads") || strings.Contains(err.Error(), "not initialized") {
+			output.AgentHints = &AgentHints{
+				Summary: "Beads not initialized in this project",
+				Notes:   []string{"Run 'bd init' to initialize beads tracking"},
+			}
+			return encodeJSON(output)
+		}
+		return RobotError(
+			fmt.Errorf("failed to list beads: %w", err),
+			ErrCodeInternalError,
+			"Check that bd is installed and .beads/ exists",
+		)
+	}
+
+	// Parse bd list output
+	// Note: bd list returns issue_type (not type), and doesn't include blocked_by
+	// The status field already indicates if a bead is blocked
+	var rawBeads []struct {
+		ID              string   `json:"id"`
+		Title           string   `json:"title"`
+		Status          string   `json:"status"`
+		Priority        int      `json:"priority"`
+		IssueType       string   `json:"issue_type"`
+		Assignee        string   `json:"assignee"`
+		Labels          []string `json:"labels"`
+		CreatedAt       string   `json:"created_at"`
+		UpdatedAt       string   `json:"updated_at"`
+		Description     string   `json:"description"`
+		DependencyCount int      `json:"dependency_count"`
+	}
+
+	if err := json.Unmarshal([]byte(result), &rawBeads); err != nil {
+		// Try parsing as single object (some bd versions return differently)
+		return RobotError(
+			fmt.Errorf("failed to parse bead list: %w", err),
+			ErrCodeInternalError,
+			"Unexpected bd output format",
+		)
+	}
+
+	// First, compute summary from ALL beads (before applying limit)
+	// This gives accurate counts for the full dataset
+	// Note: bd status "blocked" means unmet dependencies, "open" means ready to work
+	for _, rb := range rawBeads {
+		switch rb.Status {
+		case "open":
+			output.Summary.Open++
+			output.Summary.Ready++ // open status means ready (no unmet deps)
+		case "in_progress":
+			output.Summary.InProgress++
+		case "blocked":
+			output.Summary.Blocked++
+		case "closed":
+			output.Summary.Closed++
+		}
+	}
+
+	output.Total = len(rawBeads)
+
+	// Apply limit for the returned items
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	// Convert to output format (limited)
+	for i, rb := range rawBeads {
+		if i >= limit {
+			break
+		}
+
+		// Determine ready/blocked status from bd status field
+		isBlocked := rb.Status == "blocked"
+		isReady := rb.Status == "open" // open means ready (no unmet deps)
+
+		// Format priority as P0-P4
+		priorityStr := fmt.Sprintf("P%d", rb.Priority)
+
+		item := BeadListItem{
+			ID:          rb.ID,
+			Title:       rb.Title,
+			Status:      rb.Status,
+			Priority:    priorityStr,
+			Type:        rb.IssueType, // Use IssueType from bd output
+			Assignee:    rb.Assignee,
+			Labels:      rb.Labels,
+			CreatedAt:   rb.CreatedAt,
+			UpdatedAt:   rb.UpdatedAt,
+			IsReady:     isReady,
+			IsBlocked:   isBlocked,
+			Description: rb.Description,
+		}
+		output.Beads = append(output.Beads, item)
+	}
+
+	output.Filtered = len(output.Beads)
+
+	// Generate agent hints
+	var notes []string
+	var warnings []string
+
+	if output.Summary.Ready > 0 {
+		notes = append(notes, fmt.Sprintf("Claim one of %d ready beads with --robot-bead-claim=ID", output.Summary.Ready))
+	}
+	if output.Summary.InProgress > 0 {
+		notes = append(notes, fmt.Sprintf("Review %d in-progress beads", output.Summary.InProgress))
+	}
+	if output.Summary.Blocked > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d beads are blocked by dependencies", output.Summary.Blocked))
+	}
+	if output.Total == 0 {
+		notes = append(notes, "Create new beads with --robot-bead-create --bead-title='...'")
+	}
+
+	output.AgentHints = &AgentHints{
+		Summary:  fmt.Sprintf("%d beads (%d ready, %d in progress)", output.Total, output.Summary.Ready, output.Summary.InProgress),
+		Notes:    notes,
+		Warnings: warnings,
+	}
+
+	return encodeJSON(output)
+}
+
+// =============================================================================
 // Bead Management (--robot-bead-claim, --robot-bead-create, --robot-bead-show)
 // =============================================================================
 // Provides programmatic bead operations for AI agents, mirroring TUI beads panel actions.
