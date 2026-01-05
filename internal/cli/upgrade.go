@@ -551,6 +551,10 @@ func getAssetName() string {
 	if runtime.GOOS == "darwin" {
 		arch = "all"
 	}
+	// 32-bit ARM uses "armv7" suffix (GoReleaser builds with goarm=7)
+	if runtime.GOARCH == "arm" {
+		arch = "armv7"
+	}
 	return fmt.Sprintf("ntm_%s_%s", runtime.GOOS, arch)
 }
 
@@ -568,6 +572,10 @@ func getArchiveAssetName(version string) string {
 	// macOS uses universal binary ("all") that works on both amd64 and arm64
 	if runtime.GOOS == "darwin" {
 		arch = "all"
+	}
+	// 32-bit ARM uses "armv7" suffix (GoReleaser builds with goarm=7)
+	if runtime.GOARCH == "arm" {
+		arch = "armv7"
 	}
 	ext := "tar.gz"
 	if runtime.GOOS == "windows" {

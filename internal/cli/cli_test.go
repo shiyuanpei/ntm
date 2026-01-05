@@ -706,6 +706,15 @@ func TestUpgradeAssetNamingContract(t *testing.T) {
 			wantArchive:    "ntm_1.5.0_linux_arm64.tar.gz",
 			wantBinaryName: "ntm_linux_arm64",
 		},
+		// 32-bit ARM uses armv7 suffix (goarm=7)
+		{
+			name:           "linux_arm",
+			goos:           "linux",
+			goarch:         "arm",
+			version:        "1.5.0",
+			wantArchive:    "ntm_1.5.0_linux_armv7.tar.gz",
+			wantBinaryName: "ntm_linux_armv7",
+		},
 		// Windows uses .zip extension
 		{
 			name:           "windows_amd64",
@@ -754,6 +763,10 @@ func simulateGetAssetName(goos, goarch string) string {
 	if goos == "darwin" {
 		arch = "all"
 	}
+	// 32-bit ARM uses "armv7" suffix (GoReleaser builds with goarm=7)
+	if goarch == "arm" {
+		arch = "armv7"
+	}
 	return "ntm_" + goos + "_" + arch
 }
 
@@ -762,6 +775,10 @@ func simulateGetArchiveAssetName(version, goos, goarch string) string {
 	arch := goarch
 	if goos == "darwin" {
 		arch = "all"
+	}
+	// 32-bit ARM uses "armv7" suffix (GoReleaser builds with goarm=7)
+	if goarch == "arm" {
+		arch = "armv7"
 	}
 	ext := "tar.gz"
 	if goos == "windows" {
