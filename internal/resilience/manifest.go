@@ -37,6 +37,19 @@ func ManifestDir() string {
 	return filepath.Join(dataDir, "ntm", "manifests")
 }
 
+// LogDir returns the directory for storing session monitor logs
+func LogDir() string {
+	dataDir := os.Getenv("XDG_DATA_HOME")
+	if dataDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "logs"
+		}
+		dataDir = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(dataDir, "ntm", "logs")
+}
+
 // SaveManifest saves the spawn manifest for a session
 func SaveManifest(manifest *SpawnManifest) error {
 	dir := ManifestDir()

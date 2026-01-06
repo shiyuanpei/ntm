@@ -17,6 +17,7 @@ import (
 
 // Server provides HTTP API and event streaming for NTM.
 type Server struct {
+	host       string
 	port       int
 	eventBus   *events.EventBus
 	stateStore *state.Store
@@ -29,6 +30,7 @@ type Server struct {
 
 // Config holds server configuration.
 type Config struct {
+	Host       string
 	Port       int
 	EventBus   *events.EventBus
 	StateStore *state.Store
@@ -39,7 +41,11 @@ func New(cfg Config) *Server {
 	if cfg.Port == 0 {
 		cfg.Port = 7337
 	}
+	if cfg.Host == "" {
+		cfg.Host = "127.0.0.1"
+	}
 	return &Server{
+		host:       cfg.Host,
 		port:       cfg.Port,
 		eventBus:   cfg.EventBus,
 		stateStore: cfg.StateStore,
@@ -72,14 +78,14 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	s.server = &http.Server{
-		Addr:         fmt.Sprintf(":%d", s.port),
+		Addr:         fmt.Sprintf("%s:%d", s.host, s.port),
 		Handler:      corsMiddleware(loggingMiddleware(mux)),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
-	log.Printf("Starting NTM server on port %d", s.port)
+	log.Printf("Starting NTM server on %s:%d", s.host, s.port)
 
 	// Start server in goroutine
 	errCh := make(chan error, 1)

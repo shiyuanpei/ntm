@@ -443,6 +443,7 @@ func runFileWatch(ctx context.Context, session string, opts watchOptions, t them
 
 	w, err := watcher.New(handler,
 		watcher.WithRecursive(true),
+		watcher.WithPollInterval(opts.pollInterval),
 		watcher.WithIgnorePaths([]string{
 			".git",
 			"node_modules",
