@@ -139,6 +139,8 @@ func newSpawnCmd() *cobra.Command {
 	var safety bool
 
 	// Pre-load plugins to avoid double loading in RunE
+	// TODO: This runs eagerly during init() which slows down startup for all commands.
+	// Fixing this requires refactoring how dynamic flags are registered.
 	configDir := filepath.Dir(config.DefaultPath())
 	pluginsDir := filepath.Join(configDir, "agents")
 	loadedPlugins, _ := plugins.LoadAgentPlugins(pluginsDir)
@@ -597,6 +599,7 @@ func spawnSessionLogic(opts SpawnOptions) error {
 
 	// WaitGroup for staggered prompt delivery - ensures all prompts are sent before returning
 	var staggerWg sync.WaitGroup
+	var setupWg sync.WaitGroup
 	var maxStaggerDelay time.Duration
 
 	// Resolve CASS context if enabled
@@ -746,80 +749,85 @@ func spawnSessionLogic(opts SpawnOptions) error {
 			return outputError(fmt.Errorf("launching %s agent: %w", agent.Type, err))
 		}
 
-		// Gemini post-spawn setup: auto-select Pro model
-		if agent.Type == AgentTypeGemini && cfg.GeminiSetup.AutoSelectProModel {
-			geminiCfg := gemini.SetupConfig{
-				AutoSelectProModel: cfg.GeminiSetup.AutoSelectProModel,
-				ReadyTimeout:       time.Duration(cfg.GeminiSetup.ReadyTimeoutSeconds) * time.Second,
-				ModelSelectTimeout: time.Duration(cfg.GeminiSetup.ModelSelectTimeoutSeconds) * time.Second,
-				PollInterval:       500 * time.Millisecond,
-				Verbose:            cfg.GeminiSetup.Verbose,
-			}
-			setupCtx, setupCancel := context.WithTimeout(context.Background(), geminiCfg.ReadyTimeout+geminiCfg.ModelSelectTimeout+10*time.Second)
-			if err := gemini.PostSpawnSetup(setupCtx, pane.ID, geminiCfg); err != nil {
-				setupCancel()
-				if !IsJSONOutput() {
-					fmt.Printf("⚠ Warning: Gemini Pro model setup failed: %v\n", err)
-				}
-				// Don't fail spawn - agent is still running, just possibly with default model
-			} else {
-				setupCancel()
-				if !IsJSONOutput() && cfg.GeminiSetup.Verbose {
-					fmt.Printf("✓ Gemini %d configured for Pro model\n", agent.Index)
-				}
-			}
-		}
+		// Parallelize post-launch setup (Gemini setup, CASS context, immediate prompts)
+		// This prevents sequential blocking which can make spawn very slow
+		setupWg.Add(1)
+		go func(paneID string, idx int, agentType AgentType, agent FlatAgent) {
+			defer setupWg.Done()
 
-		// Inject CASS context if available
-		if cassContext != "" {
-			// Wait a bit for agent to start
-			time.Sleep(500 * time.Millisecond)
-			if err := tmux.SendKeys(pane.ID, cassContext, true); err != nil {
-				if !IsJSONOutput() {
-					fmt.Printf("⚠ Warning: failed to inject context: %v\n", err)
+			// Gemini post-spawn setup: auto-select Pro model
+			if agentType == AgentTypeGemini && cfg.GeminiSetup.AutoSelectProModel {
+				geminiCfg := gemini.SetupConfig{
+					AutoSelectProModel: cfg.GeminiSetup.AutoSelectProModel,
+					ReadyTimeout:       time.Duration(cfg.GeminiSetup.ReadyTimeoutSeconds) * time.Second,
+					ModelSelectTimeout: time.Duration(cfg.GeminiSetup.ModelSelectTimeoutSeconds) * time.Second,
+					PollInterval:       500 * time.Millisecond,
+					Verbose:            cfg.GeminiSetup.Verbose,
+				}
+				setupCtx, setupCancel := context.WithTimeout(context.Background(), geminiCfg.ReadyTimeout+geminiCfg.ModelSelectTimeout+10*time.Second)
+				if err := gemini.PostSpawnSetup(setupCtx, paneID, geminiCfg); err != nil {
+					setupCancel()
+					if !IsJSONOutput() {
+						fmt.Printf("⚠ Warning: Gemini Pro model setup failed for agent %d: %v\n", idx, err)
+					}
+					// Don't fail spawn - agent is still running, just possibly with default model
+				} else {
+					setupCancel()
+					if !IsJSONOutput() && cfg.GeminiSetup.Verbose {
+						fmt.Printf("✓ Gemini %d configured for Pro model\n", idx)
+					}
 				}
 			}
-		}
+
+			// Inject CASS context if available
+			if cassContext != "" {
+				// Wait a bit for agent to start (simple heuristic)
+				time.Sleep(500 * time.Millisecond)
+				if err := tmux.SendKeys(paneID, cassContext, true); err != nil {
+					if !IsJSONOutput() {
+						fmt.Printf("⚠ Warning: failed to inject context for agent %d: %v\n", idx, err)
+					}
+				}
+			}
+
+			// Inject user prompt if provided (Immediate delivery only)
+			// Staggered delivery is handled by the main thread's staggerWg logic
+			if opts.Prompt != "" && (!opts.StaggerEnabled || opts.Stagger <= 0) {
+				time.Sleep(200 * time.Millisecond)
+				if err := tmux.SendKeys(paneID, opts.Prompt, true); err != nil {
+					if !IsJSONOutput() {
+						fmt.Printf("⚠ Warning: failed to send prompt to agent %d: %v\n", idx, err)
+					}
+				}
+			}
+		}(pane.ID, agent.Index, agent.Type, agent)
 
 		// Calculate stagger delay for this agent (used for tracking/JSON output)
 		var promptDelay time.Duration
 		if opts.StaggerEnabled && opts.Stagger > 0 {
 			promptDelay = time.Duration(staggerAgentIdx) * opts.Stagger
-			// Note: maxStaggerDelay is updated below only when a prompt is actually scheduled
-		}
-
-		// Inject user prompt if provided
-		if opts.Prompt != "" {
-			if promptDelay > 0 {
-				// Staggered delivery: schedule for later using WaitGroup
-				paneID := pane.ID
+			
+			// Schedule staggered prompt
+			if opts.Prompt != "" {
+				pID := pane.ID
 				prompt := opts.Prompt
 				delay := promptDelay
 				staggerWg.Add(1)
 				go func() {
 					defer staggerWg.Done()
 					time.Sleep(delay)
-					if err := tmux.SendKeys(paneID, prompt, true); err != nil {
-						// Log error but don't fail - agent is already running
+					if err := tmux.SendKeys(pID, prompt, true); err != nil {
 						if !IsJSONOutput() {
-							fmt.Printf("⚠ Warning: staggered prompt delivery failed for pane %s: %v\n", paneID, err)
+							fmt.Printf("⚠ Warning: staggered prompt delivery failed for pane %s: %v\n", pID, err)
 						}
 					}
 				}()
-				// Track max delay only when we actually schedule a staggered prompt
+				// Track max delay
 				if delay > maxStaggerDelay {
 					maxStaggerDelay = delay
 				}
 				if !IsJSONOutput() {
 					fmt.Printf("  → Agent %d prompt scheduled in %v\n", staggerAgentIdx+1, delay)
-				}
-			} else {
-				// Immediate delivery for first agent
-				time.Sleep(200 * time.Millisecond)
-				if err := tmux.SendKeys(pane.ID, opts.Prompt, true); err != nil {
-					if !IsJSONOutput() {
-						fmt.Printf("⚠ Warning: failed to send prompt: %v\n", err)
-					}
 				}
 			}
 		}
@@ -844,6 +852,9 @@ func spawnSessionLogic(opts SpawnOptions) error {
 	if !IsJSONOutput() {
 		steps.Done()
 	}
+
+	// Wait for parallel setup tasks to complete
+	setupWg.Wait()
 
 	// Wait for staggered prompt delivery to complete
 	if maxStaggerDelay > 0 {
@@ -998,6 +1009,17 @@ func spawnSessionLogic(opts SpawnOptions) error {
 			exe, err := os.Executable()
 			if err == nil {
 				cmd := exec.Command(exe, "internal-monitor", opts.Session)
+				
+				// Setup logging
+				logDir := resilience.LogDir()
+				if err := os.MkdirAll(logDir, 0755); err == nil {
+					logPath := filepath.Join(logDir, fmt.Sprintf("%s-monitor.log", opts.Session))
+					if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+						cmd.Stdout = logFile
+						cmd.Stderr = logFile
+					}
+				}
+
 				// Detach from terminal so it survives when ntm spawn exits
 				setDetachedProcess(cmd)
 				if err := cmd.Start(); err != nil {
