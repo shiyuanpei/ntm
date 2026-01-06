@@ -1269,6 +1269,9 @@ func init() {
 		// Memory integration
 		newMemoryCmd(),
 
+		// Context pack building
+		newContextCmd(),
+
 		// Beads daemon management
 		newBeadsCmd(),
 
