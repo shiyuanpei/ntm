@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/Dicklesworthstone/ntm/internal/util"
 )
 
 const (
@@ -263,7 +265,7 @@ func (s *Storage) SaveScrollback(sessionName, checkpointID string, paneID string
 	filename := fmt.Sprintf("pane_%s.txt", sanitizeName(paneID))
 	fullPath := filepath.Join(panesDir, filename)
 
-	if err := os.WriteFile(fullPath, []byte(content), 0600); err != nil {
+	if err := util.AtomicWriteFile(fullPath, []byte(content), 0600); err != nil {
 		return "", fmt.Errorf("saving scrollback: %w", err)
 	}
 
@@ -290,7 +292,7 @@ func (s *Storage) SaveGitPatch(sessionName, checkpointID, patch string) error {
 	}
 	dir := s.CheckpointDir(sessionName, checkpointID)
 	path := filepath.Join(dir, GitPatchFile)
-	return os.WriteFile(path, []byte(patch), 0600)
+	return util.AtomicWriteFile(path, []byte(patch), 0600)
 }
 
 // LoadGitPatch reads the git diff patch from the checkpoint.
@@ -313,7 +315,7 @@ func (s *Storage) LoadGitPatch(sessionName, checkpointID string) (string, error)
 func (s *Storage) SaveGitStatus(sessionName, checkpointID, status string) error {
 	dir := s.CheckpointDir(sessionName, checkpointID)
 	path := filepath.Join(dir, GitStatusFile)
-	return os.WriteFile(path, []byte(status), 0600)
+	return util.AtomicWriteFile(path, []byte(status), 0600)
 }
 
 // writeJSON writes data as formatted JSON to a file atomically.
@@ -323,30 +325,7 @@ func writeJSON(path string, data interface{}) error {
 		return err
 	}
 
-	dir := filepath.Dir(path)
-	tmpFile, err := os.CreateTemp(dir, "ntm-checkpoint-*.tmp")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name()) // Clean up on error
-
-	if _, err := tmpFile.Write(bytes); err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("writing temp file: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("closing temp file: %w", err)
-	}
-
-	if err := os.Chmod(tmpFile.Name(), 0600); err != nil {
-		return fmt.Errorf("chmod temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpFile.Name(), path); err != nil {
-		return fmt.Errorf("renaming temp file: %w", err)
-	}
-
-	return nil
+	return util.AtomicWriteFile(path, bytes, 0600)
 }
 
 // Exists returns true if a checkpoint exists.

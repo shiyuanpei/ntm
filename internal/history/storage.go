@@ -2,6 +2,7 @@ package history
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Dicklesworthstone/ntm/internal/util"
 )
 
 const (
@@ -144,8 +147,8 @@ func readAllLocked() ([]HistoryEntry, error) {
 
 	var entries []HistoryEntry
 	scanner := bufio.NewScanner(f)
-	// Set max line size for large prompts (5MB)
-	scanner.Buffer(make([]byte, 5*1024*1024), 5*1024*1024)
+	// Set max line size for large prompts (5MB), start with 64KB
+	scanner.Buffer(make([]byte, 64*1024), 5*1024*1024)
 
 	for scanner.Scan() {
 		var entry HistoryEntry
@@ -243,7 +246,8 @@ ReadEntries:
 
 	var entries []HistoryEntry
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 5*1024*1024), 5*1024*1024)
+	// Set max line size for large prompts (5MB), start with 64KB
+	scanner.Buffer(make([]byte, 64*1024), 5*1024*1024)
 
 	for scanner.Scan() {
 		var entry HistoryEntry
@@ -350,41 +354,18 @@ func Prune(keep int) (int, error) {
 	removed := len(entries) - keep
 
 	// Rewrite file atomically
-	path := StoragePath()
-	dir := filepath.Dir(path)
-	tmpFile, err := os.CreateTemp(dir, "history-*.tmp")
-	if err != nil {
-		return 0, err
-	}
-	defer os.Remove(tmpFile.Name()) // clean up on error
-
-	writer := bufio.NewWriter(tmpFile)
+	var buf bytes.Buffer
 	for _, entry := range toKeep {
 		data, err := json.Marshal(entry)
 		if err != nil {
 			continue
 		}
-		if _, err := writer.Write(data); err != nil {
-			return 0, err
-		}
-		if err := writer.WriteByte('\n'); err != nil {
-			return 0, err
-		}
+		buf.Write(data)
+		buf.WriteByte('\n')
 	}
 
-	if err := writer.Flush(); err != nil {
-		return 0, err
-	}
-	if err := tmpFile.Close(); err != nil {
-		return 0, err
-	}
-
-	if err := os.Chmod(tmpFile.Name(), 0600); err != nil {
-		return 0, err
-	}
-
-	// Atomic rename
-	if err := os.Rename(tmpFile.Name(), path); err != nil {
+	path := StoragePath()
+	if err := util.AtomicWriteFile(path, buf.Bytes(), 0600); err != nil {
 		return 0, err
 	}
 
@@ -417,41 +398,18 @@ func PruneByTime(cutoff time.Time) (int, error) {
 	}
 
 	// Rewrite file atomically
-	path := StoragePath()
-	dir := filepath.Dir(path)
-	tmpFile, err := os.CreateTemp(dir, "history-*.tmp")
-	if err != nil {
-		return 0, err
-	}
-	defer os.Remove(tmpFile.Name()) // clean up on error
-
-	writer := bufio.NewWriter(tmpFile)
+	var buf bytes.Buffer
 	for _, entry := range toKeep {
 		data, err := json.Marshal(entry)
 		if err != nil {
 			continue
 		}
-		if _, err := writer.Write(data); err != nil {
-			return 0, err
-		}
-		if err := writer.WriteByte('\n'); err != nil {
-			return 0, err
-		}
+		buf.Write(data)
+		buf.WriteByte('\n')
 	}
 
-	if err := writer.Flush(); err != nil {
-		return 0, err
-	}
-	if err := tmpFile.Close(); err != nil {
-		return 0, err
-	}
-
-	if err := os.Chmod(tmpFile.Name(), 0600); err != nil {
-		return 0, err
-	}
-
-	// Atomic rename
-	if err := os.Rename(tmpFile.Name(), path); err != nil {
+	path := StoragePath()
+	if err := util.AtomicWriteFile(path, buf.Bytes(), 0600); err != nil {
 		return 0, err
 	}
 
@@ -531,7 +489,8 @@ func ImportFrom(path string) (int, error) {
 
 	var entries []*HistoryEntry
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 5*1024*1024), 5*1024*1024)
+	// Set max line size for large prompts (5MB), start with 64KB
+	scanner.Buffer(make([]byte, 64*1024), 5*1024*1024)
 
 	for scanner.Scan() {
 		var entry HistoryEntry

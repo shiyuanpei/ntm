@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Dicklesworthstone/ntm/internal/output"
+	"github.com/Dicklesworthstone/ntm/internal/util"
 )
 
 func newSetupCmd() *cobra.Command {
@@ -240,7 +241,7 @@ logging:
   max_size_mb: 10
   max_backups: 3
 `
-	return os.WriteFile(path, []byte(content), 0644)
+	return util.AtomicWriteFile(path, []byte(content), 0644)
 }
 
 func writeDefaultSetupPolicy(path string) error {
@@ -298,7 +299,7 @@ approval_required:
     reason: "Force release another agent's reservation"
     slb: true  # Requires two-person approval
 `
-	return os.WriteFile(path, []byte(content), 0644)
+	return util.AtomicWriteFile(path, []byte(content), 0644)
 }
 
 func ensureGitignoreEntry(gitignorePath, entry string) error {
