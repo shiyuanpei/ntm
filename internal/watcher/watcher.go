@@ -647,7 +647,6 @@ func isPathUnderRoots(path string, roots []string) bool {
 	return false
 }
 
-
 // snapshotEntries returns the current metadata for the watched root (and children if recursive).
 func snapshotEntries(root string, recursive bool, isIgnored func(string) bool) (map[string]fileMeta, error) {
 	info, err := os.Stat(root)

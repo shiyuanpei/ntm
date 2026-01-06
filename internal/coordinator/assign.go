@@ -12,15 +12,15 @@ import (
 
 // WorkAssignment represents a work assignment to an agent.
 type WorkAssignment struct {
-	BeadID        string    `json:"bead_id"`
-	BeadTitle     string    `json:"bead_title"`
-	AgentPaneID   string    `json:"agent_pane_id"`
-	AgentMailName string    `json:"agent_mail_name,omitempty"`
-	AgentType     string    `json:"agent_type"`
-	AssignedAt    time.Time `json:"assigned_at"`
-	Priority      int       `json:"priority"`
-	Score         float64   `json:"score"`
-	FilesToReserve []string `json:"files_to_reserve,omitempty"`
+	BeadID         string    `json:"bead_id"`
+	BeadTitle      string    `json:"bead_title"`
+	AgentPaneID    string    `json:"agent_pane_id"`
+	AgentMailName  string    `json:"agent_mail_name,omitempty"`
+	AgentType      string    `json:"agent_type"`
+	AssignedAt     time.Time `json:"assigned_at"`
+	Priority       int       `json:"priority"`
+	Score          float64   `json:"score"`
+	FilesToReserve []string  `json:"files_to_reserve,omitempty"`
 }
 
 // AssignmentResult contains the result of an assignment attempt.

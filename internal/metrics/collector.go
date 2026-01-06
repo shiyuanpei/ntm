@@ -117,24 +117,24 @@ func (c *Collector) RecordFileConflict(requestingAgent, holdingAgent, pathPatter
 
 // MetricsReport contains aggregated metrics data.
 type MetricsReport struct {
-	SessionID        string                   `json:"session_id"`
-	GeneratedAt      time.Time                `json:"generated_at"`
-	APICallCounts    map[string]int64         `json:"api_call_counts"`
-	LatencyStats     map[string]LatencyStats  `json:"latency_stats"`
-	BlockedCommands  int64                    `json:"blocked_commands"`
-	FileConflicts    int64                    `json:"file_conflicts"`
-	TargetComparison []TargetComparison       `json:"target_comparison"`
+	SessionID        string                  `json:"session_id"`
+	GeneratedAt      time.Time               `json:"generated_at"`
+	APICallCounts    map[string]int64        `json:"api_call_counts"`
+	LatencyStats     map[string]LatencyStats `json:"latency_stats"`
+	BlockedCommands  int64                   `json:"blocked_commands"`
+	FileConflicts    int64                   `json:"file_conflicts"`
+	TargetComparison []TargetComparison      `json:"target_comparison"`
 }
 
 // LatencyStats contains statistical summaries for latency data.
 type LatencyStats struct {
-	Count   int     `json:"count"`
-	MinMs   float64 `json:"min_ms"`
-	MaxMs   float64 `json:"max_ms"`
-	AvgMs   float64 `json:"avg_ms"`
-	P50Ms   float64 `json:"p50_ms"`
-	P95Ms   float64 `json:"p95_ms"`
-	P99Ms   float64 `json:"p99_ms"`
+	Count int     `json:"count"`
+	MinMs float64 `json:"min_ms"`
+	MaxMs float64 `json:"max_ms"`
+	AvgMs float64 `json:"avg_ms"`
+	P50Ms float64 `json:"p50_ms"`
+	P95Ms float64 `json:"p95_ms"`
+	P99Ms float64 `json:"p99_ms"`
 }
 
 // TargetComparison compares a metric against its target.
@@ -148,20 +148,20 @@ type TargetComparison struct {
 
 // Tier0Targets defines the critical success metrics targets.
 var Tier0Targets = map[string]float64{
-	"agent_bootstrap_calls":     1.0,    // Target: 1 per agent (was 4-5)
-	"bv_triage_calls":           1.0,    // Target: 1 per analysis (was 4)
-	"destructive_cmd_incidents": 0.0,    // Target: 0
-	"file_conflicts":            0.0,    // Target: 0
-	"cm_query_latency_ms":       50.0,   // Target: <50ms (was ~500ms)
+	"agent_bootstrap_calls":     1.0,  // Target: 1 per agent (was 4-5)
+	"bv_triage_calls":           1.0,  // Target: 1 per analysis (was 4)
+	"destructive_cmd_incidents": 0.0,  // Target: 0
+	"file_conflicts":            0.0,  // Target: 0
+	"cm_query_latency_ms":       50.0, // Target: <50ms (was ~500ms)
 }
 
 // Tier0Baselines defines the original baseline values.
 var Tier0Baselines = map[string]float64{
-	"agent_bootstrap_calls":     4.5,    // 4-5 per agent
-	"bv_triage_calls":           4.0,    // 4 per analysis
-	"destructive_cmd_incidents": 0.0,    // Unknown baseline
-	"file_conflicts":            0.0,    // Unknown baseline
-	"cm_query_latency_ms":       500.0,  // ~500ms subprocess
+	"agent_bootstrap_calls":     4.5,   // 4-5 per agent
+	"bv_triage_calls":           4.0,   // 4 per analysis
+	"destructive_cmd_incidents": 0.0,   // Unknown baseline
+	"file_conflicts":            0.0,   // Unknown baseline
+	"cm_query_latency_ms":       500.0, // ~500ms subprocess
 }
 
 // GenerateReport generates a comprehensive metrics report.

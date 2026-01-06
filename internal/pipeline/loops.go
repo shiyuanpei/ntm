@@ -22,13 +22,13 @@ func NewLoopExecutor(executor *Executor) *LoopExecutor {
 
 // LoopResult contains the result of loop execution.
 type LoopResult struct {
-	Status       ExecutionStatus
-	Iterations   int
-	Results      []StepResult       // Individual iteration results
-	Collected    []interface{}      // Collected outputs if Collect is specified
-	Error        *StepError
-	BreakReason  string // Non-empty if loop exited via break
-	FinishedAt   time.Time
+	Status      ExecutionStatus
+	Iterations  int
+	Results     []StepResult  // Individual iteration results
+	Collected   []interface{} // Collected outputs if Collect is specified
+	Error       *StepError
+	BreakReason string // Non-empty if loop exited via break
+	FinishedAt  time.Time
 }
 
 // ErrLoopBreak is returned when a loop is exited via break control.
@@ -631,4 +631,3 @@ func (le *LoopExecutor) storeCollected(varName string, collected []interface{}) 
 	defer le.executor.varMu.Unlock()
 	le.executor.state.Variables[varName] = collected
 }
-

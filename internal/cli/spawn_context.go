@@ -18,7 +18,7 @@ type SpawnContext struct {
 // AgentSpawnContext holds spawn context for a specific agent.
 type AgentSpawnContext struct {
 	SpawnContext
-	Order       int           // 1-based position in spawn order (1, 2, 3...)
+	Order        int           // 1-based position in spawn order (1, 2, 3...)
 	StaggerDelay time.Duration // Delay before this agent receives its prompt
 }
 

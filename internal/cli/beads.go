@@ -58,11 +58,11 @@ func newBeadsDaemonCmd() *cobra.Command {
 
 func newBeadsDaemonStartCmd() *cobra.Command {
 	var (
-		sessionID   string
-		autoCommit  bool
-		autoPush    bool
-		interval    string
-		foreground  bool
+		sessionID  string
+		autoCommit bool
+		autoPush   bool
+		interval   string
+		foreground bool
 	)
 
 	cmd := &cobra.Command{

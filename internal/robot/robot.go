@@ -2065,17 +2065,17 @@ func agentTypeString(t tmux.AgentType) string {
 
 // SendOutput is the structured output for --robot-send
 type SendOutput struct {
-	RobotResponse                       // Embed standard response fields (success, timestamp, error)
-	Session        string               `json:"session"`
-	SentAt         time.Time            `json:"sent_at"`
-	Targets        []string             `json:"targets"`
-	Successful     []string             `json:"successful"`
-	Failed         []SendError          `json:"failed"`
-	MessagePreview string               `json:"message_preview"`
-	DryRun         bool                 `json:"dry_run,omitempty"`
-	WouldSendTo    []string             `json:"would_send_to,omitempty"`
-	CASSInjection  *CASSInjectionInfo   `json:"cass_injection,omitempty"`
-	AgentHints     *SendAgentHints      `json:"_agent_hints,omitempty"`
+	RobotResponse                     // Embed standard response fields (success, timestamp, error)
+	Session        string             `json:"session"`
+	SentAt         time.Time          `json:"sent_at"`
+	Targets        []string           `json:"targets"`
+	Successful     []string           `json:"successful"`
+	Failed         []SendError        `json:"failed"`
+	MessagePreview string             `json:"message_preview"`
+	DryRun         bool               `json:"dry_run,omitempty"`
+	WouldSendTo    []string           `json:"would_send_to,omitempty"`
+	CASSInjection  *CASSInjectionInfo `json:"cass_injection,omitempty"`
+	AgentHints     *SendAgentHints    `json:"_agent_hints,omitempty"`
 }
 
 // CASSInjectionInfo reports CASS context injection details in robot responses.
@@ -2160,10 +2160,10 @@ type SendOptions struct {
 	DryRun     bool     // If true, show what would be sent without actually sending
 
 	// CASS injection options
-	WithCASS      bool          // Enable CASS context injection
-	CASSConfig    *CASSConfig   // CASS query configuration (optional)
-	FilterConfig  *FilterConfig // CASS filter configuration (optional)
-	InjectConfig  *InjectConfig // CASS injection configuration (optional)
+	WithCASS     bool          // Enable CASS context injection
+	CASSConfig   *CASSConfig   // CASS query configuration (optional)
+	FilterConfig *FilterConfig // CASS filter configuration (optional)
+	InjectConfig *InjectConfig // CASS injection configuration (optional)
 }
 
 // PrintSend sends a message to multiple panes atomically and returns structured results

@@ -50,27 +50,27 @@ func newMemoryContextCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			task := args[0]
-			
+
 			dir, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			
+
 			sessionID, err := findSessionID(dir)
 			if err != nil {
 				return err
 			}
-			
+
 			client, err := cm.NewClient(dir, sessionID)
 			if err != nil {
 				return err
 			}
-			
+
 			ctxResult, err := client.GetContext(context.Background(), task)
 			if err != nil {
 				return err
 			}
-			
+
 			return output.PrintJSON(ctxResult)
 		},
 	}
@@ -95,27 +95,27 @@ func newMemoryOutcomeCmd() *cobra.Command {
 			default:
 				return fmt.Errorf("invalid status: %s", statusStr)
 			}
-			
+
 			dir, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			
+
 			sessionID, err := findSessionID(dir)
 			if err != nil {
 				return err
 			}
-			
+
 			client, err := cm.NewClient(dir, sessionID)
 			if err != nil {
 				return err
 			}
-			
+
 			report := cm.OutcomeReport{
 				Status:  status,
 				RuleIDs: rules,
 			}
-			
+
 			return client.RecordOutcome(context.Background(), report)
 		},
 	}

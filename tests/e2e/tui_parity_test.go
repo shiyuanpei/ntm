@@ -191,10 +191,10 @@ func TestRobotMetricsWithSyntheticSession(t *testing.T) {
 	logger.Log("FULL JSON OUTPUT:\n%s", string(out))
 
 	var payload struct {
-		Timestamp string `json:"timestamp"`
-		Success   bool   `json:"success"`
-		Session   string `json:"session"`
-		Period    string `json:"period"`
+		Timestamp  string `json:"timestamp"`
+		Success    bool   `json:"success"`
+		Session    string `json:"session"`
+		Period     string `json:"period"`
 		TokenUsage struct {
 			TotalTokens int64   `json:"total_tokens"`
 			TotalCost   float64 `json:"total_cost_usd"`
@@ -265,9 +265,9 @@ func TestRobotPalette(t *testing.T) {
 	logger.Log("FULL JSON OUTPUT:\n%s", string(out))
 
 	var payload struct {
-		Timestamp  string `json:"timestamp"`
-		Success    bool   `json:"success"`
-		Commands   []struct {
+		Timestamp string `json:"timestamp"`
+		Success   bool   `json:"success"`
+		Commands  []struct {
 			Key      string `json:"key"`
 			Label    string `json:"label"`
 			Category string `json:"category"`
@@ -329,8 +329,8 @@ prompt = "echo test"
 	logger.Log("FULL JSON OUTPUT:\n%s", string(out))
 
 	var payload struct {
-		Success    bool `json:"success"`
-		Commands   []struct {
+		Success  bool `json:"success"`
+		Commands []struct {
 			Key      string `json:"key"`
 			Label    string `json:"label"`
 			Category string `json:"category"`

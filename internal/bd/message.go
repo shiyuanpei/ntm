@@ -43,14 +43,14 @@ func (c *MessageClient) Inbox(ctx context.Context, unreadOnly, urgentOnly bool) 
 	if urgentOnly {
 		args = append(args, "--urgent")
 	}
-	
+
 	cmd := exec.CommandContext(ctx, "bd", args...)
 	cmd.Dir = c.projectPath
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var messages []Message
 	if err := json.Unmarshal(output, &messages); err != nil {
 		return nil, err
@@ -65,7 +65,7 @@ func (c *MessageClient) Read(ctx context.Context, id string) (*Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var msg Message
 	if err := json.Unmarshal(output, &msg); err != nil {
 		return nil, err

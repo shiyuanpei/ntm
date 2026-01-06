@@ -570,11 +570,11 @@ func TestNormalizeScore(t *testing.T) {
 		input float64
 		want  float64
 	}{
-		{0.5, 0.5},    // Already 0-1 scale
-		{1.0, 1.0},    // Already 0-1 scale
-		{50.0, 0.5},   // 0-100 scale
-		{100.0, 1.0},  // 0-100 scale
-		{0.0, 0.0},    // Zero
+		{0.5, 0.5},   // Already 0-1 scale
+		{1.0, 1.0},   // Already 0-1 scale
+		{50.0, 0.5},  // 0-100 scale
+		{100.0, 1.0}, // 0-100 scale
+		{0.0, 0.0},   // Zero
 	}
 
 	for _, tt := range tests {
@@ -829,8 +829,8 @@ func TestExtractSessionName(t *testing.T) {
 		{"/path/to/my-long-session-name.json", "my-long-session-name"},
 		// 40 char limit with "..." suffix = 37 chars + "..."
 		{"/path/to/very-very-very-long-session-name-that-exceeds-forty-characters.jsonl", "very-very-very-long-session-name-that..."},
-		{"", ""},                   // Empty path returns empty string (no parts)
-		{"single", "single"},      // Single component without extension
+		{"", ""},             // Empty path returns empty string (no parts)
+		{"single", "single"}, // Single component without extension
 	}
 
 	for _, tt := range tests {
@@ -860,7 +860,7 @@ func TestCleanContentForMarkdown(t *testing.T) {
 			check: func(s string) bool { return containsString(s, "...") },
 		},
 		{
-			name: "truncates long lines",
+			name:  "truncates long lines",
 			input: "this is a very long line that definitely exceeds one hundred and twenty characters and should be truncated at some point to maintain readability",
 			check: func(s string) bool {
 				return len(s) < len("this is a very long line that definitely exceeds one hundred and twenty characters and should be truncated at some point to maintain readability")
@@ -1079,8 +1079,8 @@ func TestFormatAge_AllBranches(t *testing.T) {
 
 func TestFilterResults_AgeFiltering(t *testing.T) {
 	now := time.Now()
-	recent := now.AddDate(0, 0, -5)   // 5 days ago
-	old := now.AddDate(0, 0, -60)     // 60 days ago
+	recent := now.AddDate(0, 0, -5) // 5 days ago
+	old := now.AddDate(0, 0, -60)   // 60 days ago
 
 	recentPath := fmt.Sprintf("/path/%d/%02d/%02d/recent.jsonl", recent.Year(), recent.Month(), recent.Day())
 	oldPath := fmt.Sprintf("/path/%d/%02d/%02d/old.jsonl", old.Year(), old.Month(), old.Day())
@@ -1121,10 +1121,10 @@ func TestFilterResults_RecencyBoost(t *testing.T) {
 	}
 
 	config := FilterConfig{
-		MinRelevance:  0.0,
-		MaxItems:      10,
-		MaxAgeDays:    30,
-		RecencyBoost:  0.3, // Boost recent results
+		MinRelevance: 0.0,
+		MaxItems:     10,
+		MaxAgeDays:   30,
+		RecencyBoost: 0.3, // Boost recent results
 	}
 
 	result := FilterResults(hits, config)

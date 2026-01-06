@@ -70,12 +70,12 @@ type CoordinatorConfig struct {
 	AssignOnlyIdle bool    `toml:"assign_only_idle"` // Only assign to truly idle agents
 
 	// Conflict handling
-	ConflictNotify   bool `toml:"conflict_notify"`   // Notify when conflicts detected
+	ConflictNotify    bool `toml:"conflict_notify"`    // Notify when conflicts detected
 	ConflictNegotiate bool `toml:"conflict_negotiate"` // Attempt automatic conflict resolution
 
 	// Agent Mail
-	SendDigests  bool `toml:"send_digests"`  // Send periodic digests to human
-	HumanAgent   string `toml:"human_agent"` // Agent name to send digests to (default: "Human")
+	SendDigests bool   `toml:"send_digests"` // Send periodic digests to human
+	HumanAgent  string `toml:"human_agent"`  // Agent name to send digests to (default: "Human")
 }
 
 // DefaultCoordinatorConfig returns sensible defaults.
@@ -97,14 +97,14 @@ func DefaultCoordinatorConfig() CoordinatorConfig {
 type CoordinatorEventType string
 
 const (
-	EventAgentIdle       CoordinatorEventType = "agent_idle"
-	EventAgentBusy       CoordinatorEventType = "agent_busy"
-	EventAgentError      CoordinatorEventType = "agent_error"
-	EventAgentRecovered  CoordinatorEventType = "agent_recovered"
+	EventAgentIdle        CoordinatorEventType = "agent_idle"
+	EventAgentBusy        CoordinatorEventType = "agent_busy"
+	EventAgentError       CoordinatorEventType = "agent_error"
+	EventAgentRecovered   CoordinatorEventType = "agent_recovered"
 	EventConflictDetected CoordinatorEventType = "conflict_detected"
 	EventConflictResolved CoordinatorEventType = "conflict_resolved"
-	EventWorkAssigned    CoordinatorEventType = "work_assigned"
-	EventDigestSent      CoordinatorEventType = "digest_sent"
+	EventWorkAssigned     CoordinatorEventType = "work_assigned"
+	EventDigestSent       CoordinatorEventType = "digest_sent"
 )
 
 // CoordinatorEvent represents an event from the coordinator.
@@ -312,10 +312,10 @@ func (c *SessionCoordinator) emitEvent(agent *AgentState, prevStatus robot.Agent
 		Timestamp: time.Now(),
 		AgentID:   agent.PaneID,
 		Details: map[string]any{
-			"agent_type":   agent.AgentType,
-			"prev_status":  string(prevStatus),
-			"new_status":   string(agent.Status),
-			"pane_index":   agent.PaneIndex,
+			"agent_type":  agent.AgentType,
+			"prev_status": string(prevStatus),
+			"new_status":  string(agent.Status),
+			"pane_index":  agent.PaneIndex,
 		},
 	}:
 	default:

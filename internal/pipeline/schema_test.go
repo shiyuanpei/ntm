@@ -262,4 +262,3 @@ func TestDefaultWorkflowSettings(t *testing.T) {
 		t.Error("DefaultWorkflowSettings().NotifyOnError = false, want true")
 	}
 }
-

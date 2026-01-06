@@ -1080,11 +1080,11 @@ func TestExecutor_ClearStepVariables(t *testing.T) {
 			name: "clears custom output_var",
 			state: &ExecutionState{
 				Variables: map[string]interface{}{
-					"steps.step1.output":  "output",
-					"steps.step1.data":    "data",
-					"my_custom_var":       "custom value",
+					"steps.step1.output":   "output",
+					"steps.step1.data":     "data",
+					"my_custom_var":        "custom value",
 					"my_custom_var_parsed": map[string]interface{}{"parsed": true},
-					"keep_me":             "still here",
+					"keep_me":              "still here",
 				},
 			},
 			workflow: &Workflow{

@@ -19,21 +19,21 @@ var agentIDPattern = regexp.MustCompile(`^(cc|cod|gmi)_(\d+)$`)
 
 // ProfileSwitchResult contains the result of a profile switch operation
 type ProfileSwitchResult struct {
-	Success     bool   `json:"success"`
-	AgentID     string `json:"agent_id"`
-	PaneID      string `json:"pane_id"`
-	OldProfile  string `json:"old_profile,omitempty"`
-	NewProfile  string `json:"new_profile"`
-	Message     string `json:"message,omitempty"`
-	Error       string `json:"error,omitempty"`
+	Success    bool   `json:"success"`
+	AgentID    string `json:"agent_id"`
+	PaneID     string `json:"pane_id"`
+	OldProfile string `json:"old_profile,omitempty"`
+	NewProfile string `json:"new_profile"`
+	Message    string `json:"message,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 func newProfileSwitchCmd() *cobra.Command {
 	var (
-		session         string
+		session          string
 		transitionPrompt string
-		noPrompt        bool
-		dryRun          bool
+		noPrompt         bool
+		dryRun           bool
 	)
 
 	cmd := &cobra.Command{

@@ -11,23 +11,23 @@ import (
 
 // Conflict represents a file reservation conflict between agents.
 type Conflict struct {
-	ID          string    `json:"id"`
-	FilePath    string    `json:"file_path"`
-	Pattern     string    `json:"pattern"`
-	Holders     []Holder  `json:"holders"`
-	DetectedAt  time.Time `json:"detected_at"`
-	ResolvedAt  *time.Time `json:"resolved_at,omitempty"`
-	Resolution  string    `json:"resolution,omitempty"`
+	ID         string     `json:"id"`
+	FilePath   string     `json:"file_path"`
+	Pattern    string     `json:"pattern"`
+	Holders    []Holder   `json:"holders"`
+	DetectedAt time.Time  `json:"detected_at"`
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	Resolution string     `json:"resolution,omitempty"`
 }
 
 // Holder represents an agent holding a reservation.
 type Holder struct {
-	AgentName    string    `json:"agent_name"`
-	PaneID       string    `json:"pane_id,omitempty"`
-	ReservedAt   time.Time `json:"reserved_at"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	Reason       string    `json:"reason,omitempty"`
-	Priority     int       `json:"priority"` // Lower = higher priority
+	AgentName  string    `json:"agent_name"`
+	PaneID     string    `json:"pane_id,omitempty"`
+	ReservedAt time.Time `json:"reserved_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Reason     string    `json:"reason,omitempty"`
+	Priority   int       `json:"priority"` // Lower = higher priority
 }
 
 // ConflictDetector detects and tracks file reservation conflicts.

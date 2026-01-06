@@ -41,7 +41,7 @@ func SaveState(projectDir string, state *ExecutionState) error {
 	}
 
 	path := pipelineStatePath(projectDir, state.RunID)
-	
+
 	if err := util.AtomicWriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("write pipeline state: %w", err)
 	}

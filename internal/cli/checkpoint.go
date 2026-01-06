@@ -514,8 +514,6 @@ Examples:
 	return cmd
 }
 
-
-
 // formatAge returns a human-readable age string.
 func formatAge(t time.Time) string {
 	d := time.Since(t)

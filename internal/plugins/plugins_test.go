@@ -156,10 +156,10 @@ func TestParseScriptHeader(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name            string
-		content         string
-		expectedDesc    string
-		expectedUsage   string
+		name          string
+		content       string
+		expectedDesc  string
+		expectedUsage string
 	}{
 		{
 			name: "full header",

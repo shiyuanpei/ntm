@@ -129,7 +129,7 @@ func CheckSession(session string) (*SessionHealth, error) {
 		wg.Add(1)
 		go func(pa tmux.PaneActivity) {
 			defer wg.Done()
-			
+
 			sem <- struct{}{} // Acquire token
 			agentHealth := checkAgent(pa)
 			<-sem // Release token

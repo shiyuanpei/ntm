@@ -293,13 +293,13 @@ type CASSConfig struct {
 
 // CASSContextConfig holds settings for automatic context injection
 type CASSContextConfig struct {
-	Enabled            bool    `toml:"enabled"`              // Auto-inject context when spawning
-	MaxSessions        int     `toml:"max_sessions"`         // Max past sessions to include (inject_limit)
-	LookbackDays       int     `toml:"lookback_days"`        // How far back to search (max_age_days)
-	MaxTokens          int     `toml:"max_tokens"`           // Token budget for context (max_inject_tokens)
-	MinRelevance       float64 `toml:"min_relevance"`        // Minimum relevance score to include (0.0-1.0)
+	Enabled            bool    `toml:"enabled"`               // Auto-inject context when spawning
+	MaxSessions        int     `toml:"max_sessions"`          // Max past sessions to include (inject_limit)
+	LookbackDays       int     `toml:"lookback_days"`         // How far back to search (max_age_days)
+	MaxTokens          int     `toml:"max_tokens"`            // Token budget for context (max_inject_tokens)
+	MinRelevance       float64 `toml:"min_relevance"`         // Minimum relevance score to include (0.0-1.0)
 	SkipIfContextAbove float64 `toml:"skip_if_context_above"` // Skip injection if context usage exceeds this % (0-100)
-	PreferSameProject  bool    `toml:"prefer_same_project"`  // Prefer results from same project
+	PreferSameProject  bool    `toml:"prefer_same_project"`   // Prefer results from same project
 }
 
 // CASSDuplicateConfig holds settings for duplicate detection

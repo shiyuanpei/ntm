@@ -171,14 +171,14 @@ func TestIsIdlePrompt(t *testing.T) {
 		line     string
 		expected bool
 	}{
-		{"> ", true},                 // Generic > prompt
-		{"$ ", true},                 // Dollar prompt
-		{"% ", true},                 // Percent prompt
-		{"# ", false},                // Not a standard prompt pattern in status
-		{"claude>", false},           // Requires "cc" agentType
-		{"Claude>", false},           // Requires "cc" agentType
-		{"codex>", false},            // Requires "cod" agentType
-		{">>> ", false},              // Python prompt not in status patterns
+		{"> ", true},       // Generic > prompt
+		{"$ ", true},       // Dollar prompt
+		{"% ", true},       // Percent prompt
+		{"# ", false},      // Not a standard prompt pattern in status
+		{"claude>", false}, // Requires "cc" agentType
+		{"Claude>", false}, // Requires "cc" agentType
+		{"codex>", false},  // Requires "cod" agentType
+		{">>> ", false},    // Python prompt not in status patterns
 		{"some text", false},
 		{"", false},
 		{"working...", false},
@@ -202,10 +202,10 @@ func TestIsPromptLine(t *testing.T) {
 		paneTitle string
 		expected  bool
 	}{
-		{"user@host:~$ ", "", true},                           // User prompt
-		{"claude> ", "myproject__cc_1", true},                 // Claude with proper title
-		{"> ", "", true},                                      // Generic > prompt
-		{">>> ", "", false},                                   // Python prompt not in status patterns
+		{"user@host:~$ ", "", true},           // User prompt
+		{"claude> ", "myproject__cc_1", true}, // Claude with proper title
+		{"> ", "", true},                      // Generic > prompt
+		{">>> ", "", false},                   // Python prompt not in status patterns
 		{"some output text", "", false},
 		{"error: something failed", "", false},
 	}

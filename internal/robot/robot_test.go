@@ -156,14 +156,14 @@ func TestDetectState(t *testing.T) {
 		title    string
 		expected string
 	}{
-		{"empty", []string{}, "", "idle"},                                                        // Empty + user type = idle
-		{"all empty lines", []string{"", "", ""}, "", "idle"},                                    // Empty content + user type = idle
-		{"claude idle", []string{"some output", "claude>"}, "myproject__cc_1", "idle"},           // With proper title format
-		{"codex idle", []string{"output", "codex>"}, "myproject__cod_1", "idle"},                 // With proper title format
-		{"gemini idle", []string{"Gemini>"}, "myproject__gmi_1", "idle"},                         // With proper title format
+		{"empty", []string{}, "", "idle"},                                              // Empty + user type = idle
+		{"all empty lines", []string{"", "", ""}, "", "idle"},                          // Empty content + user type = idle
+		{"claude idle", []string{"some output", "claude>"}, "myproject__cc_1", "idle"}, // With proper title format
+		{"codex idle", []string{"output", "codex>"}, "myproject__cod_1", "idle"},       // With proper title format
+		{"gemini idle", []string{"Gemini>"}, "myproject__gmi_1", "idle"},               // With proper title format
 		{"bash prompt", []string{"$ "}, "", "idle"},
 		{"zsh prompt", []string{"% "}, "", "idle"},
-		{"python prompt", []string{">>> "}, "", "active"},                                          // Python prompt not recognized by status package
+		{"python prompt", []string{">>> "}, "", "active"}, // Python prompt not recognized by status package
 		{"rate limit error", []string{"Error: rate limit exceeded"}, "", "error"},
 		{"429 error", []string{"HTTP 429 too many requests"}, "", "error"},
 		{"panic error", []string{"panic: runtime error"}, "", "error"},

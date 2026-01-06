@@ -24,16 +24,16 @@ const (
 type Specialization string
 
 const (
-	SpecComplex       Specialization = "complex"       // Multi-step reasoning
-	SpecArchitecture  Specialization = "architecture"  // System design
+	SpecComplex       Specialization = "complex"        // Multi-step reasoning
+	SpecArchitecture  Specialization = "architecture"   // System design
 	SpecRefactorLarge Specialization = "refactor-large" // Large-scale refactoring
-	SpecQuick         Specialization = "quick"         // Fast, focused tasks
+	SpecQuick         Specialization = "quick"          // Fast, focused tasks
 	SpecRefactorSmall Specialization = "refactor-small" // Small refactoring
-	SpecTests         Specialization = "tests"         // Test writing
-	SpecResearch      Specialization = "research"      // Investigation tasks
-	SpecDocs          Specialization = "docs"          // Documentation
-	SpecAnalysis      Specialization = "analysis"      // Code analysis
-	SpecDebug         Specialization = "debug"         // Debugging
+	SpecTests         Specialization = "tests"          // Test writing
+	SpecResearch      Specialization = "research"       // Investigation tasks
+	SpecDocs          Specialization = "docs"           // Documentation
+	SpecAnalysis      Specialization = "analysis"       // Code analysis
+	SpecDebug         Specialization = "debug"          // Debugging
 )
 
 // AgentProfile defines the static capabilities and preferences of an agent type.
@@ -56,7 +56,7 @@ type Preferences struct {
 // Performance tracks historical performance metrics for an agent.
 type Performance struct {
 	AvgCompletionTime time.Duration `json:"avg_completion_time"`
-	SuccessRate       float64       `json:"success_rate"`    // 0.0 to 1.0
+	SuccessRate       float64       `json:"success_rate"` // 0.0 to 1.0
 	TasksCompleted    int           `json:"tasks_completed"`
 	LastUpdated       time.Time     `json:"last_updated"`
 }

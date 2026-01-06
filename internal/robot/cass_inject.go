@@ -94,10 +94,10 @@ type cassSearchResponse struct {
 	Query        string `json:"query"`
 	TotalMatches int    `json:"total_matches"`
 	Hits         []struct {
-		SourcePath string `json:"source_path"`
-		LineNumber int    `json:"line_number"`
-		Agent      string `json:"agent"`
-		Content    string `json:"content,omitempty"`
+		SourcePath string  `json:"source_path"`
+		LineNumber int     `json:"line_number"`
+		Agent      string  `json:"agent"`
+		Content    string  `json:"content,omitempty"`
 		Score      float64 `json:"score,omitempty"`
 	} `json:"hits"`
 }
@@ -741,8 +741,8 @@ func extractSessionDate(path string) time.Time {
 	// Look for date patterns in the path
 	// Common formats: /2025/12/05/ or /2025-12-05/ or session-2025-12-05
 	datePatterns := []string{
-		`/(\d{4})/(\d{2})/(\d{2})/`,      // /2025/12/05/
-		`/(\d{4})-(\d{2})-(\d{2})/`,      // /2025-12-05/
+		`/(\d{4})/(\d{2})/(\d{2})/`,       // /2025/12/05/
+		`/(\d{4})-(\d{2})-(\d{2})/`,       // /2025-12-05/
 		`session-(\d{4})-(\d{2})-(\d{2})`, // session-2025-12-05
 		`(\d{4})-(\d{2})-(\d{2})T`,        // 2025-12-05T (ISO timestamp in filename)
 	}

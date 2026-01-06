@@ -130,13 +130,13 @@ const (
 
 // ReservationCache caches file reservations from Agent Mail with TTL.
 type ReservationCache struct {
-	mu          sync.RWMutex
+	mu           sync.RWMutex
 	reservations []agentmail.FileReservation // All active reservations
-	pathToAgents map[string][]string          // path_pattern -> agent names
-	lastFetch   time.Time
-	ttl         time.Duration
-	client      *agentmail.Client
-	projectKey  string
+	pathToAgents map[string][]string         // path_pattern -> agent names
+	lastFetch    time.Time
+	ttl          time.Duration
+	client       *agentmail.Client
+	projectKey   string
 }
 
 // NewReservationCache creates a new reservation cache.

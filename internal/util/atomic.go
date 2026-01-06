@@ -11,7 +11,7 @@ import (
 // updated at all, preventing corruption on crash.
 func AtomicWriteFile(filename string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(filename)
-	
+
 	// Create temp file in the same directory to ensure same filesystem (for atomic rename)
 	tmpFile, err := os.CreateTemp(dir, "ntm-atomic-*")
 	if err != nil {

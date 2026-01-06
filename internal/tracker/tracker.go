@@ -629,7 +629,7 @@ func DetectFileChanges(before, after map[string]FileState) []FileChange {
 			// If 'after' has GitStatus "M", it means it existed before but was clean.
 			// We treat this as Modified.
 			changeType := FileAdded
-			
+
 			// Heuristic: If git says it's Modified ("M"), treat as Modified even if missing from Before.
 			if afterState.GitStatus == "M" || afterState.GitStatus == "MM" {
 				changeType = FileModified

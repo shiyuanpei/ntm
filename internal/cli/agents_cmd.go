@@ -288,8 +288,8 @@ func runAgentsRecommend(task agents.TaskInfo) error {
 
 	// Get scores for all agents
 	type agentScore struct {
-		Agent  agents.AgentType    `json:"agent"`
-		Result agents.ScoreResult  `json:"result"`
+		Agent  agents.AgentType   `json:"agent"`
+		Result agents.ScoreResult `json:"result"`
 	}
 	var scores []agentScore
 

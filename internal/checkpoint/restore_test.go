@@ -320,9 +320,9 @@ func TestSplitLines(t *testing.T) {
 	}{
 		{"", 0},
 		{"one", 1},
-		{"one\n", 1},           // trailing newline doesn't add extra line
+		{"one\n", 1}, // trailing newline doesn't add extra line
 		{"one\ntwo", 2},
-		{"one\ntwo\n", 2},      // trailing newline doesn't add extra line
+		{"one\ntwo\n", 2}, // trailing newline doesn't add extra line
 		{"one\ntwo\nthree", 3},
 	}
 

@@ -81,6 +81,10 @@ func ExtractNewOutput(before, after string) string {
 	if maxOverlap > len(before) {
 		maxOverlap = len(before)
 	}
+	// Optimization: if fast path failed, we know overlap must be smaller than searchChunk
+	if maxOverlap >= chunkSize {
+		maxOverlap = chunkSize - 1
+	}
 	for k := maxOverlap; k > 0; k-- {
 		if before[len(before)-k:] == after[:k] {
 			return after[k:]

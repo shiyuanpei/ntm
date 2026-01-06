@@ -1285,7 +1285,7 @@ func TestRobotInspectPaneAgentHints(t *testing.T) {
 
 	var payload struct {
 		AgentHints *struct {
-			Summary          string `json:"summary"`
+			Summary          string   `json:"summary"`
 			Warnings         []string `json:"warnings,omitempty"`
 			SuggestedActions []struct {
 				Action   string `json:"action"`
@@ -1330,10 +1330,10 @@ func TestRobotMetricsWithValidSession(t *testing.T) {
 	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-metrics="+sessionName)
 
 	var payload struct {
-		Success      bool   `json:"success"`
-		Session      string `json:"session"`
-		Period       string `json:"period"`
-		TokenUsage   struct {
+		Success    bool   `json:"success"`
+		Session    string `json:"session"`
+		Period     string `json:"period"`
+		TokenUsage struct {
 			ByAgent map[string]int64 `json:"by_agent"`
 			ByModel map[string]int64 `json:"by_model"`
 		} `json:"token_usage"`
@@ -1607,9 +1607,9 @@ func TestRobotReplayDryRunFlag(t *testing.T) {
 	if err == nil {
 		// If it succeeds, check the response structure
 		var payload struct {
-			Success   bool `json:"success"`
-			DryRun    bool `json:"dry_run,omitempty"`
-			Replayed  bool `json:"replayed"`
+			Success  bool `json:"success"`
+			DryRun   bool `json:"dry_run,omitempty"`
+			Replayed bool `json:"replayed"`
 		}
 		jsonStart := strings.Index(string(out), "{")
 		if jsonStart != -1 {
@@ -1656,24 +1656,24 @@ func TestRobotPaletteBasic(t *testing.T) {
 	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-palette")
 
 	var payload struct {
-		Success    bool     `json:"success"`
-		Timestamp  string   `json:"timestamp"`
-		Session    string   `json:"session,omitempty"`
-		Commands   []struct {
+		Success   bool   `json:"success"`
+		Timestamp string `json:"timestamp"`
+		Session   string `json:"session,omitempty"`
+		Commands  []struct {
 			Key      string `json:"key"`
 			Label    string `json:"label"`
 			Category string `json:"category"`
 			Prompt   string `json:"prompt"`
 		} `json:"commands"`
-		Favorites  []string `json:"favorites"`
-		Pinned     []string `json:"pinned"`
-		Recent     []struct {
+		Favorites []string `json:"favorites"`
+		Pinned    []string `json:"pinned"`
+		Recent    []struct {
 			Key     string `json:"key"`
 			UsedAt  string `json:"used_at"`
 			Session string `json:"session"`
 			Success bool   `json:"success"`
 		} `json:"recent"`
-		Categories []string    `json:"categories"`
+		Categories []string `json:"categories"`
 		AgentHints *struct {
 			Summary string   `json:"summary"`
 			Notes   []string `json:"notes,omitempty"`

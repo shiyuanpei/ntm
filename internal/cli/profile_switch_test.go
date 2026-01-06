@@ -10,11 +10,11 @@ import (
 
 func TestParseAgentID(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       string
-		wantType    string
-		wantIndex   int
-		wantErr     bool
+		name      string
+		input     string
+		wantType  string
+		wantIndex int
+		wantErr   bool
 	}{
 		{
 			name:      "claude agent 1",
@@ -200,16 +200,16 @@ func TestFindPaneByAgentID(t *testing.T) {
 
 func TestGenerateTransitionPrompt(t *testing.T) {
 	newProfile := &persona.Persona{
-		Name:        "reviewer",
-		Description: "Code reviewer focused on quality",
-		SystemPrompt: "You are a code reviewer.",
+		Name:          "reviewer",
+		Description:   "Code reviewer focused on quality",
+		SystemPrompt:  "You are a code reviewer.",
 		FocusPatterns: []string{"**/*.go", "**/*.ts"},
 	}
 
 	tests := []struct {
-		name       string
-		oldProfile string
-		newProfile *persona.Persona
+		name         string
+		oldProfile   string
+		newProfile   *persona.Persona
 		wantContains []string
 	}{
 		{

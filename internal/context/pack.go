@@ -501,7 +501,7 @@ func truncateJSON(data json.RawMessage, tokenBudget int) json.RawMessage {
 	if err := json.Unmarshal(data, &obj); err == nil {
 		// Create truncated version with indicator
 		truncated := map[string]interface{}{
-			"_truncated": true,
+			"_truncated":     true,
 			"_original_size": len(data),
 		}
 		// Add fields until we hit budget
@@ -521,7 +521,7 @@ func truncateJSON(data json.RawMessage, tokenBudget int) json.RawMessage {
 	// This ensures we return valid JSON even for edge cases
 	fallback := map[string]interface{}{
 		"_truncated": true,
-		"_message": "data too large to include",
+		"_message":   "data too large to include",
 	}
 	result, _ := json.Marshal(fallback)
 	return result

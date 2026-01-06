@@ -317,7 +317,7 @@ func TestLoopTimesExceedsMaxIterations(t *testing.T) {
 		ID: "test-step",
 		Loop: &LoopConfig{
 			Times:         200, // Exceeds default 100
-			MaxIterations: 50, // Explicit limit
+			MaxIterations: 50,  // Explicit limit
 		},
 	}
 
@@ -358,8 +358,8 @@ func TestLoopCancelledContext(t *testing.T) {
 
 func TestExecuteLoopIntegration(t *testing.T) {
 	config := ExecutorConfig{
-		Session:      "test-session",
-		DryRun:       true, // Don't actually execute
+		Session:       "test-session",
+		DryRun:        true, // Don't actually execute
 		GlobalTimeout: 30 * time.Second,
 	}
 	executor := NewExecutor(config)

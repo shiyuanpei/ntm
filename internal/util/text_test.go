@@ -107,9 +107,9 @@ func TestExtractNewOutput_SmallOverlap(t *testing.T) {
 	t.Parallel()
 
 	// Test with overlap smaller than chunkSize but after > chunkSize
-	overlap := "xyz"                                  // 3 char overlap
-	before := "prefix" + overlap                      // "prefixyz" (8 chars, ends with "xyz")
-	after := overlap + strings.Repeat("b", 47)        // "xyz" + 47 b's = 50 chars, starts with "xyz"
+	overlap := "xyz"                           // 3 char overlap
+	before := "prefix" + overlap               // "prefixyz" (8 chars, ends with "xyz")
+	after := overlap + strings.Repeat("b", 47) // "xyz" + 47 b's = 50 chars, starts with "xyz"
 
 	got := ExtractNewOutput(before, after)
 	want := strings.Repeat("b", 47)

@@ -176,9 +176,9 @@ func TestFormatAssignmentMessage(t *testing.T) {
 	}
 
 	rec := &bv.TriageRecommendation{
-		ID:         "ntm-1234",
-		Title:      "Implement feature X",
-		Reasons:    []string{"High impact", "Unblocks others"},
+		ID:          "ntm-1234",
+		Title:       "Implement feature X",
+		Reasons:     []string{"High impact", "Unblocks others"},
 		UnblocksIDs: []string{"ntm-2000", "ntm-2001"},
 	}
 

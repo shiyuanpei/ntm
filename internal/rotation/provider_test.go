@@ -8,10 +8,10 @@ func TestGetProvider(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		agentType  string
-		wantName   string
-		wantNil    bool
+		name      string
+		agentType string
+		wantName  string
+		wantNil   bool
 	}{
 		{name: "claude short", agentType: "cc", wantName: "Claude"},
 		{name: "claude long", agentType: "claude", wantName: "Claude"},

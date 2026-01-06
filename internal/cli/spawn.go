@@ -605,6 +605,12 @@ func spawnSessionLogic(opts SpawnOptions) error {
 	var setupWg sync.WaitGroup
 	var maxStaggerDelay time.Duration
 
+	// Spawn state for dashboard display (only used when stagger is enabled)
+	var spawnState *SpawnState
+	if opts.StaggerEnabled && opts.Stagger > 0 && opts.Prompt != "" {
+		spawnState = NewSpawnState(spawnCtx.BatchID, int(opts.Stagger.Seconds()), len(opts.Agents))
+	}
+
 	// Resolve CASS context if enabled
 	var cassContext string
 	if !opts.NoCassContext && cfg.CASS.Context.Enabled {
@@ -821,10 +827,18 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		// Schedule staggered prompt delivery with spawn context annotation
 		if opts.StaggerEnabled && opts.Stagger > 0 && opts.Prompt != "" {
 			pID := pane.ID
+			pTitle := title
 			// Annotate prompt with spawn context when stagger is enabled
 			// This helps agents understand their position in the spawn order
 			annotatedPrompt := agentSpawnCtx.AnnotatePrompt(opts.Prompt, true)
 			delay := promptDelay
+			scheduledAt := time.Now().Add(delay)
+
+			// Add to spawn state for dashboard display
+			if spawnState != nil {
+				spawnState.AddPrompt(pTitle, pID, staggerAgentIdx+1, scheduledAt)
+			}
+
 			staggerWg.Add(1)
 			go func() {
 				defer staggerWg.Done()
@@ -832,6 +846,13 @@ func spawnSessionLogic(opts SpawnOptions) error {
 				if err := tmux.SendKeys(pID, annotatedPrompt, true); err != nil {
 					if !IsJSONOutput() {
 						fmt.Printf("⚠ Warning: staggered prompt delivery failed for pane %s: %v\n", pID, err)
+					}
+				}
+				// Mark as sent in state
+				if spawnState != nil {
+					spawnState.MarkSent(pID)
+					if err := spawnState.Save(dir); err != nil && !IsJSONOutput() {
+						fmt.Printf("⚠ Warning: failed to update spawn state: %v\n", err)
 					}
 				}
 			}()
@@ -865,6 +886,13 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		steps.Done()
 	}
 
+	// Save initial spawn state for dashboard display
+	if spawnState != nil {
+		if err := spawnState.Save(dir); err != nil && !IsJSONOutput() {
+			fmt.Printf("⚠ Warning: failed to save spawn state: %v\n", err)
+		}
+	}
+
 	// Wait for parallel setup tasks to complete
 	setupWg.Wait()
 
@@ -876,6 +904,18 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		staggerWg.Wait()
 		if !IsJSONOutput() {
 			fmt.Println("✓ All staggered prompts delivered")
+		}
+		// Clean up spawn state file now that all prompts are sent
+		if spawnState != nil {
+			spawnState.MarkComplete()
+			if err := spawnState.Save(dir); err != nil && !IsJSONOutput() {
+				fmt.Printf("⚠ Warning: failed to save final spawn state: %v\n", err)
+			}
+			// Remove state file after a short delay to let dashboard catch the completion
+			go func() {
+				time.Sleep(5 * time.Second)
+				_ = ClearSpawnState(dir)
+			}()
 		}
 	}
 
@@ -1021,7 +1061,7 @@ func spawnSessionLogic(opts SpawnOptions) error {
 			exe, err := os.Executable()
 			if err == nil {
 				cmd := exec.Command(exe, "internal-monitor", opts.Session)
-				
+
 				// Setup logging
 				logDir := resilience.LogDir()
 				if err := os.MkdirAll(logDir, 0755); err == nil {

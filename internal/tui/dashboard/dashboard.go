@@ -96,6 +96,11 @@ type AlertsUpdateMsg struct {
 	Err    error
 }
 
+// SpawnUpdateMsg is sent when spawn state is updated
+type SpawnUpdateMsg struct {
+	Data panels.SpawnData
+}
+
 // MetricsUpdateMsg is sent when session metrics are updated
 type MetricsUpdateMsg struct {
 	Data panels.MetricsData
@@ -291,6 +296,7 @@ type Model struct {
 	cassPanel    *panels.CASSPanel
 	filesPanel   *panels.FilesPanel
 	tickerPanel  *panels.TickerPanel
+	spawnPanel   *panels.SpawnPanel
 
 	// Data for new panels
 	beadsSummary  bv.BeadsSummary
@@ -470,6 +476,7 @@ func New(session, projectDir string) Model {
 		cassPanel:    panels.NewCASSPanel(),
 		filesPanel:   panels.NewFilesPanel(),
 		tickerPanel:  panels.NewTickerPanel(),
+		spawnPanel:   panels.NewSpawnPanel(),
 
 		// Init() kicks off these fetches immediately; mark as fetching so the tick loop
 		// doesn’t pile on duplicates if the first round is still in flight.
@@ -1121,6 +1128,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.alertsPanel.SetData(m.activeAlerts, m.alertsError)
 		return m, nil
 
+	case SpawnUpdateMsg:
+		m.spawnPanel.SetData(msg.Data)
+		return m, nil
+
 	case MetricsUpdateMsg:
 		m.fetchingMetrics = false
 		if msg.Err != nil && errors.Is(msg.Err, context.Canceled) {
@@ -1408,7 +1419,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				// Update LIVE STATUS using local analysis (avoid waiting for slow full fetch)
 				st := m.detector.Analyze(data.PaneID, currentPane.Title, agentType, data.Output, data.LastActivity)
-				
+
 				state := string(st.State)
 				// Rate limit check
 				if st.State == status.StateError && st.ErrorType == status.ErrorRateLimit {

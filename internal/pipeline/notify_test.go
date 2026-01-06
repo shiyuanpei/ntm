@@ -375,10 +375,10 @@ func TestTruncateMessage(t *testing.T) {
 	}{
 		{"short", 10, "short"},
 		{"this is a longer message", 10, "this is..."},
-		{"abc", 3, "abc"},           // fits, no truncation needed
-		{"ab", 2, "ab"},             // fits, no truncation needed
-		{"abcdef", 3, "..."},        // doesn't fit, show ellipsis
-		{"abcdef", 5, "ab..."},      // truncate with room for some content
+		{"abc", 3, "abc"},      // fits, no truncation needed
+		{"ab", 2, "ab"},        // fits, no truncation needed
+		{"abcdef", 3, "..."},   // doesn't fit, show ellipsis
+		{"abcdef", 5, "ab..."}, // truncate with room for some content
 	}
 
 	for _, tt := range tests {
