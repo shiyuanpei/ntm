@@ -994,13 +994,6 @@ func (vp *ViewportPosition) ScrollIndicator(t theme.Theme) string {
 	))
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // GetTokens returns the design tokens for the current width
 func GetTokens(width int) styles.DesignTokens {
 	return styles.TokensForWidth(width)

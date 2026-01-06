@@ -230,11 +230,3 @@ func GetTopPriority(report *PriorityReport, n int) []PrioritizedFinding {
 	}
 	return report.Findings[:n]
 }
-
-// max returns the larger of two ints.
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}

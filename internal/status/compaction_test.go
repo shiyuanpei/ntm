@@ -245,10 +245,3 @@ func TestCompactionEvent_Fields(t *testing.T) {
 		t.Error("Pattern should be set")
 	}
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
