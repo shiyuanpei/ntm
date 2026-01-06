@@ -1530,46 +1530,8 @@ Examples:
 		},
 	})
 
-	// Add validate subcommand
-	cmd.AddCommand(&cobra.Command{
-		Use:   "validate",
-		Short: "Validate configuration file",
-		Long:  `Checks the configuration file for errors and reports any issues found.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			effectiveCfg := cfg
-			if effectiveCfg == nil {
-				loaded, err := config.Load(cfgFile)
-				if err != nil {
-					return fmt.Errorf("loading config: %w", err)
-				}
-				effectiveCfg = loaded
-			}
-
-			errs := config.Validate(effectiveCfg)
-
-			if IsJSONOutput() {
-				errStrs := make([]string, len(errs))
-				for i, e := range errs {
-					errStrs[i] = e.Error()
-				}
-				return output.PrintJSON(map[string]interface{}{
-					"valid":  len(errs) == 0,
-					"errors": errStrs,
-				})
-			}
-
-			if len(errs) == 0 {
-				fmt.Println("Configuration is valid")
-				return nil
-			}
-
-			fmt.Printf("Configuration has %d error(s):\n", len(errs))
-			for _, e := range errs {
-				fmt.Printf("  - %s\n", e.Error())
-			}
-			return fmt.Errorf("configuration validation failed")
-		},
-	})
+	// Add validate subcommand (comprehensive validation from validate.go)
+	cmd.AddCommand(newConfigValidateCmd())
 
 	// Add get subcommand
 	cmd.AddCommand(&cobra.Command{
