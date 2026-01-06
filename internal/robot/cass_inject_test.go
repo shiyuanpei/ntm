@@ -605,3 +605,411 @@ func TestSortScoredHits(t *testing.T) {
 		t.Errorf("sortScoredHits() first item score = %f, want 0.9", hits[0].ComputedScore)
 	}
 }
+
+// =============================================================================
+// Context Injection Tests
+// =============================================================================
+
+func TestDefaultInjectConfig(t *testing.T) {
+	config := DefaultInjectConfig()
+
+	if config.Format != FormatMarkdown {
+		t.Errorf("DefaultInjectConfig().Format = %q, want %q", config.Format, FormatMarkdown)
+	}
+	if config.MaxTokens != 500 {
+		t.Errorf("DefaultInjectConfig().MaxTokens = %d, want 500", config.MaxTokens)
+	}
+	if config.SkipThreshold != 60 {
+		t.Errorf("DefaultInjectConfig().SkipThreshold = %d, want 60", config.SkipThreshold)
+	}
+	if !config.IncludeMetadata {
+		t.Error("DefaultInjectConfig().IncludeMetadata should be true")
+	}
+	if config.DryRun {
+		t.Error("DefaultInjectConfig().DryRun should be false")
+	}
+}
+
+func TestInjectContext_EmptyHits(t *testing.T) {
+	config := DefaultInjectConfig()
+	prompt := "Original prompt"
+
+	result := InjectContext(prompt, []ScoredHit{}, config)
+
+	if !result.Success {
+		t.Error("InjectContext with empty hits should succeed")
+	}
+	if result.ModifiedPrompt != prompt {
+		t.Errorf("InjectContext with empty hits should return original prompt")
+	}
+	if result.Metadata.SkippedReason != "no relevant context found" {
+		t.Errorf("SkippedReason = %q, want 'no relevant context found'", result.Metadata.SkippedReason)
+	}
+}
+
+func TestInjectContext_SkipOnHighContextUsage(t *testing.T) {
+	config := InjectConfig{
+		Format:            FormatMarkdown,
+		MaxTokens:         500,
+		SkipThreshold:     60,
+		CurrentContextPct: 70, // Above threshold
+	}
+	prompt := "Original prompt"
+	hits := []ScoredHit{
+		{CASSHit: CASSHit{SourcePath: "/path/session.jsonl", Content: "content"}, ComputedScore: 0.9},
+	}
+
+	result := InjectContext(prompt, hits, config)
+
+	if !result.Success {
+		t.Error("InjectContext should succeed even when skipping")
+	}
+	if result.ModifiedPrompt != prompt {
+		t.Errorf("InjectContext should return original prompt when skipping")
+	}
+	if result.Metadata.SkippedReason == "" {
+		t.Error("SkippedReason should explain why injection was skipped")
+	}
+}
+
+func TestInjectContext_DryRun(t *testing.T) {
+	config := InjectConfig{
+		Format:    FormatMarkdown,
+		MaxTokens: 500,
+		DryRun:    true,
+	}
+	prompt := "Original prompt"
+	hits := []ScoredHit{
+		{CASSHit: CASSHit{SourcePath: "/path/session.jsonl", Content: "test content"}, ComputedScore: 0.9},
+	}
+
+	result := InjectContext(prompt, hits, config)
+
+	if !result.Success {
+		t.Error("InjectContext dry run should succeed")
+	}
+	if result.ModifiedPrompt != prompt {
+		t.Error("DryRun should not modify the prompt")
+	}
+	if result.InjectedContext == "" {
+		t.Error("DryRun should still show what would be injected")
+	}
+}
+
+func TestInjectContext_BasicInjection(t *testing.T) {
+	config := DefaultInjectConfig()
+	prompt := "Original prompt"
+	hits := []ScoredHit{
+		{
+			CASSHit:       CASSHit{SourcePath: "/path/2025/01/05/session.jsonl", Content: "relevant code here"},
+			ComputedScore: 0.85,
+		},
+	}
+
+	result := InjectContext(prompt, hits, config)
+
+	if !result.Success {
+		t.Errorf("InjectContext failed: %s", result.Error)
+	}
+	if result.ModifiedPrompt == prompt {
+		t.Error("ModifiedPrompt should be different from original")
+	}
+	if result.InjectedContext == "" {
+		t.Error("InjectedContext should contain formatted context")
+	}
+	if result.Metadata.ItemsInjected != 1 {
+		t.Errorf("ItemsInjected = %d, want 1", result.Metadata.ItemsInjected)
+	}
+	if result.Metadata.TokensAdded == 0 {
+		t.Error("TokensAdded should be > 0")
+	}
+}
+
+func TestFormatContext_Markdown(t *testing.T) {
+	hits := []ScoredHit{
+		{
+			CASSHit:       CASSHit{SourcePath: "/path/2025/01/05/test-session.jsonl", Content: "some code"},
+			ComputedScore: 0.9,
+		},
+	}
+	config := InjectConfig{Format: FormatMarkdown}
+
+	result := FormatContext(hits, config)
+
+	// Should contain markdown headers
+	if len(result) == 0 {
+		t.Fatal("FormatContext should return non-empty string")
+	}
+	// Check for markdown formatting
+	if !containsString(result, "## Relevant Context") {
+		t.Error("Markdown format should contain ## header")
+	}
+	if !containsString(result, "### Session:") {
+		t.Error("Markdown format should contain ### Session: header")
+	}
+}
+
+func TestFormatContext_Minimal(t *testing.T) {
+	hits := []ScoredHit{
+		{
+			CASSHit:       CASSHit{SourcePath: "/path/session.jsonl", Content: "code snippet"},
+			ComputedScore: 0.9,
+		},
+	}
+	config := InjectConfig{Format: FormatMinimal}
+
+	result := FormatContext(hits, config)
+
+	// Should be minimal with code focus
+	if !containsString(result, "// Related context:") {
+		t.Error("Minimal format should start with // comment")
+	}
+}
+
+func TestFormatContext_Structured(t *testing.T) {
+	hits := []ScoredHit{
+		{
+			CASSHit:       CASSHit{SourcePath: "/path/session.jsonl", Content: "content here"},
+			ComputedScore: 0.8,
+		},
+	}
+	config := InjectConfig{Format: FormatStructured}
+
+	result := FormatContext(hits, config)
+
+	// Should have structured format
+	if !containsString(result, "RELEVANT CONTEXT FROM PAST SESSIONS") {
+		t.Error("Structured format should have capitalized header")
+	}
+	if !containsString(result, "1. Session:") {
+		t.Error("Structured format should have numbered items")
+	}
+	if !containsString(result, "Relevance:") {
+		t.Error("Structured format should show relevance")
+	}
+}
+
+func TestFormatForAgent(t *testing.T) {
+	tests := []struct {
+		agentType string
+		want      InjectionFormat
+	}{
+		{"claude", FormatMarkdown},
+		{"cc", FormatMarkdown},
+		{"Claude", FormatMarkdown},
+		{"codex", FormatMinimal},
+		{"cod", FormatMinimal},
+		{"Codex", FormatMinimal},
+		{"gemini", FormatStructured},
+		{"gmi", FormatStructured},
+		{"Gemini", FormatStructured},
+		{"unknown", FormatMarkdown}, // Default
+		{"", FormatMarkdown},        // Empty defaults to markdown
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.agentType, func(t *testing.T) {
+			got := FormatForAgent(tt.agentType)
+			if got != tt.want {
+				t.Errorf("FormatForAgent(%q) = %q, want %q", tt.agentType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractSessionName(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/path/to/session.jsonl", "session"},
+		{"/path/to/my-long-session-name.json", "my-long-session-name"},
+		// 40 char limit with "..." suffix = 37 chars + "..."
+		{"/path/to/very-very-very-long-session-name-that-exceeds-forty-characters.jsonl", "very-very-very-long-session-name-that..."},
+		{"", ""},                   // Empty path returns empty string (no parts)
+		{"single", "single"},      // Single component without extension
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got := extractSessionName(tt.path)
+			if got != tt.want {
+				t.Errorf("extractSessionName(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanContentForMarkdown(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		check func(string) bool
+	}{
+		{
+			name:  "trims whitespace",
+			input: "  content  ",
+			check: func(s string) bool { return s == "content" },
+		},
+		{
+			name:  "limits lines",
+			input: "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12",
+			check: func(s string) bool { return containsString(s, "...") },
+		},
+		{
+			name: "truncates long lines",
+			input: "this is a very long line that definitely exceeds one hundred and twenty characters and should be truncated at some point to maintain readability",
+			check: func(s string) bool {
+				return len(s) < len("this is a very long line that definitely exceeds one hundred and twenty characters and should be truncated at some point to maintain readability")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := cleanContentForMarkdown(tt.input)
+			if !tt.check(got) {
+				t.Errorf("cleanContentForMarkdown() = %q, check failed", got)
+			}
+		})
+	}
+}
+
+func TestExtractCodeSnippets(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "extracts fenced code block",
+			content: "text before\n```go\nfunc main() {}\n```\ntext after",
+			want:    "func main() {}",
+		},
+		{
+			name:    "no code blocks",
+			content: "plain text content here",
+			want:    "plain text content here",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractCodeSnippets(tt.content)
+			if got != tt.want {
+				t.Errorf("extractCodeSnippets() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTruncateToTokens(t *testing.T) {
+	// ~4 chars per token, so 100 tokens = ~400 chars
+	longContent := make([]byte, 800) // ~200 tokens
+	for i := range longContent {
+		longContent[i] = 'a'
+	}
+
+	result := truncateToTokens(string(longContent), 100)
+
+	// Should be truncated to approximately 400 chars (100 tokens * 4)
+	if len(result) > 450 { // Some slack for truncation message
+		t.Errorf("truncateToTokens() len = %d, want <= 450", len(result))
+	}
+	if !containsString(result, "truncated") {
+		t.Error("truncateToTokens() should include truncation notice")
+	}
+}
+
+func TestCountInjectedItems(t *testing.T) {
+	tests := []struct {
+		name    string
+		context string
+		format  InjectionFormat
+		want    int
+	}{
+		{
+			name:    "markdown format",
+			context: "## Header\n\n### Session: test1\n\ncontent\n\n### Session: test2\n\ncontent",
+			format:  FormatMarkdown,
+			want:    2,
+		},
+		{
+			name:    "structured format",
+			context: "HEADER\n\n1. Session: test1\n\n2. Session: test2\n\n3. Session: test3",
+			format:  FormatStructured,
+			want:    3,
+		},
+		{
+			name:    "minimal format with content",
+			context: "// Related context:\nsome code",
+			format:  FormatMinimal,
+			want:    1,
+		},
+		{
+			name:    "minimal format empty",
+			context: "// Related context:\n",
+			format:  FormatMinimal,
+			want:    0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := countInjectedItems(tt.context, tt.format)
+			if got != tt.want {
+				t.Errorf("countInjectedItems() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInjectContext_TokenBudget(t *testing.T) {
+	config := InjectConfig{
+		Format:    FormatMarkdown,
+		MaxTokens: 50, // Very small budget
+	}
+
+	// Create hits with lots of content
+	hits := []ScoredHit{
+		{
+			CASSHit: CASSHit{
+				SourcePath: "/path/session.jsonl",
+				Content:    "This is a very long piece of content that should definitely exceed the token budget we have set and therefore needs to be truncated to fit within our constraints.",
+			},
+			ComputedScore: 0.9,
+		},
+	}
+
+	result := InjectContext("prompt", hits, config)
+
+	if !result.Success {
+		t.Errorf("InjectContext failed: %s", result.Error)
+	}
+	if result.Metadata.TokensAdded > 50 {
+		t.Errorf("TokensAdded = %d, should be capped at 50", result.Metadata.TokensAdded)
+	}
+}
+
+func TestFormatAge(t *testing.T) {
+	// Test with a path that has no date
+	result := formatAge("/some/path/without/date.jsonl")
+	if result != "" {
+		t.Errorf("formatAge() for no-date path = %q, want empty", result)
+	}
+}
+
+// Helper function for string containment checks
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

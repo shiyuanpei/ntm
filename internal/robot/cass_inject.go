@@ -614,3 +614,448 @@ func QueryAndFilterCASS(prompt string, queryConfig CASSConfig, filterConfig Filt
 	filterResult := FilterResults(queryResult.Hits, filterConfig)
 	return queryResult, filterResult
 }
+
+// =============================================================================
+// Context Injection
+// =============================================================================
+
+// InjectionFormat defines how context should be formatted for different agents.
+type InjectionFormat string
+
+const (
+	// FormatMarkdown uses headers, bullets, and sections (best for Claude).
+	FormatMarkdown InjectionFormat = "markdown"
+	// FormatMinimal uses minimal prose, code-focused (best for Codex).
+	FormatMinimal InjectionFormat = "minimal"
+	// FormatStructured uses numbered lists and clear sections (best for Gemini).
+	FormatStructured InjectionFormat = "structured"
+)
+
+// InjectConfig holds configuration for context injection.
+type InjectConfig struct {
+	// Format specifies how to format the injected context.
+	// Default: FormatMarkdown
+	Format InjectionFormat `json:"format"`
+
+	// MaxTokens is the maximum number of tokens to use for injection.
+	// Default: 500
+	MaxTokens int `json:"max_tokens"`
+
+	// SkipThreshold is the context usage percentage above which injection is skipped.
+	// If current context is above this percentage, injection is skipped to preserve
+	// space for the response. Default: 60 (60%)
+	SkipThreshold int `json:"skip_threshold"`
+
+	// CurrentContextPct is the current context window usage percentage (0-100).
+	// Used to determine whether to skip injection.
+	CurrentContextPct int `json:"current_context_pct,omitempty"`
+
+	// IncludeMetadata includes injection metadata in the response.
+	// Default: true
+	IncludeMetadata bool `json:"include_metadata"`
+
+	// DryRun shows what would be injected without actually modifying the prompt.
+	// Default: false
+	DryRun bool `json:"dry_run"`
+}
+
+// DefaultInjectConfig returns sensible defaults for context injection.
+func DefaultInjectConfig() InjectConfig {
+	return InjectConfig{
+		Format:          FormatMarkdown,
+		MaxTokens:       500,
+		SkipThreshold:   60,
+		IncludeMetadata: true,
+		DryRun:          false,
+	}
+}
+
+// InjectionMetadata tracks details about what was injected.
+type InjectionMetadata struct {
+	// Enabled indicates whether injection was attempted.
+	Enabled bool `json:"enabled"`
+	// ItemsFound is how many CASS hits were found.
+	ItemsFound int `json:"items_found"`
+	// ItemsInjected is how many items were actually injected.
+	ItemsInjected int `json:"items_injected"`
+	// ItemsFiltered is how many were filtered out by relevance.
+	ItemsFiltered int `json:"items_filtered"`
+	// TokensAdded is the estimated token count of injected content.
+	TokensAdded int `json:"tokens_added"`
+	// FormatUsed is the format that was applied.
+	FormatUsed InjectionFormat `json:"format_used"`
+	// SkippedReason explains why injection was skipped, if applicable.
+	SkippedReason string `json:"skipped_reason,omitempty"`
+}
+
+// InjectionResult holds the result of context injection.
+type InjectionResult struct {
+	// Success indicates whether injection succeeded.
+	Success bool `json:"success"`
+	// ModifiedPrompt is the prompt with injected context prepended.
+	ModifiedPrompt string `json:"modified_prompt"`
+	// InjectedContext is the context that was (or would be) injected.
+	InjectedContext string `json:"injected_context"`
+	// Metadata contains details about the injection.
+	Metadata InjectionMetadata `json:"metadata"`
+	// Error contains any error message.
+	Error string `json:"error,omitempty"`
+}
+
+// InjectContext prepends relevant CASS context to a prompt.
+// It takes filtered CASS results and formats them appropriately for the agent type.
+func InjectContext(prompt string, hits []ScoredHit, config InjectConfig) InjectionResult {
+	result := InjectionResult{
+		Success: false,
+		Metadata: InjectionMetadata{
+			Enabled:    true,
+			ItemsFound: len(hits),
+			FormatUsed: config.Format,
+		},
+	}
+
+	// Check if injection should be skipped due to context usage
+	if config.CurrentContextPct > 0 && config.CurrentContextPct >= config.SkipThreshold {
+		result.Success = true
+		result.ModifiedPrompt = prompt
+		result.Metadata.SkippedReason = "context at " + itoa(config.CurrentContextPct) + "% (threshold: " + itoa(config.SkipThreshold) + "%)"
+		return result
+	}
+
+	// If no hits, return original prompt
+	if len(hits) == 0 {
+		result.Success = true
+		result.ModifiedPrompt = prompt
+		result.Metadata.SkippedReason = "no relevant context found"
+		return result
+	}
+
+	// Format the context based on agent type
+	context := FormatContext(hits, config)
+
+	// Estimate tokens (rough: ~4 chars per token)
+	estimatedTokens := len(context) / 4
+	result.Metadata.TokensAdded = estimatedTokens
+
+	// Truncate if over budget
+	if config.MaxTokens > 0 && estimatedTokens > config.MaxTokens {
+		context = truncateToTokens(context, config.MaxTokens)
+		result.Metadata.TokensAdded = config.MaxTokens
+	}
+
+	result.InjectedContext = context
+	result.Metadata.ItemsInjected = countInjectedItems(context, config.Format)
+	result.Metadata.ItemsFiltered = len(hits) - result.Metadata.ItemsInjected
+
+	// Build the modified prompt
+	if config.DryRun {
+		result.Success = true
+		result.ModifiedPrompt = prompt // Don't modify in dry run
+		return result
+	}
+
+	result.Success = true
+	result.ModifiedPrompt = context + "\n---\n\n" + prompt
+
+	return result
+}
+
+// FormatContext formats CASS hits for injection based on the specified format.
+func FormatContext(hits []ScoredHit, config InjectConfig) string {
+	if len(hits) == 0 {
+		return ""
+	}
+
+	switch config.Format {
+	case FormatMinimal:
+		return formatMinimal(hits)
+	case FormatStructured:
+		return formatStructured(hits)
+	default: // FormatMarkdown
+		return formatMarkdown(hits)
+	}
+}
+
+// formatMarkdown formats context with headers, bullets, and sections.
+// Best for Claude and similar markdown-friendly models.
+func formatMarkdown(hits []ScoredHit) string {
+	var b strings.Builder
+
+	b.WriteString("## Relevant Context from Past Sessions\n\n")
+
+	for i, hit := range hits {
+		// Extract session info from path
+		sessionName := extractSessionName(hit.SourcePath)
+		age := formatAge(hit.SourcePath)
+		relevance := int(hit.ComputedScore * 100)
+
+		b.WriteString("### Session: ")
+		b.WriteString(sessionName)
+		b.WriteString(" (")
+		b.WriteString(itoa(relevance))
+		b.WriteString("% match")
+		if age != "" {
+			b.WriteString(", ")
+			b.WriteString(age)
+		}
+		b.WriteString(")\n\n")
+
+		if hit.Content != "" {
+			// Clean up content for markdown
+			content := cleanContentForMarkdown(hit.Content)
+			b.WriteString(content)
+			b.WriteString("\n")
+		}
+
+		if i < len(hits)-1 {
+			b.WriteString("\n")
+		}
+	}
+
+	return b.String()
+}
+
+// formatMinimal formats context with minimal prose, code-focused.
+// Best for Codex and code-completion models.
+func formatMinimal(hits []ScoredHit) string {
+	var b strings.Builder
+
+	b.WriteString("// Related context:\n")
+
+	for _, hit := range hits {
+		if hit.Content != "" {
+			// Extract just code snippets if present
+			content := extractCodeSnippets(hit.Content)
+			if content != "" {
+				b.WriteString(content)
+				b.WriteString("\n")
+			}
+		}
+	}
+
+	return b.String()
+}
+
+// formatStructured formats context with numbered lists and clear sections.
+// Best for Gemini and structured-output models.
+func formatStructured(hits []ScoredHit) string {
+	var b strings.Builder
+
+	b.WriteString("RELEVANT CONTEXT FROM PAST SESSIONS\n")
+	b.WriteString("====================================\n\n")
+
+	for i, hit := range hits {
+		sessionName := extractSessionName(hit.SourcePath)
+		age := formatAge(hit.SourcePath)
+		relevance := int(hit.ComputedScore * 100)
+
+		b.WriteString(itoa(i + 1))
+		b.WriteString(". Session: ")
+		b.WriteString(sessionName)
+		b.WriteString("\n")
+		b.WriteString("   Relevance: ")
+		b.WriteString(itoa(relevance))
+		b.WriteString("%\n")
+		if age != "" {
+			b.WriteString("   Age: ")
+			b.WriteString(age)
+			b.WriteString("\n")
+		}
+
+		if hit.Content != "" {
+			b.WriteString("   Content:\n")
+			// Indent content lines
+			lines := strings.Split(hit.Content, "\n")
+			for _, line := range lines {
+				if strings.TrimSpace(line) != "" {
+					b.WriteString("   | ")
+					b.WriteString(line)
+					b.WriteString("\n")
+				}
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// extractSessionName extracts a readable session name from the file path.
+func extractSessionName(path string) string {
+	// Get the filename without extension
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 {
+		return "unknown"
+	}
+
+	filename := parts[len(parts)-1]
+
+	// Remove common extensions
+	filename = strings.TrimSuffix(filename, ".jsonl")
+	filename = strings.TrimSuffix(filename, ".json")
+
+	// Truncate if too long
+	if len(filename) > 40 {
+		filename = filename[:37] + "..."
+	}
+
+	return filename
+}
+
+// formatAge returns a human-readable age string based on the session date.
+func formatAge(path string) string {
+	sessionDate := extractSessionDate(path)
+	if sessionDate.IsZero() {
+		return ""
+	}
+
+	age := time.Since(sessionDate)
+
+	days := int(age.Hours() / 24)
+	if days == 0 {
+		return "today"
+	} else if days == 1 {
+		return "1 day ago"
+	} else if days < 7 {
+		return itoa(days) + " days ago"
+	} else if days < 30 {
+		weeks := days / 7
+		if weeks == 1 {
+			return "1 week ago"
+		}
+		return itoa(weeks) + " weeks ago"
+	}
+
+	months := days / 30
+	if months == 1 {
+		return "1 month ago"
+	}
+	return itoa(months) + " months ago"
+}
+
+// cleanContentForMarkdown cleans content for markdown formatting.
+func cleanContentForMarkdown(content string) string {
+	// Trim whitespace
+	content = strings.TrimSpace(content)
+
+	// Limit line length for readability
+	var lines []string
+	for _, line := range strings.Split(content, "\n") {
+		if len(line) > 120 {
+			line = line[:117] + "..."
+		}
+		lines = append(lines, line)
+	}
+
+	// Limit total lines
+	if len(lines) > 10 {
+		lines = lines[:10]
+		lines = append(lines, "...")
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// extractCodeSnippets extracts just code blocks from content.
+func extractCodeSnippets(content string) string {
+	// Look for fenced code blocks
+	codePattern := regexp.MustCompile("(?s)```[a-z]*\n(.*?)```")
+	matches := codePattern.FindAllStringSubmatch(content, -1)
+
+	var snippets []string
+	for _, match := range matches {
+		if len(match) > 1 && strings.TrimSpace(match[1]) != "" {
+			snippets = append(snippets, strings.TrimSpace(match[1]))
+		}
+	}
+
+	if len(snippets) > 0 {
+		return strings.Join(snippets, "\n\n")
+	}
+
+	// If no code blocks, return cleaned content (might be inline code)
+	content = strings.TrimSpace(content)
+	if len(content) > 200 {
+		content = content[:197] + "..."
+	}
+	return content
+}
+
+// truncateToTokens truncates content to approximately the given token count.
+// Uses ~4 chars per token as a rough estimate.
+func truncateToTokens(content string, maxTokens int) string {
+	maxChars := maxTokens * 4
+	if len(content) <= maxChars {
+		return content
+	}
+
+	// Try to truncate at a line boundary
+	truncated := content[:maxChars]
+	lastNewline := strings.LastIndex(truncated, "\n")
+	if lastNewline > maxChars/2 {
+		truncated = truncated[:lastNewline]
+	}
+
+	return truncated + "\n[... truncated for token budget ...]"
+}
+
+// countInjectedItems counts how many items were included in the formatted context.
+func countInjectedItems(context string, format InjectionFormat) int {
+	switch format {
+	case FormatMarkdown:
+		// Count ### headers
+		return strings.Count(context, "### Session:")
+	case FormatStructured:
+		// Count numbered items (1. Session:, 2. Session:, etc.)
+		count := 0
+		for i := 1; i <= 20; i++ {
+			if strings.Contains(context, itoa(i)+". Session:") {
+				count++
+			}
+		}
+		return count
+	default:
+		// FormatMinimal doesn't have clear item boundaries
+		// Estimate based on content presence
+		if strings.TrimSpace(context) == "" || context == "// Related context:\n" {
+			return 0
+		}
+		return 1 // At least one item if there's content
+	}
+}
+
+// InjectContextFromQuery is a convenience function that queries CASS, filters results,
+// and injects the context in one call.
+func InjectContextFromQuery(prompt string, queryConfig CASSConfig, filterConfig FilterConfig, injectConfig InjectConfig) (InjectionResult, CASSQueryResult, FilterResult) {
+	// Query and filter
+	queryResult, filterResult := QueryAndFilterCASS(prompt, queryConfig, filterConfig)
+
+	if !queryResult.Success {
+		return InjectionResult{
+			Success: false,
+			Error:   "CASS query failed: " + queryResult.Error,
+			Metadata: InjectionMetadata{
+				Enabled: true,
+			},
+		}, queryResult, filterResult
+	}
+
+	// Inject context
+	injectResult := InjectContext(prompt, filterResult.Hits, injectConfig)
+	injectResult.Metadata.ItemsFound = filterResult.OriginalCount
+	injectResult.Metadata.ItemsFiltered = filterResult.RemovedByScore + filterResult.RemovedByAge
+
+	return injectResult, queryResult, filterResult
+}
+
+// FormatForAgent returns the appropriate InjectionFormat for an agent type.
+func FormatForAgent(agentType string) InjectionFormat {
+	switch strings.ToLower(agentType) {
+	case "codex", "cod":
+		return FormatMinimal
+	case "gemini", "gmi":
+		return FormatStructured
+	default: // claude, cc, and others
+		return FormatMarkdown
+	}
+}
