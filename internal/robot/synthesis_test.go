@@ -622,3 +622,525 @@ func TestConflictDetector_PruneOldWindows(t *testing.T) {
 		t.Errorf("pane %%3 should have 1 window, got %d", len(windows["%3"]))
 	}
 }
+
+// ============================================================================
+// Output Capture & Extraction Tests
+// ============================================================================
+
+func TestExtractCodeBlocks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		want    []CodeBlock
+	}{
+		{
+			name:    "empty content",
+			content: "",
+			want:    nil,
+		},
+		{
+			name:    "no code blocks",
+			content: "Just some text\nwithout code blocks",
+			want:    nil,
+		},
+		{
+			name: "single code block with language",
+			content: "Some text\n```go\nfunc main() {}\n```\nMore text",
+			want: []CodeBlock{
+				{Language: "go", Content: "func main() {}", LineStart: 2, LineEnd: 4},
+			},
+		},
+		{
+			name: "code block without language",
+			content: "```\nplain text\n```",
+			want: []CodeBlock{
+				{Language: "", Content: "plain text", LineStart: 1, LineEnd: 3},
+			},
+		},
+		{
+			name: "multiple code blocks",
+			content: "```python\nprint('hello')\n```\nSome text\n```javascript\nconsole.log('hi');\n```",
+			want: []CodeBlock{
+				{Language: "python", Content: "print('hello')", LineStart: 1, LineEnd: 3},
+				{Language: "javascript", Content: "console.log('hi');", LineStart: 5, LineEnd: 7},
+			},
+		},
+		{
+			name: "multiline code block",
+			content: "```go\npackage main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n```",
+			want: []CodeBlock{
+				{Language: "go", Content: "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}", LineStart: 1, LineEnd: 9},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ExtractCodeBlocks(tt.content)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d blocks, want %d", len(got), len(tt.want))
+			}
+			for i, g := range got {
+				w := tt.want[i]
+				if g.Language != w.Language {
+					t.Errorf("block[%d].Language = %q, want %q", i, g.Language, w.Language)
+				}
+				if g.Content != w.Content {
+					t.Errorf("block[%d].Content = %q, want %q", i, g.Content, w.Content)
+				}
+				if g.LineStart != w.LineStart {
+					t.Errorf("block[%d].LineStart = %d, want %d", i, g.LineStart, w.LineStart)
+				}
+				if g.LineEnd != w.LineEnd {
+					t.Errorf("block[%d].LineEnd = %d, want %d", i, g.LineEnd, w.LineEnd)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractJSONOutputs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		want    int // number of JSON outputs
+		isArray []bool
+	}{
+		{
+			name:    "empty content",
+			content: "",
+			want:    0,
+		},
+		{
+			name:    "no JSON",
+			content: "Just some text",
+			want:    0,
+		},
+		{
+			name:    "simple object",
+			content: `{"key": "value"}`,
+			want:    1,
+			isArray: []bool{false},
+		},
+		{
+			name:    "simple array",
+			content: `[1, 2, 3]`,
+			want:    1,
+			isArray: []bool{true},
+		},
+		{
+			name:    "multiline object",
+			content: "{\n  \"key\": \"value\",\n  \"num\": 42\n}",
+			want:    1,
+			isArray: []bool{false},
+		},
+		{
+			name:    "object with nested",
+			content: `{"outer": {"inner": true}}`,
+			want:    1,
+			isArray: []bool{false},
+		},
+		{
+			name:    "invalid JSON",
+			content: `{"key": value}`,
+			want:    0,
+		},
+		{
+			name:    "mixed content",
+			content: "Output:\n{\"success\": true}\nDone",
+			want:    1,
+			isArray: []bool{false},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ExtractJSONOutputs(tt.content)
+			if len(got) != tt.want {
+				t.Fatalf("got %d JSON outputs, want %d", len(got), tt.want)
+			}
+			for i, g := range got {
+				if i < len(tt.isArray) && g.IsArray != tt.isArray[i] {
+					t.Errorf("output[%d].IsArray = %v, want %v", i, g.IsArray, tt.isArray[i])
+				}
+			}
+		})
+	}
+}
+
+func TestIsValidJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{`{}`, true},
+		{`[]`, true},
+		{`{"key": "value"}`, true},
+		{`[1, 2, 3]`, true},
+		{`{"nested": {"deep": true}}`, true},
+		{``, false},
+		{`{invalid}`, false},
+		{`{"key": }`, false},
+		{`just text`, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			if got := isValidJSON(tt.input); got != tt.want {
+				t.Errorf("isValidJSON(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractFileMentions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		content   string
+		wantCount int
+	}{
+		{
+			name:      "empty content",
+			content:   "",
+			wantCount: 0,
+		},
+		{
+			name:      "no file paths",
+			content:   "Just some regular text",
+			wantCount: 0,
+		},
+		{
+			name:      "single file path",
+			content:   "Modified internal/robot/file.go",
+			wantCount: 1,
+		},
+		{
+			name:      "relative path",
+			content:   "Reading ./config.yaml",
+			wantCount: 1,
+		},
+		{
+			name:      "multiple paths",
+			content:   "Updated src/main.go and internal/api/handler.go",
+			wantCount: 2,
+		},
+		{
+			name:      "path with extension only",
+			content:   "Check main.go for details",
+			wantCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ExtractFileMentions(tt.content)
+			if len(got) != tt.wantCount {
+				t.Errorf("got %d mentions, want %d: %+v", len(got), tt.wantCount, got)
+			}
+		})
+	}
+}
+
+func TestInferFileAction(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		line       string
+		path       string
+		wantAction string
+		minConf    float64
+	}{
+		{"Created internal/robot/file.go", "internal/robot/file.go", FileActionCreated, 0.8},
+		{"Creating new file", "file.go", FileActionCreated, 0.8},
+		{"Modified src/main.go", "src/main.go", FileActionModified, 0.8},
+		{"Updating the handler", "handler.go", FileActionModified, 0.5},
+		{"Deleted old/file.go", "old/file.go", FileActionDeleted, 0.8},
+		{"Reading config.yaml", "config.yaml", FileActionRead, 0.8},
+		{"Some file mentioned", "file.go", FileActionUnknown, 0.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			t.Parallel()
+			action, conf := inferFileAction(tt.line, tt.path)
+			if action != tt.wantAction {
+				t.Errorf("action = %q, want %q", action, tt.wantAction)
+			}
+			if conf < tt.minConf {
+				t.Errorf("confidence = %.2f, want >= %.2f", conf, tt.minConf)
+			}
+		})
+	}
+}
+
+func TestExtractCommands(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		want    []string
+	}{
+		{
+			name:    "empty content",
+			content: "",
+			want:    nil,
+		},
+		{
+			name:    "no commands",
+			content: "Just some text",
+			want:    nil,
+		},
+		{
+			name:    "dollar command",
+			content: "$ go test ./...",
+			want:    []string{"go test ./..."},
+		},
+		{
+			name:    "percent command",
+			content: "% ls -la",
+			want:    []string{"ls -la"},
+		},
+		{
+			name:    "multiple commands",
+			content: "$ git status\n$ git add .\n$ git commit -m 'test'",
+			want:    []string{"git status", "git add .", "git commit -m 'test'"},
+		},
+		{
+			name:    "skip python REPL",
+			content: ">>> print('hello')",
+			want:    nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ExtractCommands(tt.content)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d commands, want %d", len(got), len(tt.want))
+			}
+			for i, g := range got {
+				if g.Command != tt.want[i] {
+					t.Errorf("command[%d] = %q, want %q", i, g.Command, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestParseExitCode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		line string
+		want *int
+	}{
+		{"exit code: 0", intPtr(0)},
+		{"exit code: 1", intPtr(1)},
+		{"Exit: 127", intPtr(127)},
+		{"returned 0", intPtr(0)},
+		{"status: 1", intPtr(1)},
+		{"[0]", intPtr(0)},
+		{"no exit code here", nil},
+		{"", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			t.Parallel()
+			got := parseExitCode(tt.line)
+			if tt.want == nil && got != nil {
+				t.Errorf("got %d, want nil", *got)
+			} else if tt.want != nil && got == nil {
+				t.Errorf("got nil, want %d", *tt.want)
+			} else if tt.want != nil && got != nil && *got != *tt.want {
+				t.Errorf("got %d, want %d", *got, *tt.want)
+			}
+		})
+	}
+}
+
+func intPtr(i int) *int {
+	return &i
+}
+
+func TestNewOutputCapture(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil config uses defaults", func(t *testing.T) {
+		t.Parallel()
+		oc := NewOutputCapture(nil)
+		if oc.config == nil {
+			t.Fatal("config should not be nil")
+		}
+		if oc.config.MaxCapturesPerPane != 100 {
+			t.Errorf("MaxCapturesPerPane = %d, want 100", oc.config.MaxCapturesPerPane)
+		}
+	})
+
+	t.Run("custom config", func(t *testing.T) {
+		t.Parallel()
+		cfg := &OutputCaptureConfig{MaxCapturesPerPane: 50}
+		oc := NewOutputCapture(cfg)
+		if oc.config.MaxCapturesPerPane != 50 {
+			t.Errorf("MaxCapturesPerPane = %d, want 50", oc.config.MaxCapturesPerPane)
+		}
+	})
+}
+
+func TestOutputCapture_CaptureAndExtract(t *testing.T) {
+	t.Parallel()
+
+	oc := NewOutputCapture(nil)
+
+	content := "Output:\n```go\nfunc test() {}\n```\n{\"success\": true}\n$ go test"
+	capture := oc.CaptureAndExtract("%1", "claude", content, "Run tests")
+
+	if capture.PaneID != "%1" {
+		t.Errorf("PaneID = %q, want %%1", capture.PaneID)
+	}
+	if capture.AgentType != "claude" {
+		t.Errorf("AgentType = %q, want claude", capture.AgentType)
+	}
+	if capture.Prompt != "Run tests" {
+		t.Errorf("Prompt = %q, want 'Run tests'", capture.Prompt)
+	}
+	if len(capture.CodeBlocks) != 1 {
+		t.Errorf("got %d code blocks, want 1", len(capture.CodeBlocks))
+	}
+	if len(capture.JSONOutputs) != 1 {
+		t.Errorf("got %d JSON outputs, want 1", len(capture.JSONOutputs))
+	}
+	if len(capture.Commands) != 1 {
+		t.Errorf("got %d commands, want 1", len(capture.Commands))
+	}
+}
+
+func TestOutputCapture_RingBuffer(t *testing.T) {
+	t.Parallel()
+
+	cfg := &OutputCaptureConfig{
+		MaxCapturesPerPane: 3,
+		MaxRetention:       1 * time.Hour,
+	}
+	oc := NewOutputCapture(cfg)
+
+	// Add 5 captures
+	for i := 0; i < 5; i++ {
+		oc.CaptureAndExtract("%1", "claude", "content", "prompt")
+	}
+
+	// Should only have 3 (ring buffer limit)
+	captures := oc.GetCaptures("%1", 0, nil)
+	if len(captures) != 3 {
+		t.Errorf("got %d captures, want 3", len(captures))
+	}
+}
+
+func TestOutputCapture_GetCaptures(t *testing.T) {
+	t.Parallel()
+
+	oc := NewOutputCapture(nil)
+
+	// Add captures
+	oc.CaptureAndExtract("%1", "claude", "content1", "prompt1")
+	time.Sleep(10 * time.Millisecond)
+	oc.CaptureAndExtract("%1", "claude", "content2", "prompt2")
+
+	t.Run("no limit", func(t *testing.T) {
+		t.Parallel()
+		captures := oc.GetCaptures("%1", 0, nil)
+		if len(captures) != 2 {
+			t.Errorf("got %d captures, want 2", len(captures))
+		}
+	})
+
+	t.Run("with limit", func(t *testing.T) {
+		t.Parallel()
+		captures := oc.GetCaptures("%1", 1, nil)
+		if len(captures) != 1 {
+			t.Errorf("got %d captures, want 1", len(captures))
+		}
+	})
+
+	t.Run("unknown pane", func(t *testing.T) {
+		t.Parallel()
+		captures := oc.GetCaptures("%unknown", 0, nil)
+		if len(captures) != 0 {
+			t.Errorf("got %d captures, want 0", len(captures))
+		}
+	})
+}
+
+func TestOutputCapture_GetLatestCapture(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no captures", func(t *testing.T) {
+		t.Parallel()
+		oc := NewOutputCapture(nil)
+		latest := oc.GetLatestCapture("%empty")
+		if latest != nil {
+			t.Error("expected nil for no captures")
+		}
+	})
+
+	t.Run("returns latest", func(t *testing.T) {
+		t.Parallel()
+		oc := NewOutputCapture(nil)
+		oc.CaptureAndExtract("%1", "claude", "first", "")
+		oc.CaptureAndExtract("%1", "claude", "second", "")
+
+		latest := oc.GetLatestCapture("%1")
+		if latest == nil {
+			t.Fatal("expected non-nil capture")
+		}
+	})
+}
+
+func TestOutputCapture_ClearCaptures(t *testing.T) {
+	t.Parallel()
+
+	oc := NewOutputCapture(nil)
+	oc.CaptureAndExtract("%1", "claude", "content", "")
+	oc.CaptureAndExtract("%2", "codex", "content", "")
+
+	oc.ClearCaptures("%1")
+
+	if len(oc.GetCaptures("%1", 0, nil)) != 0 {
+		t.Error("pane %1 should be cleared")
+	}
+	if len(oc.GetCaptures("%2", 0, nil)) != 1 {
+		t.Error("pane %2 should still have captures")
+	}
+}
+
+func TestOutputCapture_Stats(t *testing.T) {
+	t.Parallel()
+
+	oc := NewOutputCapture(nil)
+	oc.CaptureAndExtract("%1", "claude", "content", "")
+	oc.CaptureAndExtract("%1", "claude", "content", "")
+	oc.CaptureAndExtract("%2", "codex", "content", "")
+
+	stats := oc.Stats()
+
+	if stats.PaneCount != 2 {
+		t.Errorf("PaneCount = %d, want 2", stats.PaneCount)
+	}
+	if stats.TotalCaptures != 3 {
+		t.Errorf("TotalCaptures = %d, want 3", stats.TotalCaptures)
+	}
+}
