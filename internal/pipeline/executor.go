@@ -171,6 +171,112 @@ func (e *Executor) Run(ctx context.Context, workflow *Workflow, vars map[string]
 	return e.state, err
 }
 
+// Resume continues execution from a previously persisted state.
+func (e *Executor) Resume(ctx context.Context, workflow *Workflow, prior *ExecutionState, progress chan<- ProgressEvent) (*ExecutionState, error) {
+	if prior == nil {
+		return nil, fmt.Errorf("resume state is nil")
+	}
+
+	// Create cancellable context
+	ctx, cancel := context.WithCancel(ctx)
+	e.cancelFn = cancel
+	defer cancel()
+
+	// Apply global timeout
+	timeout := e.config.GlobalTimeout
+	if workflow.Settings.Timeout.Duration > 0 {
+		timeout = workflow.Settings.Timeout.Duration
+	}
+	ctx, timeoutCancel := context.WithTimeout(ctx, timeout)
+	defer timeoutCancel()
+
+	e.state = prior
+	if e.state.Steps == nil {
+		e.state.Steps = make(map[string]StepResult)
+	}
+	if e.state.Variables == nil {
+		e.state.Variables = make(map[string]interface{})
+	}
+	if e.state.RunID == "" {
+		if e.config.RunID != "" {
+			e.state.RunID = e.config.RunID
+		} else {
+			e.state.RunID = generateRunID()
+		}
+	}
+	if e.state.WorkflowID == "" {
+		e.state.WorkflowID = workflow.Name
+	}
+	if e.state.WorkflowFile == "" {
+		e.state.WorkflowFile = e.config.WorkflowFile
+	}
+	if e.state.Session == "" {
+		e.state.Session = e.config.Session
+	}
+	if e.state.StartedAt.IsZero() {
+		e.state.StartedAt = time.Now()
+	}
+	e.state.Status = StatusRunning
+	e.state.UpdatedAt = time.Now()
+	e.state.FinishedAt = time.Time{}
+	e.state.CurrentStep = ""
+
+	e.progress = progress
+
+	// Build dependency graph
+	e.graph = NewDependencyGraph(workflow)
+	if errors := e.graph.Validate(); len(errors) > 0 {
+		e.state.Status = StatusFailed
+		for _, err := range errors {
+			e.state.Errors = append(e.state.Errors, ExecutionError{
+				Type:      "dependency",
+				Message:   err.Message,
+				Timestamp: time.Now(),
+				Fatal:     true,
+			})
+		}
+		e.persistState()
+		return e.state, fmt.Errorf("workflow has dependency errors: %v", errors[0])
+	}
+
+	e.applyResumeState()
+	e.persistState()
+
+	// Emit start event
+	e.emitProgress("workflow_start", "", fmt.Sprintf("Resuming workflow: %s", workflow.Name), e.calculateProgress())
+
+	// Execute steps in dependency order
+	err := e.executeWorkflow(ctx, workflow)
+
+	// Finalize state
+	e.state.FinishedAt = time.Now()
+	e.state.UpdatedAt = time.Now()
+
+	if err != nil {
+		if ctx.Err() == context.Canceled {
+			e.state.Status = StatusCancelled
+		} else if ctx.Err() == context.DeadlineExceeded {
+			e.state.Status = StatusFailed
+			e.state.Errors = append(e.state.Errors, ExecutionError{
+				Type:      "timeout",
+				Message:   "workflow exceeded global timeout",
+				Timestamp: time.Now(),
+				Fatal:     true,
+			})
+		} else {
+			e.state.Status = StatusFailed
+		}
+		e.emitProgress("workflow_error", "", err.Error(), e.calculateProgress())
+	} else {
+		e.state.Status = StatusCompleted
+		e.emitProgress("workflow_complete", "", "Workflow completed successfully", 1.0)
+	}
+
+	e.persistState()
+
+	return e.state, err
+}
+
 // Cancel cancels the current execution
 func (e *Executor) Cancel() {
 	if e.cancelFn != nil {
@@ -1225,6 +1331,116 @@ func truncatePrompt(s string, n int) string {
 	}
 	// All rune starts fit within targetLen; use the last one
 	return s[:prevI] + "..."
+}
+
+func (e *Executor) applyResumeState() {
+	if e.state == nil || e.graph == nil {
+		return
+	}
+
+	rerun := make(map[string]StepResult)
+	for stepID, result := range e.state.Steps {
+		if shouldRerunStep(result) {
+			rerun[stepID] = result
+			continue
+		}
+		if err := e.graph.MarkExecuted(stepID); err != nil {
+			delete(e.state.Steps, stepID)
+		}
+	}
+
+	if len(rerun) == 0 {
+		return
+	}
+
+	for stepID := range rerun {
+		delete(e.state.Steps, stepID)
+		e.clearStepVariables(stepID)
+	}
+}
+
+func shouldRerunStep(result StepResult) bool {
+	switch result.Status {
+	case StatusFailed, StatusCancelled, StatusRunning, StatusPending:
+		return true
+	case StatusSkipped:
+		if strings.HasPrefix(result.SkipReason, "dependency failed") {
+			return true
+		}
+		if strings.HasPrefix(result.SkipReason, "cancelled") {
+			return true
+		}
+	}
+	return result.Status == ""
+}
+
+func (e *Executor) clearStepVariables(stepID string) {
+	if e.state == nil || e.state.Variables == nil {
+		return
+	}
+
+	delete(e.state.Variables, "steps."+stepID+".output")
+	delete(e.state.Variables, "steps."+stepID+".data")
+
+	if step, ok := e.graph.GetStep(stepID); ok && step.OutputVar != "" {
+		delete(e.state.Variables, step.OutputVar)
+		delete(e.state.Variables, step.OutputVar+"_parsed")
+	}
+}
+
+func (e *Executor) snapshotState() *ExecutionState {
+	if e.state == nil {
+		return nil
+	}
+
+	snapshot := *e.state
+
+	e.stateMu.RLock()
+	if e.state.Steps != nil {
+		snapshot.Steps = make(map[string]StepResult, len(e.state.Steps))
+		for key, value := range e.state.Steps {
+			snapshot.Steps[key] = value
+		}
+	}
+	e.stateMu.RUnlock()
+
+	e.varMu.RLock()
+	if e.state.Variables != nil {
+		snapshot.Variables = make(map[string]interface{}, len(e.state.Variables))
+		for key, value := range e.state.Variables {
+			snapshot.Variables[key] = value
+		}
+	}
+	e.varMu.RUnlock()
+
+	return &snapshot
+}
+
+func (e *Executor) persistState() {
+	if e.state == nil {
+		return
+	}
+
+	projectDir := e.config.ProjectDir
+	if projectDir == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			if e.config.Verbose {
+				log.Printf("pipeline: unable to resolve project dir for state persistence: %v", err)
+			}
+			return
+		}
+		projectDir = cwd
+	}
+
+	snapshot := e.snapshotState()
+	if snapshot == nil {
+		return
+	}
+
+	if err := SaveState(projectDir, snapshot); err != nil && e.config.Verbose {
+		log.Printf("pipeline: state persistence failed: %v", err)
+	}
 }
 
 // GetState returns the current execution state (for monitoring)

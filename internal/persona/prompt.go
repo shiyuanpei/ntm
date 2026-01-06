@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 // PrepareSystemPrompt writes a persona's system prompt to a file and returns the path.
@@ -230,38 +232,27 @@ func loadCustomVars(projectDir string, ctx *TemplateContext) {
 		return
 	}
 
-	// Simple parsing for [template_vars] section
-	lines := strings.Split(string(data), "\n")
-	inVars := false
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "[template_vars]" {
-			inVars = true
-			continue
-		}
-		if strings.HasPrefix(line, "[") && line != "[template_vars]" {
-			inVars = false
-			continue
-		}
-		if inVars && strings.Contains(line, "=") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				key := strings.TrimSpace(parts[0])
-				value := strings.TrimSpace(parts[1])
-				// Remove quotes
-				value = strings.Trim(value, "\"'")
-				ctx.CustomVars[key] = value
+	var cfg struct {
+		TemplateVars map[string]string `toml:"template_vars"`
+	}
 
-				// Also set special fields if matching
-				switch key {
-				case "project_name":
-					ctx.ProjectName = value
-				case "language":
-					ctx.Language = value
-				case "codebase_summary":
-					ctx.CodebaseSummary = value
-				}
-			}
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		// Log error but continue (best effort)
+		fmt.Fprintf(os.Stderr, "warning: parsing %s: %v\n", configPath, err)
+		return
+	}
+
+	for key, value := range cfg.TemplateVars {
+		ctx.CustomVars[key] = value
+
+		// Also set special fields if matching
+		switch key {
+		case "project_name":
+			ctx.ProjectName = value
+		case "language":
+			ctx.Language = value
+		case "codebase_summary":
+			ctx.CodebaseSummary = value
 		}
 	}
 }

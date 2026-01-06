@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -193,8 +194,13 @@ func PrintPipelineRun(opts PipelineRunOptions) int {
 		return 1
 	}
 
+	workflowPath := opts.WorkflowFile
+	if abs, err := filepath.Abs(opts.WorkflowFile); err == nil {
+		workflowPath = abs
+	}
+
 	// Load and validate workflow
-	workflow, validationResult, err := LoadAndValidate(opts.WorkflowFile)
+	workflow, validationResult, err := LoadAndValidate(workflowPath)
 	if err != nil {
 		output.RobotResponse = NewErrorResponse(
 			fmt.Errorf("failed to load workflow: %w", err),
@@ -222,6 +228,10 @@ func PrintPipelineRun(opts PipelineRunOptions) int {
 	// Create executor
 	execCfg := DefaultExecutorConfig(opts.Session)
 	execCfg.DryRun = opts.DryRun
+	if projectDir, err := os.Getwd(); err == nil {
+		execCfg.ProjectDir = projectDir
+	}
+	execCfg.WorkflowFile = workflowPath
 	executor := NewExecutor(execCfg)
 
 	// Create context

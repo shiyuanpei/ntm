@@ -44,8 +44,10 @@ func Open(path string) (*Store, error) {
 	}
 
 	// Set connection pool settings
-	db.SetMaxOpenConns(1) // SQLite only supports one writer
-	db.SetMaxIdleConns(1)
+	// We allow multiple connections for concurrent reads (enabled by WAL mode).
+	// Writes are serialized by the Store's mutex to avoid SQLITE_BUSY.
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(0) // Don't close idle connections
 
 	// Verify connection

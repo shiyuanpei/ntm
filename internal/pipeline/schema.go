@@ -204,18 +204,18 @@ type StepError struct {
 
 // ExecutionState contains the complete state of a workflow execution
 type ExecutionState struct {
-	RunID       string                 `json:"run_id"`
-	WorkflowID  string                 `json:"workflow_id"`
-	WorkflowFile string                `json:"workflow_file,omitempty"`
-	Session     string                 `json:"session,omitempty"`
-	Status      ExecutionStatus        `json:"status"`
-	StartedAt   time.Time              `json:"started_at"`
-	UpdatedAt   time.Time              `json:"updated_at"`
-	FinishedAt  time.Time              `json:"finished_at,omitempty"`
-	CurrentStep string                 `json:"current_step,omitempty"`
-	Steps       map[string]StepResult  `json:"steps"`
-	Variables   map[string]interface{} `json:"variables"` // Runtime variables including step outputs
-	Errors      []ExecutionError       `json:"errors,omitempty"`
+	RunID        string                 `json:"run_id"`
+	WorkflowID   string                 `json:"workflow_id"`
+	WorkflowFile string                 `json:"workflow_file,omitempty"`
+	Session      string                 `json:"session,omitempty"`
+	Status       ExecutionStatus        `json:"status"`
+	StartedAt    time.Time              `json:"started_at"`
+	UpdatedAt    time.Time              `json:"updated_at"`
+	FinishedAt   time.Time              `json:"finished_at,omitempty"`
+	CurrentStep  string                 `json:"current_step,omitempty"`
+	Steps        map[string]StepResult  `json:"steps"`
+	Variables    map[string]interface{} `json:"variables"` // Runtime variables including step outputs
+	Errors       []ExecutionError       `json:"errors,omitempty"`
 }
 
 // ExecutionError represents an error that occurred during execution

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,9 +28,11 @@ with dependencies, conditionals, and variable substitution.
 
 Subcommands:
   run      Run a workflow from a YAML/TOML file
+  resume   Resume a workflow from saved state
   status   Check the status of a running pipeline
   list     List all tracked pipelines
   cancel   Cancel a running pipeline
+  cleanup  Remove old pipeline state files
 
 Quick ad-hoc pipeline:
   ntm pipeline exec <session> --stage "cc: prompt" --stage "cod: prompt"
@@ -47,7 +51,13 @@ Examples:
   ntm pipeline list
 
   # Cancel a running pipeline
-  ntm pipeline cancel run-20241230-123456-abcd`,
+  ntm pipeline cancel run-20241230-123456-abcd
+
+  # Resume a pipeline
+  ntm pipeline resume run-20241230-123456-abcd
+
+  # Cleanup old state files
+  ntm pipeline cleanup --older=7d`,
 	}
 
 	cmd.AddCommand(
@@ -96,10 +106,19 @@ Examples:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workflowFile := args[0]
+			workflowPath := workflowFile
+			if abs, err := filepath.Abs(workflowFile); err == nil {
+				workflowPath = abs
+			}
 
 			// Validate session
 			if session == "" {
 				return fmt.Errorf("--session is required")
+			}
+
+			projectDir, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
 			}
 
 			if err := tmux.EnsureInstalled(); err != nil {
@@ -136,7 +155,7 @@ Examples:
 			// JSON mode
 			if jsonOutput {
 				opts := pipeline.PipelineRunOptions{
-					WorkflowFile: workflowFile,
+					WorkflowFile: workflowPath,
 					Session:      session,
 					Variables:    vars,
 					DryRun:       dryRun,
@@ -150,7 +169,7 @@ Examples:
 			}
 
 			// Human-friendly mode
-			fmt.Printf("🚀 Running workflow: %s\n", workflowFile)
+			fmt.Printf("🚀 Running workflow: %s\n", workflowPath)
 			fmt.Printf("   Session: %s\n", session)
 			if dryRun {
 				fmt.Println("   Mode: dry-run (validate only)")
@@ -164,7 +183,7 @@ Examples:
 			fmt.Println()
 
 			// Load and validate workflow
-			workflow, result, err := pipeline.LoadAndValidate(workflowFile)
+			workflow, result, err := pipeline.LoadAndValidate(workflowPath)
 			if err != nil {
 				return fmt.Errorf("failed to load workflow: %w", err)
 			}
@@ -189,6 +208,8 @@ Examples:
 			// Create executor
 			execCfg := pipeline.DefaultExecutorConfig(session)
 			execCfg.DryRun = dryRun
+			execCfg.ProjectDir = projectDir
+			execCfg.WorkflowFile = workflowPath
 			executor := pipeline.NewExecutor(execCfg)
 
 			// Create progress channel
@@ -374,6 +395,322 @@ func newPipelineCancelCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// newPipelineResumeCmd creates the "pipeline resume" subcommand
+func newPipelineResumeCmd() *cobra.Command {
+	var session string
+
+	cmd := &cobra.Command{
+		Use:   "resume <run-id>",
+		Short: "Resume a pipeline from saved state",
+		Long: `Resume a previously interrupted pipeline from its last checkpoint.
+
+Pipeline state is persisted to .ntm/pipelines/<run-id>.json after each step.
+This allows resuming from the last completed step if a pipeline is interrupted.
+
+Examples:
+  # Resume a specific pipeline
+  ntm pipeline resume run-20241230-123456-abcd --session myproject
+
+  # Resume will pick up from the last incomplete step`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			runID := args[0]
+
+			projectDir, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+
+			state, err := pipeline.LoadState(projectDir, runID)
+			if err != nil {
+				if jsonOutput {
+					result := map[string]interface{}{
+						"success":    false,
+						"error":      err.Error(),
+						"error_code": "STATE_NOT_FOUND",
+						"run_id":     runID,
+					}
+					return json.NewEncoder(os.Stdout).Encode(result)
+				}
+				return fmt.Errorf("failed to load pipeline state: %w", err)
+			}
+
+			if session == "" {
+				session = state.Session
+			}
+			if session == "" {
+				return fmt.Errorf("--session is required (or state must contain session)")
+			}
+
+			if err := tmux.EnsureInstalled(); err != nil {
+				return err
+			}
+
+			if !tmux.SessionExists(session) {
+				return fmt.Errorf("session %q not found", session)
+			}
+
+			if state.Status == pipeline.StatusCompleted {
+				if jsonOutput {
+					result := map[string]interface{}{
+						"success": true,
+						"message": "Pipeline already completed",
+						"run_id":  runID,
+						"status":  string(state.Status),
+					}
+					return json.NewEncoder(os.Stdout).Encode(result)
+				}
+				fmt.Printf("Pipeline %s already completed\n", runID)
+				return nil
+			}
+
+			workflowFile := strings.TrimSpace(state.WorkflowFile)
+			if workflowFile == "" {
+				return fmt.Errorf("state missing workflow file (run %s)", runID)
+			}
+			if !filepath.IsAbs(workflowFile) {
+				workflowFile = filepath.Join(projectDir, workflowFile)
+			}
+
+			workflow, result, err := pipeline.LoadAndValidate(workflowFile)
+			if err != nil {
+				return fmt.Errorf("failed to load workflow: %w", err)
+			}
+
+			if !result.Valid {
+				if jsonOutput {
+					result := map[string]interface{}{
+						"success":    false,
+						"error":      "workflow validation failed",
+						"error_code": "INVALID_WORKFLOW",
+						"run_id":     runID,
+					}
+					return json.NewEncoder(os.Stdout).Encode(result)
+				}
+				fmt.Fprintln(os.Stderr, "Validation failed:")
+				for _, e := range result.Errors {
+					fmt.Printf("  ❌ %s\n", e.Message)
+					if e.Hint != "" {
+						fmt.Printf("     💡 %s\n", e.Hint)
+					}
+				}
+				return fmt.Errorf("workflow validation failed")
+			}
+
+			for _, w := range result.Warnings {
+				fmt.Printf("  ⚠️  %s\n", w.Message)
+			}
+
+			execCfg := pipeline.DefaultExecutorConfig(session)
+			execCfg.RunID = state.RunID
+			execCfg.ProjectDir = projectDir
+			execCfg.WorkflowFile = workflowFile
+			executor := pipeline.NewExecutor(execCfg)
+
+			state.Session = session
+			state.WorkflowFile = workflowFile
+
+			ctx := context.Background()
+
+			if jsonOutput {
+				finalState, err := executor.Resume(ctx, workflow, state, nil)
+				if err != nil {
+					result := map[string]interface{}{
+						"success":  false,
+						"error":    err.Error(),
+						"run_id":   runID,
+						"status":   string(finalState.Status),
+						"workflow": workflow.Name,
+						"session":  session,
+					}
+					return json.NewEncoder(os.Stdout).Encode(result)
+				}
+
+				result := map[string]interface{}{
+					"success":  true,
+					"run_id":   runID,
+					"status":   string(finalState.Status),
+					"workflow": workflow.Name,
+					"session":  session,
+				}
+				return json.NewEncoder(os.Stdout).Encode(result)
+			}
+
+			fmt.Printf("📋 Resuming pipeline: %s\n", runID)
+			fmt.Printf("   Session: %s\n", session)
+			fmt.Printf("   Status: %s\n", state.Status)
+			if state.CurrentStep != "" {
+				fmt.Printf("   Current step: %s\n", state.CurrentStep)
+			}
+			fmt.Println()
+
+			progress := make(chan pipeline.ProgressEvent, 100)
+			done := make(chan *pipeline.ExecutionState)
+
+			go func() {
+				defer close(progress)
+				state, _ := executor.Resume(ctx, workflow, state, progress)
+				done <- state
+			}()
+
+			for {
+				select {
+				case event, ok := <-progress:
+					if !ok {
+						continue
+					}
+					printProgressEvent(event)
+				case finalState := <-done:
+					for event := range progress {
+						printProgressEvent(event)
+					}
+
+					fmt.Println()
+					if finalState.Status == pipeline.StatusCompleted {
+						output.SuccessCheck("Pipeline completed successfully!")
+					} else {
+						fmt.Fprintf(os.Stderr, "❌ Pipeline %s\n", finalState.Status)
+						if len(finalState.Errors) > 0 {
+							for _, e := range finalState.Errors {
+								fmt.Printf("  ❌ %s\n", e.Message)
+							}
+						}
+						return fmt.Errorf("pipeline %s", finalState.Status)
+					}
+					return nil
+				}
+			}
+		},
+	}
+
+	cmd.Flags().StringVarP(&session, "session", "s", "", "Tmux session name (uses saved session if not specified)")
+
+	return cmd
+}
+
+// newPipelineCleanupCmd creates the "pipeline cleanup" subcommand
+func newPipelineCleanupCmd() *cobra.Command {
+	var olderThan string
+	var dryRun bool
+
+	cmd := &cobra.Command{
+		Use:   "cleanup",
+		Short: "Clean up old pipeline state files",
+		Long: `Remove pipeline state files older than the specified duration.
+
+State files are stored in .ntm/pipelines/ and can accumulate over time.
+Use this command to clean up old files and free disk space.
+
+Examples:
+  # Remove state files older than 7 days
+  ntm pipeline cleanup --older 7d
+
+  # Remove state files older than 30 days
+  ntm pipeline cleanup --older 30d
+
+  # Dry run - show what would be deleted
+  ntm pipeline cleanup --older 7d --dry-run`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if olderThan == "" {
+				return fmt.Errorf("--older is required (e.g., --older 7d)")
+			}
+
+			// Parse duration
+			duration, err := parseDuration(olderThan)
+			if err != nil {
+				return fmt.Errorf("invalid duration %q: %w", olderThan, err)
+			}
+
+			// Get project directory
+			projectDir, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+
+			if dryRun {
+				if jsonOutput {
+					result := map[string]interface{}{
+						"success":    true,
+						"dry_run":    true,
+						"older_than": olderThan,
+						"duration":   duration.String(),
+					}
+					return json.NewEncoder(os.Stdout).Encode(result)
+				}
+				fmt.Printf("Dry run: would clean up state files older than %s\n", duration)
+				return nil
+			}
+
+			// Perform cleanup
+			deleted, err := pipeline.CleanupStates(projectDir, duration)
+			if err != nil {
+				if jsonOutput {
+					result := map[string]interface{}{
+						"success":    false,
+						"error":      err.Error(),
+						"error_code": "CLEANUP_FAILED",
+					}
+					return json.NewEncoder(os.Stdout).Encode(result)
+				}
+				return fmt.Errorf("cleanup failed: %w", err)
+			}
+
+			if jsonOutput {
+				result := map[string]interface{}{
+					"success":     true,
+					"deleted":     deleted,
+					"older_than":  olderThan,
+					"duration":    duration.String(),
+					"project_dir": projectDir,
+				}
+				return json.NewEncoder(os.Stdout).Encode(result)
+			}
+
+			if deleted == 0 {
+				fmt.Println("No state files to clean up.")
+			} else {
+				output.SuccessCheck(fmt.Sprintf("Cleaned up %d state file(s) older than %s", deleted, duration))
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&olderThan, "older", "", "Remove files older than duration (e.g., 7d, 30d)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be deleted without deleting")
+
+	return cmd
+}
+
+// parseDuration parses duration strings like "7d", "30d", "24h"
+func parseDuration(s string) (time.Duration, error) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return 0, fmt.Errorf("duration is empty")
+	}
+
+	normalized := strings.ToLower(trimmed)
+	if strings.HasSuffix(normalized, "d") {
+		value := strings.TrimSuffix(normalized, "d")
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return 0, fmt.Errorf("invalid day count: %s", value)
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+
+	if strings.HasSuffix(normalized, "w") {
+		value := strings.TrimSuffix(normalized, "w")
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return 0, fmt.Errorf("invalid week count: %s", value)
+		}
+		return time.Duration(n) * 7 * 24 * time.Hour, nil
+	}
+
+	return time.ParseDuration(normalized)
 }
 
 // newPipelineExecCmd creates the backward-compatible "pipeline exec" command

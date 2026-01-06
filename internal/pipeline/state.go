@@ -39,10 +39,24 @@ func SaveState(projectDir string, state *ExecutionState) error {
 	}
 
 	path := pipelineStatePath(projectDir, state.RunID)
-	tmpPath := path + ".tmp"
+	tmpFile, err := os.CreateTemp(dir, fmt.Sprintf("%s-*.tmp", state.RunID))
+	if err != nil {
+		return fmt.Errorf("create pipeline state temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
 
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("write pipeline state: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close pipeline state: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("set pipeline state permissions: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
