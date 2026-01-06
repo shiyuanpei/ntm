@@ -132,6 +132,9 @@ func TestTickerPanelViewContainsSegments(t *testing.T) {
 	if !strings.Contains(view, "Mail") {
 		t.Error("expected view to contain 'Mail'")
 	}
+	if !strings.Contains(view, "Ckpt") {
+		t.Error("expected view to contain 'Ckpt'")
+	}
 }
 
 func TestTickerPanelBuildFleetSegment(t *testing.T) {
@@ -318,6 +321,62 @@ func TestTickerPanelBuildMailSegment(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			panel.SetData(tc.data)
 			segment := panel.buildPlainMailSegment()
+
+			for _, expected := range tc.contains {
+				if !strings.Contains(segment, expected) {
+					t.Errorf("expected segment to contain %q, got: %s", expected, segment)
+				}
+			}
+		})
+	}
+}
+
+func TestTickerPanelBuildCheckpointSegment(t *testing.T) {
+	panel := NewTickerPanel()
+
+	tests := []struct {
+		name     string
+		data     TickerData
+		contains []string
+	}{
+		{
+			name: "no checkpoints",
+			data: TickerData{
+				CheckpointCount:  0,
+				CheckpointStatus: "none",
+			},
+			contains: []string{"Ckpt", "none"},
+		},
+		{
+			name: "recent checkpoint",
+			data: TickerData{
+				CheckpointCount:  3,
+				CheckpointStatus: "recent",
+			},
+			contains: []string{"Ckpt", "3", "recent"},
+		},
+		{
+			name: "stale checkpoint",
+			data: TickerData{
+				CheckpointCount:  1,
+				CheckpointStatus: "stale",
+			},
+			contains: []string{"Ckpt", "1", "stale"},
+		},
+		{
+			name: "old checkpoint",
+			data: TickerData{
+				CheckpointCount:  5,
+				CheckpointStatus: "old",
+			},
+			contains: []string{"Ckpt", "5", "old"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			panel.SetData(tc.data)
+			segment := panel.buildPlainCheckpointSegment()
 
 			for _, expected := range tc.contains {
 				if !strings.Contains(segment, expected) {

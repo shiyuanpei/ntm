@@ -20,6 +20,7 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/alerts"
 	"github.com/Dicklesworthstone/ntm/internal/bv"
 	"github.com/Dicklesworthstone/ntm/internal/cass"
+	"github.com/Dicklesworthstone/ntm/internal/checkpoint"
 	"github.com/Dicklesworthstone/ntm/internal/config"
 	"github.com/Dicklesworthstone/ntm/internal/health"
 	"github.com/Dicklesworthstone/ntm/internal/history"
@@ -137,6 +138,21 @@ type RoutingUpdateMsg struct {
 	Err    error
 }
 
+// CheckpointUpdateMsg is sent when checkpoint status is fetched
+type CheckpointUpdateMsg struct {
+	Count     int // Total checkpoint count for session
+	Latest    *checkpoint.Checkpoint
+	LatestAge time.Duration // Age of latest checkpoint
+	Status    string        // "recent", "stale", "old", "none"
+	Err       error
+}
+
+// CheckpointCreatedMsg is sent when a new checkpoint is created
+type CheckpointCreatedMsg struct {
+	Checkpoint *checkpoint.Checkpoint
+	Err        error
+}
+
 // RoutingScore holds routing info for a single agent
 type RoutingScore struct {
 	Score         float64 // 0-100 composite routing score
@@ -245,6 +261,7 @@ type Model struct {
 	beadsRefreshInterval       time.Duration
 	cassContextRefreshInterval time.Duration
 	scanRefreshInterval        time.Duration
+	checkpointRefreshInterval  time.Duration
 
 	// Pane output capture budgeting/caching
 	paneOutputLines         int
@@ -310,6 +327,14 @@ type Model struct {
 	cassContext   []cass.SearchHit
 	routingScores map[string]RoutingScore // keyed by pane ID
 
+	// Checkpoint status
+	checkpointCount     int                    // Number of checkpoints for this session
+	latestCheckpoint    *checkpoint.Checkpoint // Most recent checkpoint
+	checkpointStatus    string                 // "recent", "stale", "old", "none"
+	lastCheckpointFetch time.Time
+	fetchingCheckpoint  bool
+	checkpointError     error
+
 	// Error tracking for data sources (displayed as badges)
 	beadsError       error
 	alertsError      error
@@ -368,6 +393,7 @@ type KeyMap struct {
 	Help           key.Binding // '?' to toggle help overlay
 	Diagnostics    key.Binding // 'd' to toggle diagnostics
 	ScanToggle     key.Binding // 'u' to toggle UBS scanning
+	Checkpoint     key.Binding // 'ctrl+k' to create checkpoint
 	Tab            key.Binding
 	ShiftTab       key.Binding
 	Num1           key.Binding
@@ -392,6 +418,7 @@ const (
 	BeadsRefreshInterval       = 5 * time.Second
 	CassContextRefreshInterval = 15 * time.Minute
 	ScanRefreshInterval        = 1 * time.Minute
+	CheckpointRefreshInterval  = 30 * time.Second
 )
 
 func (m *Model) initRenderer(width int) {
@@ -420,6 +447,7 @@ var dashKeys = KeyMap{
 	Help:           key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "toggle help")),
 	Diagnostics:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "toggle diagnostics")),
 	ScanToggle:     key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "toggle UBS scan")),
+	Checkpoint:     key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "create checkpoint")),
 	Tab:            key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next panel")),
 	ShiftTab:       key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev panel")),
 	Num1:           key.NewBinding(key.WithKeys("1")),
@@ -457,6 +485,7 @@ func New(session, projectDir string) Model {
 		beadsRefreshInterval:       BeadsRefreshInterval,
 		cassContextRefreshInterval: CassContextRefreshInterval,
 		scanRefreshInterval:        ScanRefreshInterval,
+		checkpointRefreshInterval:  CheckpointRefreshInterval,
 		paneOutputLines:            50,
 		paneOutputCaptureBudget:    20,
 		paneOutputCache:            make(map[string]string),
@@ -721,6 +750,63 @@ func (m Model) fetchAgentMailStatus() tea.Cmd {
 			Locks:     len(lockInfo),
 			LockInfo:  lockInfo,
 		}
+	}
+}
+
+// fetchCheckpointStatus fetches checkpoint status for the session
+func (m Model) fetchCheckpointStatus() tea.Cmd {
+	session := m.session
+	return func() tea.Msg {
+		storage := checkpoint.NewStorage()
+		checkpoints, err := storage.List(session)
+		if err != nil {
+			return CheckpointUpdateMsg{
+				Status: "none",
+				Err:    err,
+			}
+		}
+
+		if len(checkpoints) == 0 {
+			return CheckpointUpdateMsg{
+				Count:  0,
+				Status: "none",
+			}
+		}
+
+		// Latest is first (sorted by creation time, newest first)
+		latest := checkpoints[0]
+		age := latest.Age()
+
+		// Determine status based on age
+		var status string
+		switch {
+		case age < 30*time.Minute:
+			status = "recent"
+		case age < 1*time.Hour:
+			status = "stale"
+		default:
+			status = "old"
+		}
+
+		return CheckpointUpdateMsg{
+			Count:     len(checkpoints),
+			Latest:    latest,
+			LatestAge: age,
+			Status:    status,
+		}
+	}
+}
+
+// createCheckpointCmd creates a new checkpoint for the session
+func (m Model) createCheckpointCmd() tea.Cmd {
+	session := m.session
+	return func() tea.Msg {
+		capturer := checkpoint.NewCapturer()
+		cp, err := capturer.Create(session, "dashboard")
+		if err != nil {
+			return CheckpointCreatedMsg{Err: err}
+		}
+		return CheckpointCreatedMsg{Checkpoint: cp}
 	}
 }
 
@@ -1267,6 +1353,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastCassContextFetch = now
 				cmds = append(cmds, m.fetchCASSContextCmd())
 			}
+			if now.Sub(m.lastCheckpointFetch) >= m.checkpointRefreshInterval && !m.fetchingCheckpoint {
+				m.fetchingCheckpoint = true
+				m.lastCheckpointFetch = now
+				cmds = append(cmds, m.fetchCheckpointStatus())
+			}
 		}
 
 		// Poll spawn state on every tick for real-time countdown display
@@ -1575,6 +1666,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agentMailLockInfo = msg.LockInfo
 		return m, nil
 
+	case CheckpointUpdateMsg:
+		m.fetchingCheckpoint = false
+		m.lastCheckpointFetch = time.Now()
+		if msg.Err != nil {
+			m.checkpointError = msg.Err
+		} else {
+			m.checkpointCount = msg.Count
+			m.latestCheckpoint = msg.Latest
+			m.checkpointStatus = msg.Status
+			m.checkpointError = nil
+		}
+		return m, nil
+
+	case CheckpointCreatedMsg:
+		if msg.Err != nil {
+			m.checkpointError = msg.Err
+		} else {
+			// Refresh checkpoint status after creation
+			m.latestCheckpoint = msg.Checkpoint
+			m.checkpointCount++
+			m.checkpointStatus = "recent"
+			m.checkpointError = nil
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		// Handle help overlay: Esc or ? closes it
 		if m.showHelp {
@@ -1662,6 +1778,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, dashKeys.MailRefresh):
 			// Refresh Agent Mail data
 			return m, m.fetchAgentMailStatus()
+
+		case key.Matches(msg, dashKeys.Checkpoint):
+			// Create a new checkpoint for the session
+			return m, m.createCheckpointCmd()
 
 		case key.Matches(msg, dashKeys.Zoom):
 			if len(m.panes) > 0 && m.cursor < len(m.panes) {
@@ -1780,20 +1900,22 @@ func (m *Model) updateTickerData() {
 
 	// Build ticker data from dashboard state
 	data := panels.TickerData{
-		TotalAgents:     len(m.panes),
-		ActiveAgents:    activeAgents,
-		ClaudeCount:     m.claudeCount,
-		CodexCount:      m.codexCount,
-		GeminiCount:     m.geminiCount,
-		CriticalAlerts:  critAlerts,
-		WarningAlerts:   warnAlerts,
-		InfoAlerts:      infoAlerts,
-		ReadyBeads:      m.beadsSummary.Ready,
-		InProgressBeads: m.beadsSummary.InProgress,
-		BlockedBeads:    m.beadsSummary.Blocked,
-		UnreadMessages:  m.agentMailUnread,
-		ActiveLocks:     m.agentMailLocks,
-		MailConnected:   m.agentMailConnected,
+		TotalAgents:      len(m.panes),
+		ActiveAgents:     activeAgents,
+		ClaudeCount:      m.claudeCount,
+		CodexCount:       m.codexCount,
+		GeminiCount:      m.geminiCount,
+		CriticalAlerts:   critAlerts,
+		WarningAlerts:    warnAlerts,
+		InfoAlerts:       infoAlerts,
+		ReadyBeads:       m.beadsSummary.Ready,
+		InProgressBeads:  m.beadsSummary.InProgress,
+		BlockedBeads:     m.beadsSummary.Blocked,
+		UnreadMessages:   m.agentMailUnread,
+		ActiveLocks:      m.agentMailLocks,
+		MailConnected:    m.agentMailConnected,
+		CheckpointCount:  m.checkpointCount,
+		CheckpointStatus: m.checkpointStatus,
 	}
 
 	m.tickerPanel.SetData(data)
@@ -2017,6 +2139,12 @@ func (m Model) renderStatsBar() string {
 		parts = append(parts, mailBadge)
 	}
 
+	// Checkpoint status badge
+	cpBadge := m.renderCheckpointBadge()
+	if cpBadge != "" {
+		parts = append(parts, cpBadge)
+	}
+
 	return strings.Join(parts, "  ")
 }
 
@@ -2142,6 +2270,49 @@ func (m Model) renderAgentMailBadge() string {
 		fgColor = t.Base
 		icon = "📭"
 		label = "offline"
+	}
+
+	return lipgloss.NewStyle().
+		Background(bgColor).
+		Foreground(fgColor).
+		Bold(true).
+		Padding(0, 1).
+		Render(fmt.Sprintf("%s %s", icon, label))
+}
+
+// renderCheckpointBadge renders the checkpoint status badge
+func (m Model) renderCheckpointBadge() string {
+	t := m.theme
+
+	if m.checkpointStatus == "" || m.checkpointStatus == "none" {
+		if m.checkpointCount == 0 {
+			return "" // Don't show badge if no checkpoints exist
+		}
+	}
+
+	var bgColor, fgColor lipgloss.Color
+	var icon, label string
+
+	switch m.checkpointStatus {
+	case "recent":
+		bgColor = t.Green
+		fgColor = t.Base
+		icon = "💾"
+		label = fmt.Sprintf("%d ckpt", m.checkpointCount)
+	case "stale":
+		bgColor = t.Yellow
+		fgColor = t.Base
+		icon = "💾"
+		label = fmt.Sprintf("%d stale", m.checkpointCount)
+	case "old":
+		bgColor = t.Surface1
+		fgColor = t.Overlay
+		icon = "💾"
+		label = fmt.Sprintf("%d old", m.checkpointCount)
+	case "none":
+		return "" // No checkpoints
+	default:
+		return ""
 	}
 
 	return lipgloss.NewStyle().

@@ -33,6 +33,10 @@ type TickerData struct {
 	UnreadMessages int
 	ActiveLocks    int
 	MailConnected  bool
+
+	// Checkpoints
+	CheckpointCount  int
+	CheckpointStatus string // "recent", "stale", "old", "none"
 }
 
 // TickerPanel displays a scrolling status bar at the bottom of the dashboard
@@ -147,6 +151,10 @@ func (m *TickerPanel) buildPlainSegments() []string {
 	mailSegment := m.buildPlainMailSegment()
 	segments = append(segments, mailSegment)
 
+	// Checkpoint segment (plain)
+	cpSegment := m.buildPlainCheckpointSegment()
+	segments = append(segments, cpSegment)
+
 	return segments
 }
 
@@ -235,6 +243,24 @@ func (m *TickerPanel) buildPlainMailSegment() string {
 	return "Mail: " + strings.Join(mailParts, " ")
 }
 
+// buildPlainCheckpointSegment creates plain text checkpoint segment
+func (m *TickerPanel) buildPlainCheckpointSegment() string {
+	if m.data.CheckpointCount == 0 {
+		return "Ckpt: none"
+	}
+
+	switch m.data.CheckpointStatus {
+	case "recent":
+		return fmt.Sprintf("Ckpt: %d recent", m.data.CheckpointCount)
+	case "stale":
+		return fmt.Sprintf("Ckpt: %d stale", m.data.CheckpointCount)
+	case "old":
+		return fmt.Sprintf("Ckpt: %d old", m.data.CheckpointCount)
+	default:
+		return fmt.Sprintf("Ckpt: %d", m.data.CheckpointCount)
+	}
+}
+
 // scrollPlainText handles the horizontal scrolling animation on plain text
 func (m *TickerPanel) scrollPlainText(text string) string {
 	textRunes := []rune(text)
@@ -295,6 +321,10 @@ func (m *TickerPanel) styleVisibleText(text string) string {
 	// Style "Mail:" label
 	mailLabel := lipgloss.NewStyle().Foreground(t.Lavender).Bold(true).Render("Mail:")
 	result = strings.Replace(result, "Mail:", mailLabel, 1)
+
+	// Style "Ckpt:" label
+	ckptLabel := lipgloss.NewStyle().Foreground(t.Teal).Bold(true).Render("Ckpt:")
+	result = strings.Replace(result, "Ckpt:", ckptLabel, 1)
 
 	// Style separators
 	sepStyled := lipgloss.NewStyle().Foreground(t.Surface2).Render(" | ")
