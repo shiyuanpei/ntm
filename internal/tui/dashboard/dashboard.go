@@ -335,6 +335,12 @@ type Model struct {
 	fetchingCheckpoint  bool
 	checkpointError     error
 
+	// UBS bug scanner status
+	bugsCritical int  // Critical bugs from last scan
+	bugsWarning  int  // Warning bugs from last scan
+	bugsInfo     int  // Info bugs from last scan
+	bugsScanned  bool // Whether a scan has been run
+
 	// Error tracking for data sources (displayed as badges)
 	beadsError       error
 	alertsError      error
@@ -1923,6 +1929,10 @@ func (m *Model) updateTickerData() {
 		MailConnected:    m.agentMailConnected,
 		CheckpointCount:  m.checkpointCount,
 		CheckpointStatus: m.checkpointStatus,
+		BugsCritical:     m.bugsCritical,
+		BugsWarning:      m.bugsWarning,
+		BugsInfo:         m.bugsInfo,
+		BugsScanned:      m.bugsScanned,
 	}
 
 	m.tickerPanel.SetData(data)

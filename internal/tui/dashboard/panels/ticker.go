@@ -37,6 +37,12 @@ type TickerData struct {
 	// Checkpoints
 	CheckpointCount  int
 	CheckpointStatus string // "recent", "stale", "old", "none"
+
+	// UBS Bug Scanner
+	BugsCritical int
+	BugsWarning  int
+	BugsInfo     int
+	BugsScanned  bool // Whether a scan has been run
 }
 
 // TickerPanel displays a scrolling status bar at the bottom of the dashboard
@@ -155,6 +161,10 @@ func (m *TickerPanel) buildPlainSegments() []string {
 	cpSegment := m.buildPlainCheckpointSegment()
 	segments = append(segments, cpSegment)
 
+	// Bugs segment (plain)
+	bugsSegment := m.buildPlainBugsSegment()
+	segments = append(segments, bugsSegment)
+
 	return segments
 }
 
@@ -261,6 +271,28 @@ func (m *TickerPanel) buildPlainCheckpointSegment() string {
 	}
 }
 
+// buildPlainBugsSegment creates plain text UBS bugs segment
+func (m *TickerPanel) buildPlainBugsSegment() string {
+	if !m.data.BugsScanned {
+		return "Bugs: --"
+	}
+
+	total := m.data.BugsCritical + m.data.BugsWarning
+	if total == 0 {
+		return "Bugs: OK"
+	}
+
+	var parts []string
+	if m.data.BugsCritical > 0 {
+		parts = append(parts, fmt.Sprintf("%d!", m.data.BugsCritical))
+	}
+	if m.data.BugsWarning > 0 {
+		parts = append(parts, fmt.Sprintf("%dw", m.data.BugsWarning))
+	}
+
+	return "Bugs: " + strings.Join(parts, "/")
+}
+
 // scrollPlainText handles the horizontal scrolling animation on plain text
 func (m *TickerPanel) scrollPlainText(text string) string {
 	textRunes := []rune(text)
@@ -325,6 +357,10 @@ func (m *TickerPanel) styleVisibleText(text string) string {
 	// Style "Ckpt:" label
 	ckptLabel := lipgloss.NewStyle().Foreground(t.Teal).Bold(true).Render("Ckpt:")
 	result = strings.Replace(result, "Ckpt:", ckptLabel, 1)
+
+	// Style "Bugs:" label
+	bugsLabel := lipgloss.NewStyle().Foreground(t.Peach).Bold(true).Render("Bugs:")
+	result = strings.Replace(result, "Bugs:", bugsLabel, 1)
 
 	// Style separators
 	sepStyled := lipgloss.NewStyle().Foreground(t.Surface2).Render(" | ")

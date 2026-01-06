@@ -1247,6 +1247,7 @@ func init() {
 		newDepsCmd(),
 		newKillCmd(),
 		newScanCmd(),
+		newBugsCmd(),
 		newCassCmd(),
 		newHooksCmd(),
 		newHealthCmd(),
