@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -65,7 +66,7 @@ func TestGenerateConflictID(t *testing.T) {
 	if id1 == "" {
 		t.Error("expected non-empty conflict ID")
 	}
-	if !contains(id1, "conflict-") {
+	if !strings.Contains(id1, "conflict-") {
 		t.Error("expected ID to contain 'conflict-' prefix")
 	}
 	// IDs should be different due to timestamp
@@ -124,9 +125,4 @@ func TestConflictStruct(t *testing.T) {
 	if conflict.Resolution != "" {
 		t.Error("expected empty resolution for unresolved conflict")
 	}
-}
-
-// Helper function
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s[:len(substr)] == substr || contains(s[1:], substr))
 }

@@ -98,26 +98,26 @@ func (m *AgentMonitor) GetAllAgentStatuses() (map[string]AgentStatusResult, erro
 
 // CheckAgentHealth returns a health summary for an agent.
 func (m *AgentMonitor) CheckAgentHealth(paneID, agentType string) HealthCheck {
-	status := m.GetAgentStatus(paneID, agentType)
+	agentStatus := m.GetAgentStatus(paneID, agentType)
 
 	check := HealthCheck{
 		PaneID:    paneID,
 		AgentType: agentType,
-		Healthy:   status.Healthy,
+		Healthy:   agentStatus.Healthy,
 		Timestamp: time.Now(),
 	}
 
 	// Determine health issues
-	if !status.Healthy {
-		check.Issues = append(check.Issues, status.ErrorMessage)
+	if !agentStatus.Healthy {
+		check.Issues = append(check.Issues, agentStatus.ErrorMessage)
 	}
-	if status.Status == robot.StateError {
+	if agentStatus.Status == robot.StateError {
 		check.Issues = append(check.Issues, "agent in error state")
 	}
-	if status.Status == robot.StateStalled {
+	if agentStatus.Status == robot.StateStalled {
 		check.Issues = append(check.Issues, "agent appears stalled")
 	}
-	if status.ContextUsage > 85 {
+	if agentStatus.ContextUsage > 85 {
 		check.Issues = append(check.Issues, "context usage high (>85%)")
 	}
 

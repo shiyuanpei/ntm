@@ -175,8 +175,8 @@ func (c *SessionCoordinator) GetAgents() map[string]*AgentState {
 
 	result := make(map[string]*AgentState, len(c.agents))
 	for k, v := range c.agents {
-		copy := *v
-		result[k] = &copy
+		agentCopy := *v
+		result[k] = &agentCopy
 	}
 	return result
 }
@@ -187,8 +187,8 @@ func (c *SessionCoordinator) GetAgentByPaneID(paneID string) *AgentState {
 	defer c.mu.RUnlock()
 
 	if agent, ok := c.agents[paneID]; ok {
-		copy := *agent
-		return &copy
+		agentCopy := *agent
+		return &agentCopy
 	}
 	return nil
 }
@@ -202,8 +202,8 @@ func (c *SessionCoordinator) GetIdleAgents() []*AgentState {
 	for _, agent := range c.agents {
 		if agent.Status == robot.StateWaiting && agent.Healthy {
 			if time.Since(agent.LastActivity).Seconds() >= c.config.IdleThreshold {
-				copy := *agent
-				idle = append(idle, &copy)
+				agentCopy := *agent
+				idle = append(idle, &agentCopy)
 			}
 		}
 	}

@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -175,26 +176,16 @@ func TestFormatAssignmentMessage(t *testing.T) {
 	if body == "" {
 		t.Error("expected non-empty message body")
 	}
-	if !containsString(body, "# Work Assignment") {
+	if !strings.Contains(body, "# Work Assignment") {
 		t.Error("expected markdown header in message")
 	}
-	if !containsString(body, "ntm-1234") {
+	if !strings.Contains(body, "ntm-1234") {
 		t.Error("expected bead ID in message")
 	}
-	if !containsString(body, "High impact") {
+	if !strings.Contains(body, "High impact") {
 		t.Error("expected reasons in message")
 	}
-	if !containsString(body, "bd show") {
+	if !strings.Contains(body, "bd show") {
 		t.Error("expected bd show instruction in message")
 	}
-}
-
-// Helper function for string contains
-func containsString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

@@ -35,11 +35,11 @@ type AgentDigestStatus struct {
 
 // WorkDigestSummary summarizes work status.
 type WorkDigestSummary struct {
-	PendingTasks   int      `json:"pending_tasks"`
-	InProgressTask int      `json:"in_progress_tasks"`
-	CompletedToday int      `json:"completed_today"`
-	BlockedTasks   int      `json:"blocked_tasks"`
-	TopReady       []string `json:"top_ready,omitempty"`
+	PendingTasks    int      `json:"pending_tasks"`
+	InProgressTasks int      `json:"in_progress_tasks"`
+	CompletedToday  int      `json:"completed_today"`
+	BlockedTasks    int      `json:"blocked_tasks"`
+	TopReady        []string `json:"top_ready,omitempty"`
 }
 
 // GenerateDigest creates a summary of the current session state.
