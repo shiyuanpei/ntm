@@ -59,6 +59,13 @@ type assetInfo struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
+type assetMatch struct {
+	Asset      *GitHubAsset
+	Strategy   string
+	Confidence float64
+	Reason     string
+}
+
 // upgradeError provides structured diagnostic information when asset lookup fails
 type upgradeError struct {
 	Platform        string      `json:"platform"`
@@ -189,6 +196,20 @@ func parseAssetInfo(name, targetOS, targetArch, targetVersion string) assetInfo 
 		}
 	}
 
+	if info.OS == "" && strings.HasPrefix(baseName, "ntm-") {
+		dashParts := strings.Split(baseName, "-")
+		if len(dashParts) == 4 {
+			// ntm-VERSION-OS-ARCH
+			info.Version = dashParts[1]
+			info.OS = dashParts[2]
+			info.Arch = dashParts[3]
+		} else if len(dashParts) == 3 {
+			// ntm-OS-ARCH
+			info.OS = dashParts[1]
+			info.Arch = dashParts[2]
+		}
+	}
+
 	// Determine match quality
 	if info.OS == targetOS {
 		if info.Arch == targetArch {
@@ -210,6 +231,169 @@ func parseAssetInfo(name, targetOS, targetArch, targetVersion string) assetInfo 
 	}
 
 	return info
+}
+
+func trimAssetExt(name string) string {
+	for _, suffix := range []string{".tar.gz", ".zip", ".exe"} {
+		if strings.HasSuffix(name, suffix) {
+			return strings.TrimSuffix(name, suffix)
+		}
+	}
+	return name
+}
+
+func archCandidates(targetOS, targetArch string) []string {
+	switch targetOS {
+	case "darwin":
+		switch targetArch {
+		case "arm64":
+			return []string{"all", "arm64", "amd64"}
+		case "amd64":
+			return []string{"all", "amd64"}
+		default:
+			return []string{targetArch}
+		}
+	default:
+		if targetArch == "arm" {
+			return []string{"armv7", "arm"}
+		}
+		return []string{targetArch}
+	}
+}
+
+func legacyDashNames(targetOS, targetArch, version string) []string {
+	var names []string
+	for _, arch := range archCandidates(targetOS, targetArch) {
+		if version != "" {
+			names = append(names, fmt.Sprintf("ntm-%s-%s-%s", version, targetOS, arch))
+		}
+		names = append(names, fmt.Sprintf("ntm-%s-%s", targetOS, arch))
+	}
+	return names
+}
+
+func findUpgradeAsset(assets []GitHubAsset, targetOS, targetArch, version string, strict bool) (*assetMatch, []string) {
+	archiveAssetName := getArchiveAssetName(version)
+	binaryAssetName := getAssetName()
+
+	tried := []string{archiveAssetName, binaryAssetName}
+
+	if match := matchExactArchive(assets, archiveAssetName); match != nil {
+		return match, tried
+	}
+
+	if match := matchExactBinary(assets, binaryAssetName); match != nil {
+		return match, tried
+	}
+
+	if strict {
+		return nil, tried
+	}
+
+	tried = append(tried, binaryAssetName+"*", fmt.Sprintf("ntm_%s_%s*", version, targetOS))
+	if match := matchPrefix(assets, binaryAssetName, version, targetOS); match != nil {
+		return match, tried
+	}
+
+	tried = append(tried, fmt.Sprintf("any %s asset with compatible arch", targetOS))
+	if match := matchSameOS(assets, targetOS, targetArch); match != nil {
+		return match, tried
+	}
+
+	legacyNames := legacyDashNames(targetOS, targetArch, version)
+	tried = append(tried, legacyNames...)
+	if match := matchLegacyDash(assets, legacyNames); match != nil {
+		return match, tried
+	}
+
+	return nil, tried
+}
+
+func matchExactArchive(assets []GitHubAsset, archiveName string) *assetMatch {
+	for i := range assets {
+		if assets[i].Name == archiveName {
+			return &assetMatch{
+				Asset:      &assets[i],
+				Strategy:   "exact_archive",
+				Confidence: 1.0,
+				Reason:     "exact archive match",
+			}
+		}
+	}
+	return nil
+}
+
+func matchExactBinary(assets []GitHubAsset, binaryName string) *assetMatch {
+	for i := range assets {
+		if trimAssetExt(assets[i].Name) == binaryName {
+			return &assetMatch{
+				Asset:      &assets[i],
+				Strategy:   "exact_binary",
+				Confidence: 0.9,
+				Reason:     "exact binary match",
+			}
+		}
+	}
+	return nil
+}
+
+func matchPrefix(assets []GitHubAsset, binaryName, version, targetOS string) *assetMatch {
+	versionPrefix := fmt.Sprintf("ntm_%s_%s", version, targetOS)
+	for i := range assets {
+		baseName := trimAssetExt(assets[i].Name)
+		if strings.HasPrefix(baseName, binaryName) || strings.HasPrefix(baseName, versionPrefix) {
+			return &assetMatch{
+				Asset:      &assets[i],
+				Strategy:   "prefix_match",
+				Confidence: 0.7,
+				Reason:     "prefix match",
+			}
+		}
+	}
+	return nil
+}
+
+func matchSameOS(assets []GitHubAsset, targetOS, targetArch string) *assetMatch {
+	candidates := archCandidates(targetOS, targetArch)
+	for _, arch := range candidates {
+		for i := range assets {
+			info := parseAssetInfo(assets[i].Name, targetOS, targetArch, "")
+			if info.OS == targetOS && info.Arch == arch {
+				reason := fmt.Sprintf("same OS, compatible arch (%s)", arch)
+				if targetOS == "darwin" && targetArch == "arm64" && arch == "amd64" {
+					reason = "same OS, amd64 via Rosetta 2"
+				} else if targetOS == "darwin" && arch == "all" {
+					reason = "same OS, universal binary"
+				}
+				return &assetMatch{
+					Asset:      &assets[i],
+					Strategy:   "fuzzy_same_os",
+					Confidence: 0.5,
+					Reason:     reason,
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func matchLegacyDash(assets []GitHubAsset, names []string) *assetMatch {
+	nameSet := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		nameSet[name] = struct{}{}
+	}
+	for i := range assets {
+		baseName := trimAssetExt(assets[i].Name)
+		if _, ok := nameSet[baseName]; ok {
+			return &assetMatch{
+				Asset:      &assets[i],
+				Strategy:   "legacy_dash",
+				Confidence: 0.3,
+				Reason:     "legacy dash naming",
+			}
+		}
+	}
+	return nil
 }
 
 // newUpgradeError creates a structured upgrade error with diagnostic information
@@ -249,6 +433,8 @@ func newUpgradeCmd() *cobra.Command {
 	var checkOnly bool
 	var force bool
 	var yes bool
+	var strict bool
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "upgrade",
@@ -259,20 +445,23 @@ Examples:
   ntm upgrade           # Check and upgrade (with confirmation)
   ntm upgrade --check   # Only check for updates, don't install
   ntm upgrade --yes     # Auto-confirm, skip confirmation prompt
-  ntm upgrade --force   # Force reinstall even if already on latest`,
+  ntm upgrade --force   # Force reinstall even if already on latest
+  ntm upgrade --strict  # Only allow exact asset matches (CI/testing)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runUpgrade(checkOnly, force, yes)
+			return runUpgrade(checkOnly, force, yes, strict, verbose)
 		},
 	}
 
 	cmd.Flags().BoolVar(&checkOnly, "check", false, "Only check for updates, don't install")
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Force reinstall even if already on latest version")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Auto-confirm upgrade without prompting")
+	cmd.Flags().BoolVar(&strict, "strict", false, "Require exact asset name matches (disable fallback)")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show detailed asset matching info")
 
 	return cmd
 }
 
-func runUpgrade(checkOnly, force, yes bool) error {
+func runUpgrade(checkOnly, force, yes, strict, verbose bool) error {
 	// Styles for output
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#89b4fa"))
 	successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1"))
@@ -344,39 +533,8 @@ func runUpgrade(checkOnly, force, yes bool) error {
 	archiveAssetName := getArchiveAssetName(latestVersion)
 	binaryAssetName := getAssetName() // e.g., ntm_darwin_all
 
-	var asset *GitHubAsset
-	for i := range release.Assets {
-		// Exact match for versioned archive (preferred)
-		if release.Assets[i].Name == archiveAssetName {
-			asset = &release.Assets[i]
-			break
-		}
-	}
-
-	if asset == nil {
-		// Try raw binary name (without version)
-		for i := range release.Assets {
-			if release.Assets[i].Name == binaryAssetName {
-				asset = &release.Assets[i]
-				break
-			}
-		}
-	}
-
-	if asset == nil {
-		// Try prefix matching as fallback (e.g., for arm variants like armv7)
-		for i := range release.Assets {
-			name := release.Assets[i].Name
-			if strings.HasPrefix(name, binaryAssetName) ||
-				strings.HasPrefix(name, fmt.Sprintf("ntm_%s_%s", latestVersion, runtime.GOOS)) {
-				asset = &release.Assets[i]
-				break
-			}
-		}
-	}
-
-	if asset == nil {
-		triedNames := []string{archiveAssetName, binaryAssetName}
+	match, triedNames := findUpgradeAsset(release.Assets, runtime.GOOS, runtime.GOARCH, latestVersion, strict)
+	if match == nil {
 		return newUpgradeError(
 			runtime.GOOS,
 			runtime.GOARCH,
@@ -385,6 +543,27 @@ func runUpgrade(checkOnly, force, yes bool) error {
 			release.Assets,
 			release.HTMLURL,
 		)
+	}
+	asset := match.Asset
+
+	if match.Strategy != "exact_archive" {
+		fmt.Printf("  %s Note: using fallback asset discovery (%s)\n",
+			warnStyle.Render("⚠"),
+			match.Strategy)
+		fmt.Printf("    Expected: %s\n", archiveAssetName)
+		fmt.Printf("    Found:    %s\n", asset.Name)
+		if match.Reason != "" {
+			fmt.Printf("    Reason:   %s\n", match.Reason)
+		}
+		if verbose && len(triedNames) > 0 {
+			fmt.Println(dimStyle.Render("    Tried:"))
+			for _, name := range triedNames {
+				fmt.Printf("      - %s\n", name)
+			}
+		}
+		fmt.Println()
+	} else if verbose {
+		fmt.Println(dimStyle.Render("  Asset match: exact archive"))
 	}
 
 	fmt.Printf("  Download: %s (%s)\n", asset.Name, formatSize(asset.Size))
