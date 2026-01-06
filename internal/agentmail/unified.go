@@ -144,24 +144,42 @@ func (m *UnifiedMessenger) Read(ctx context.Context, id string) (*UnifiedMessage
 				return nil, fmt.Errorf("fetch inbox: %w", err)
 			}
 
-			// Find the message by ID
-			for _, msg := range inbox {
-				if msg.ID == msgID {
-					// Mark as read
-					_ = m.amClient.MarkMessageRead(ctx, m.projectKey, m.agentName, msgID)
-					return &UnifiedMessage{
-						ID:        id,
-						Channel:   "agentmail",
-						From:      msg.From,
-						Subject:   msg.Subject,
-						Body:      msg.BodyMD,
-						Timestamp: msg.CreatedTS,
-					}, nil
+			// Helper to find message in inbox
+			findMsg := func(list []InboxMessage) *InboxMessage {
+				for _, msg := range list {
+					if msg.ID == msgID {
+						return &msg
+					}
 				}
+				return nil
+			}
+
+			found := findMsg(inbox)
+
+			// If not found, try fetching deeper history (up to 1000)
+			if found == nil {
+				opts.Limit = 1000
+				inbox, err = m.amClient.FetchInbox(ctx, opts)
+				if err == nil {
+					found = findMsg(inbox)
+				}
+			}
+
+			if found != nil {
+				// Mark as read
+				_ = m.amClient.MarkMessageRead(ctx, m.projectKey, m.agentName, msgID)
+				return &UnifiedMessage{
+					ID:        id,
+					Channel:   "agentmail",
+					From:      found.From,
+					Subject:   found.Subject,
+					Body:      found.BodyMD,
+					Timestamp: found.CreatedTS,
+				}, nil
 			}
 			return nil, fmt.Errorf("message not found: %s", id)
 		}
-		return nil, fmt.Errorf("agent mail not available")
+		return nil, fmt.Errorf("agent mail not available or not configured")
 
 	case "bd":
 		if m.bdClient != nil {

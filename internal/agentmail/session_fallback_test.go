@@ -103,7 +103,7 @@ func TestLoadSessionAgent_Fallback(t *testing.T) {
 
 	// 3. Test fallback to searching subdirectories when project key is unknown/empty
 	// (Note: LoadSessionAgent calls sessionAgentPath(name, "") which returns legacyPath.
-	// If legacyPath doesn't exist, it searches subdirectories.)
+	// If legacyPath doesn't exist, it used to search subdirectories but that unsafe behavior was removed.)
 	t.Run("Fallback search subdirectories", func(t *testing.T) {
 		reset()
 		// Create a random slug dir
@@ -117,16 +117,13 @@ func TestLoadSessionAgent_Fallback(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Pass empty project key to trigger legacy lookup -> fail -> search
+		// Pass empty project key to trigger legacy lookup -> fail -> STOP (no search)
 		loaded, err := LoadSessionAgent(sessionName, "")
 		if err != nil {
 			t.Fatalf("Failed to load: %v", err)
 		}
-		if loaded == nil {
-			t.Fatal("Expected to find agent in subdirectory, got nil")
-		}
-		if loaded.AgentName != info.AgentName {
-			t.Errorf("Expected agent %s, got %s", info.AgentName, loaded.AgentName)
+		if loaded != nil {
+			t.Fatal("Expected nil (strict loading), got agent")
 		}
 	})
 }

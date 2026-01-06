@@ -49,16 +49,13 @@ func TestLoadSessionAgentAmbiguity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSessionAgent(empty) failed: %v", err)
 	}
-	if loaded == nil {
-		t.Fatal("Expected loaded info to be non-nil")
+	// Strict loading now returns nil if legacy path not found and projectKey is empty.
+	// It does NOT scan subdirectories anymore.
+	if loaded != nil {
+		t.Fatal("Expected nil (strict loading), got agent")
 	}
 
-	// It should find one of them. With filepath.Walk/ReadDir, it's usually alphabetical
-	// based on the slug.
-	// Slug for /data/projects/project-a -> project_a
-	// Slug for /data/projects/project-b -> project_b
-	// So likely 'agent-a' is returned.
-	t.Logf("Loaded agent: %s for project: %s", loaded.AgentName, loaded.ProjectKey)
+	t.Log("Strict loading prevented ambiguous load")
 
 	// Now try to load specifically for Project B using the correct key
 	loadedB, err := LoadSessionAgent(sessionName, projectB)
