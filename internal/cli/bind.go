@@ -13,6 +13,9 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/tui/theme"
 )
 
+// validKeyRegex validates tmux key bindings (alphanumeric, -, ^ for Ctrl)
+var validKeyRegex = regexp.MustCompile(`^[a-zA-Z0-9\-\^]+$`)
+
 func newBindCmd() *cobra.Command {
 	var (
 		key      string
@@ -36,8 +39,7 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Validate key to prevent injection
 			// Allowed: alphanumeric, -, ^ (for Ctrl)
-			validKey := regexp.MustCompile(`^[a-zA-Z0-9\-\^]+$`)
-			if !validKey.MatchString(key) {
+			if !validKeyRegex.MatchString(key) {
 				return fmt.Errorf("invalid key format: %q (allowed: a-z, 0-9, -, ^)", key)
 			}
 

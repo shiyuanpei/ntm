@@ -254,10 +254,16 @@ func (w *Watcher) Add(path string) error {
 	}
 
 	if w.pollMode {
-		// Merge snapshot
+		// Merge snapshot and track watched directory paths
 		for p, meta := range pollSnapshot {
 			w.snapshots[p] = meta
+			// In recursive mode, track all directories in watchedPaths
+			// to match fsnotify mode behavior
+			if w.recursive && meta.IsDir {
+				w.watchedPaths[p] = true
+			}
 		}
+		// Always add the root path
 		w.watchedPaths[absPath] = true
 		w.mu.Unlock()
 		return nil

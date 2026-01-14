@@ -347,7 +347,10 @@ func TestCheckHealthDetectsPaneMissing(t *testing.T) {
 	})
 
 	cfg := config.Default()
+	cfg.Resilience.AutoRestart = true
 	cfg.Resilience.MaxRestarts = 3
+	cfg.Resilience.RestartDelaySeconds = 0
+
 	m := NewMonitor("test-session", "/tmp/project", cfg, true)
 	m.RegisterAgent("pane-1", 1, "cc", "opus", "claude")
 
@@ -604,6 +607,8 @@ func TestRestartAgentHandlesBuildError(t *testing.T) {
 	})
 
 	cfg := config.Default()
+	cfg.Resilience.RestartDelaySeconds = 0
+
 	m := NewMonitor("test-session", "/tmp/project", cfg, true)
 	m.RegisterAgent("pane-1", 1, "cc", "opus", "claude")
 
@@ -633,6 +638,8 @@ func TestRestartAgentHandlesSendKeysError(t *testing.T) {
 	})
 
 	cfg := config.Default()
+	cfg.Resilience.RestartDelaySeconds = 0
+
 	m := NewMonitor("test-session", "/tmp/project", cfg, true)
 	m.RegisterAgent("pane-1", 1, "cc", "opus", "claude")
 

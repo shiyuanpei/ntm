@@ -7,6 +7,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Pre-compiled regex patterns for variable substitution
+var (
+	// simpleVarRe matches simple {{variable}} placeholders
+	simpleVarRe = regexp.MustCompile(`\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}`)
+	// conditionalOpenRe matches conditional opening tags {{#variable}}
+	conditionalOpenRe = regexp.MustCompile(`\{\{#([a-zA-Z_][a-zA-Z0-9_]*)\}\}`)
+)
+
 // Parse parses a template from markdown content with YAML frontmatter.
 // Format:
 //
@@ -97,9 +105,7 @@ func (t *Template) Execute(ctx ExecutionContext) (string, error) {
 // Note: The regex only matches simple variables like {{foo}}, not conditional
 // markers like {{#var}} or {{/var}} (which don't start with [a-zA-Z_]).
 func substituteVariables(body string, vars map[string]string) string {
-	re := regexp.MustCompile(`\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}`)
-
-	return re.ReplaceAllStringFunc(body, func(match string) string {
+	return simpleVarRe.ReplaceAllStringFunc(body, func(match string) string {
 		// Extract variable name
 		name := match[2 : len(match)-2]
 
@@ -114,12 +120,9 @@ func substituteVariables(body string, vars map[string]string) string {
 // If the variable is set and non-empty, the block content is included.
 // Otherwise, the entire block is removed.
 func expandConditionals(body string, vars map[string]string) string {
-	// Find opening tags
-	openRe := regexp.MustCompile(`\{\{#([a-zA-Z_][a-zA-Z0-9_]*)\}\}`)
-
 	// Process until no more matches (handles nested conditionals)
 	for {
-		matches := openRe.FindStringSubmatchIndex(body)
+		matches := conditionalOpenRe.FindStringSubmatchIndex(body)
 		if matches == nil {
 			break // No more opening tags
 		}
@@ -163,8 +166,7 @@ func ExtractVariables(body string) []string {
 	var vars []string
 
 	// Match simple variables
-	simpleRe := regexp.MustCompile(`\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}`)
-	for _, match := range simpleRe.FindAllStringSubmatch(body, -1) {
+	for _, match := range simpleVarRe.FindAllStringSubmatch(body, -1) {
 		name := match[1]
 		if !seen[name] {
 			seen[name] = true
@@ -173,8 +175,7 @@ func ExtractVariables(body string) []string {
 	}
 
 	// Match conditional variables
-	condRe := regexp.MustCompile(`\{\{#([a-zA-Z_][a-zA-Z0-9_]*)\}\}`)
-	for _, match := range condRe.FindAllStringSubmatch(body, -1) {
+	for _, match := range conditionalOpenRe.FindAllStringSubmatch(body, -1) {
 		name := match[1]
 		if !seen[name] {
 			seen[name] = true

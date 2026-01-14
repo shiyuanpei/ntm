@@ -10,7 +10,6 @@ import (
 	"log"
 	"math"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -1678,8 +1677,7 @@ func (vc *VariableContext) SetVariable(name string, value interface{}) {
 
 // EvaluateString evaluates all variable references in a string
 func (vc *VariableContext) EvaluateString(s string) string {
-	varPattern := regexp.MustCompile(`\$\{([^}]+)\}`)
-
+	// Uses package-level varPattern from variables.go
 	return varPattern.ReplaceAllStringFunc(s, func(match string) string {
 		ref := match[2 : len(match)-1]
 		if val, ok := vc.GetVariable(ref); ok {

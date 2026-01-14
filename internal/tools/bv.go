@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// versionRegex matches semantic version strings like "0.31.0"
+var versionRegex = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
+
 // BVAdapter provides integration with the beads_viewer (bv) tool
 type BVAdapter struct {
 	*BaseAdapter
@@ -175,8 +178,7 @@ func (a *BVAdapter) runRobotCommand(ctx context.Context, dir string, args ...str
 // parseVersion extracts version from --version output
 func parseVersion(output string) (Version, error) {
 	// Match patterns like "bv 0.31.0" or "0.31.0"
-	re := regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
-	matches := re.FindStringSubmatch(output)
+	matches := versionRegex.FindStringSubmatch(output)
 	if len(matches) < 4 {
 		return Version{Raw: strings.TrimSpace(output)}, nil
 	}

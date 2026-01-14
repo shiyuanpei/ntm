@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -396,10 +395,9 @@ func detectCycles(steps []Step) [][]string {
 
 // validateVariableRefs checks that variable references are valid
 func validateVariableRefs(w *Workflow, result *ValidationResult) {
-	varRefPattern := regexp.MustCompile(`\$\{([^}]+)\}`)
-
+	// Uses package-level varPattern from variables.go
 	checkString := func(s, field string) {
-		matches := varRefPattern.FindAllStringSubmatch(s, -1)
+		matches := varPattern.FindAllStringSubmatch(s, -1)
 		for _, match := range matches {
 			ref := match[1]
 			parts := strings.Split(ref, ".")

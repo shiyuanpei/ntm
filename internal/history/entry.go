@@ -4,8 +4,12 @@ package history
 import (
 	"crypto/rand"
 	"fmt"
+	"sync/atomic"
 	"time"
 )
+
+// idCounter provides uniqueness fallback if crypto/rand fails
+var idCounter uint64
 
 // Source represents where a prompt originated
 type Source string
@@ -56,10 +60,15 @@ func (e *HistoryEntry) SetError(err error) {
 }
 
 // newID generates a unique, sortable ID.
-// Format: timestamp (ms) + random suffix for uniqueness
+// Format: timestamp (ms) + random suffix for uniqueness.
+// Falls back to an atomic counter if crypto/rand fails.
 func newID() string {
 	ms := time.Now().UnixMilli()
 	b := make([]byte, 4)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: use atomic counter for uniqueness
+		counter := atomic.AddUint64(&idCounter, 1)
+		return fmt.Sprintf("%d-%016x", ms, counter)
+	}
 	return fmt.Sprintf("%d-%x", ms, b)
 }

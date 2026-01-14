@@ -22,6 +22,9 @@ import (
 //	session__cc_1_opus[backend,api]
 var paneNameRegex = regexp.MustCompile(`^.+__(\w+)_\d+(?:_([A-Za-z0-9._/@:+-]+))?(?:\[([^\]]*)\])?$`)
 
+// sessionNameRegex validates session names (allowed: a-z, A-Z, 0-9, _, -)
+var sessionNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
 // AgentType represents the type of AI agent
 type AgentType string
 
@@ -856,8 +859,7 @@ func ValidateSessionName(name string) error {
 	}
 
 	// Check for invalid characters
-	valid := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-	if !valid.MatchString(name) {
+	if !sessionNameRegex.MatchString(name) {
 		return fmt.Errorf("session name %q contains invalid characters (allowed: a-z, A-Z, 0-9, _, -)", name)
 	}
 	return nil

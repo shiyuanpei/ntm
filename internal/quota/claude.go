@@ -51,6 +51,12 @@ var claudeStatusPatterns = struct {
 	Plan:         regexp.MustCompile(`(?i)(?:plan|subscription)[:\s]+(.+?)(?:\n|$)`),
 }
 
+// Pre-compiled patterns for reset time parsing
+var (
+	inHoursPattern = regexp.MustCompile(`in\s+(\d+)\s*(?:hours?|hrs?)`)
+	inMinsPattern  = regexp.MustCompile(`in\s+(\d+)\s*(?:minutes?|mins?)`)
+)
+
 // parseClaudeUsage parses Claude's /usage command output
 func parseClaudeUsage(info *QuotaInfo, output string) (bool, error) {
 	found := false
@@ -134,7 +140,6 @@ func parseResetTime(resetStr string) time.Time {
 	now := time.Now().UTC()
 
 	// Try "in X hours" pattern
-	inHoursPattern := regexp.MustCompile(`in\s+(\d+)\s*(?:hours?|hrs?)`)
 	if match := inHoursPattern.FindStringSubmatch(resetStr); len(match) > 1 {
 		if hours, err := strconv.Atoi(match[1]); err == nil {
 			return now.Add(time.Duration(hours) * time.Hour)
@@ -142,7 +147,6 @@ func parseResetTime(resetStr string) time.Time {
 	}
 
 	// Try "in X minutes" pattern
-	inMinsPattern := regexp.MustCompile(`in\s+(\d+)\s*(?:minutes?|mins?)`)
 	if match := inMinsPattern.FindStringSubmatch(resetStr); len(match) > 1 {
 		if mins, err := strconv.Atoi(match[1]); err == nil {
 			return now.Add(time.Duration(mins) * time.Minute)

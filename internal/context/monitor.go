@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// modelDateSuffixRegex matches date suffixes like -20251101 in model names
+var modelDateSuffixRegex = regexp.MustCompile(`-\d{8}$`)
+
 // ContextLimits maps model names to their context window sizes in tokens.
 // These are approximate values based on published specifications.
 var ContextLimits = map[string]int64{
@@ -79,7 +82,7 @@ func GetContextLimit(model string) int64 {
 func normalizeModelName(model string) string {
 	model = strings.ToLower(model)
 	// Remove date suffixes like -20251101
-	model = regexp.MustCompile(`-\d{8}$`).ReplaceAllString(model, "")
+	model = modelDateSuffixRegex.ReplaceAllString(model, "")
 	return model
 }
 

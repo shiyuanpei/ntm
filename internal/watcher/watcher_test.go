@@ -17,8 +17,9 @@ func TestNewWatcher(t *testing.T) {
 	}
 	defer w.Close()
 
-	if w.fsWatcher == nil {
-		t.Error("fsWatcher should not be nil")
+	// Either fsWatcher is set (fsnotify mode) or pollMode is enabled (fallback)
+	if w.fsWatcher == nil && !w.pollMode {
+		t.Error("fsWatcher should not be nil when not in poll mode")
 	}
 	if w.debouncer == nil {
 		t.Error("debouncer should not be nil")
