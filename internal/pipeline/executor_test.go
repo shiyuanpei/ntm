@@ -49,6 +49,32 @@ func TestNewExecutor(t *testing.T) {
 	}
 }
 
+func TestExecutor_SetNotifier(t *testing.T) {
+	cfg := DefaultExecutorConfig("test")
+	e := NewExecutor(cfg)
+
+	// Initially nil
+	if e.notifier != nil {
+		t.Error("notifier should initially be nil")
+	}
+
+	// Set notifier using NewNotifier
+	notifier := NewNotifier(NotifierConfig{
+		Channels: []string{"desktop"},
+	})
+	e.SetNotifier(notifier)
+
+	if e.notifier != notifier {
+		t.Error("notifier should be set to the same pointer")
+	}
+
+	// Set to nil
+	e.SetNotifier(nil)
+	if e.notifier != nil {
+		t.Error("notifier should be nil after setting to nil")
+	}
+}
+
 func TestExecutor_Validate(t *testing.T) {
 	cfg := DefaultExecutorConfig("test")
 	e := NewExecutor(cfg)

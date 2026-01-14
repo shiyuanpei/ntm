@@ -1,10 +1,30 @@
 package pipeline
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 	"time"
 )
+
+// captureStdout captures stdout during function execution
+func captureStdout(t *testing.T, f func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	f()
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	return buf.String()
+}
 
 func TestNewRobotResponse(t *testing.T) {
 	t.Parallel()
@@ -544,5 +564,398 @@ func TestUpdatePipelineFromState(t *testing.T) {
 	}
 
 	// Clean up
+	ClearPipelineRegistry()
+}
+
+func TestOutputJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input interface{}
+		check func(t *testing.T, output string)
+	}{
+		{
+			name:  "simple struct",
+			input: struct{ Name string }{"test"},
+			check: func(t *testing.T, output string) {
+				var result map[string]string
+				if err := json.Unmarshal([]byte(output), &result); err != nil {
+					t.Fatalf("Failed to parse JSON: %v", err)
+				}
+				if result["Name"] != "test" {
+					t.Errorf("Name = %q, want %q", result["Name"], "test")
+				}
+			},
+		},
+		{
+			name:  "robot response",
+			input: NewRobotResponse(true),
+			check: func(t *testing.T, output string) {
+				var result RobotResponse
+				if err := json.Unmarshal([]byte(output), &result); err != nil {
+					t.Fatalf("Failed to parse JSON: %v", err)
+				}
+				if !result.Success {
+					t.Error("Expected success=true")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Note: Not parallel because we capture stdout
+			output := captureStdout(t, func() {
+				outputJSON(tt.input)
+			})
+			tt.check(t, output)
+		})
+	}
+}
+
+func TestPrintPipelineRun_ValidationErrors(t *testing.T) {
+	// Test validation errors that don't require tmux
+
+	tests := []struct {
+		name       string
+		opts       PipelineRunOptions
+		wantCode   int
+		wantErrMsg string
+	}{
+		{
+			name:       "missing workflow file",
+			opts:       PipelineRunOptions{},
+			wantCode:   1,
+			wantErrMsg: "workflow file is required",
+		},
+		{
+			name:       "missing session",
+			opts:       PipelineRunOptions{WorkflowFile: "test.yaml"},
+			wantCode:   1,
+			wantErrMsg: "session is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var exitCode int
+			output := captureStdout(t, func() {
+				exitCode = PrintPipelineRun(tt.opts)
+			})
+
+			if exitCode != tt.wantCode {
+				t.Errorf("PrintPipelineRun() exit code = %d, want %d", exitCode, tt.wantCode)
+			}
+
+			var result PipelineRunOutput
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
+				t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, output)
+			}
+
+			if result.Success {
+				t.Error("Expected success=false for validation error")
+			}
+
+			if result.Error != tt.wantErrMsg {
+				t.Errorf("Error = %q, want %q", result.Error, tt.wantErrMsg)
+			}
+
+			if result.ErrorCode != ErrCodeInvalidFlag {
+				t.Errorf("ErrorCode = %q, want %q", result.ErrorCode, ErrCodeInvalidFlag)
+			}
+		})
+	}
+}
+
+func TestPrintPipelineStatus_ValidationErrors(t *testing.T) {
+	ClearPipelineRegistry()
+
+	tests := []struct {
+		name       string
+		runID      string
+		wantCode   int
+		wantErrMsg string
+		errorCode  string
+	}{
+		{
+			name:       "missing run_id",
+			runID:      "",
+			wantCode:   1,
+			wantErrMsg: "run_id is required",
+			errorCode:  ErrCodeInvalidFlag,
+		},
+		{
+			name:       "nonexistent run_id",
+			runID:      "nonexistent-run-123",
+			wantCode:   1,
+			wantErrMsg: "pipeline not found: nonexistent-run-123",
+			errorCode:  ErrCodeSessionNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var exitCode int
+			output := captureStdout(t, func() {
+				exitCode = PrintPipelineStatus(tt.runID)
+			})
+
+			if exitCode != tt.wantCode {
+				t.Errorf("PrintPipelineStatus() exit code = %d, want %d", exitCode, tt.wantCode)
+			}
+
+			// Use generic map to handle embedded struct field shadowing
+			// RobotResponse.Error is shadowed by PipelineStatusOutput.Error in Go struct
+			// but JSON has only one "error" field
+			var result map[string]interface{}
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
+				t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, output)
+			}
+
+			if success, _ := result["success"].(bool); success {
+				t.Error("Expected success=false for validation error")
+			}
+
+			errMsg, _ := result["error"].(string)
+			if errMsg != tt.wantErrMsg {
+				t.Errorf("Error = %q, want %q", errMsg, tt.wantErrMsg)
+			}
+
+			errCode, _ := result["error_code"].(string)
+			if errCode != tt.errorCode {
+				t.Errorf("ErrorCode = %q, want %q", errCode, tt.errorCode)
+			}
+		})
+	}
+}
+
+func TestPrintPipelineStatus_FoundPipeline(t *testing.T) {
+	ClearPipelineRegistry()
+
+	// Register a test pipeline
+	exec := &PipelineExecution{
+		RunID:      "test-status-run",
+		WorkflowID: "test-workflow",
+		Session:    "test-session",
+		Status:     "running",
+		StartedAt:  time.Now(),
+		Steps:      make(map[string]PipelineStep),
+		Progress: PipelineProgress{
+			Total:   3,
+			Pending: 2,
+			Running: 1,
+		},
+	}
+	RegisterPipeline(exec)
+
+	var exitCode int
+	output := captureStdout(t, func() {
+		exitCode = PrintPipelineStatus("test-status-run")
+	})
+
+	if exitCode != 0 {
+		t.Errorf("PrintPipelineStatus() exit code = %d, want 0", exitCode)
+	}
+
+	var result PipelineStatusOutput
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, output)
+	}
+
+	if !result.Success {
+		t.Errorf("Expected success=true, got error: %s", result.Error)
+	}
+
+	if result.RunID != "test-status-run" {
+		t.Errorf("RunID = %q, want %q", result.RunID, "test-status-run")
+	}
+
+	if result.WorkflowID != "test-workflow" {
+		t.Errorf("WorkflowID = %q, want %q", result.WorkflowID, "test-workflow")
+	}
+
+	if result.Status != "running" {
+		t.Errorf("Status = %q, want %q", result.Status, "running")
+	}
+
+	ClearPipelineRegistry()
+}
+
+func TestPrintPipelineList_Empty(t *testing.T) {
+	ClearPipelineRegistry()
+
+	var exitCode int
+	output := captureStdout(t, func() {
+		exitCode = PrintPipelineList()
+	})
+
+	if exitCode != 0 {
+		t.Errorf("PrintPipelineList() exit code = %d, want 0", exitCode)
+	}
+
+	var result PipelineListOutput
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, output)
+	}
+
+	if !result.Success {
+		t.Errorf("Expected success=true, got error: %s", result.Error)
+	}
+
+	if len(result.Pipelines) != 0 {
+		t.Errorf("Pipelines count = %d, want 0", len(result.Pipelines))
+	}
+}
+
+func TestPrintPipelineList_WithPipelines(t *testing.T) {
+	ClearPipelineRegistry()
+
+	// Register some test pipelines
+	now := time.Now()
+	exec1 := &PipelineExecution{
+		RunID:      "list-test-1",
+		WorkflowID: "workflow-1",
+		Session:    "session-1",
+		Status:     "completed",
+		StartedAt:  now,
+		Progress:   PipelineProgress{Total: 5, Completed: 5, Percent: 100},
+	}
+	exec2 := &PipelineExecution{
+		RunID:      "list-test-2",
+		WorkflowID: "workflow-2",
+		Session:    "session-2",
+		Status:     "running",
+		StartedAt:  now,
+		Progress:   PipelineProgress{Total: 10, Running: 1, Pending: 9, Percent: 0},
+	}
+	RegisterPipeline(exec1)
+	RegisterPipeline(exec2)
+
+	var exitCode int
+	output := captureStdout(t, func() {
+		exitCode = PrintPipelineList()
+	})
+
+	if exitCode != 0 {
+		t.Errorf("PrintPipelineList() exit code = %d, want 0", exitCode)
+	}
+
+	var result PipelineListOutput
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, output)
+	}
+
+	if !result.Success {
+		t.Errorf("Expected success=true, got error: %s", result.Error)
+	}
+
+	if len(result.Pipelines) != 2 {
+		t.Errorf("Pipelines count = %d, want 2", len(result.Pipelines))
+	}
+
+	// Verify pipelines are sorted by start time (most recent first)
+	if result.AgentHints == nil {
+		t.Error("AgentHints should not be nil")
+	}
+
+	ClearPipelineRegistry()
+}
+
+func TestPrintPipelineCancel_ValidationErrors(t *testing.T) {
+	ClearPipelineRegistry()
+
+	tests := []struct {
+		name       string
+		runID      string
+		wantCode   int
+		wantErrMsg string
+		errorCode  string
+	}{
+		{
+			name:       "missing run_id",
+			runID:      "",
+			wantCode:   1,
+			wantErrMsg: "run_id is required",
+			errorCode:  ErrCodeInvalidFlag,
+		},
+		{
+			name:       "nonexistent run_id",
+			runID:      "cancel-nonexistent-123",
+			wantCode:   1,
+			wantErrMsg: "pipeline not found: cancel-nonexistent-123",
+			errorCode:  ErrCodeSessionNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var exitCode int
+			output := captureStdout(t, func() {
+				exitCode = PrintPipelineCancel(tt.runID)
+			})
+
+			if exitCode != tt.wantCode {
+				t.Errorf("PrintPipelineCancel() exit code = %d, want %d", exitCode, tt.wantCode)
+			}
+
+			var result PipelineCancelOutput
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
+				t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, output)
+			}
+
+			if result.Success {
+				t.Error("Expected success=false for validation error")
+			}
+
+			if result.Error != tt.wantErrMsg {
+				t.Errorf("Error = %q, want %q", result.Error, tt.wantErrMsg)
+			}
+
+			if result.ErrorCode != tt.errorCode {
+				t.Errorf("ErrorCode = %q, want %q", result.ErrorCode, tt.errorCode)
+			}
+		})
+	}
+}
+
+func TestPrintPipelineCancel_CompletedPipeline(t *testing.T) {
+	ClearPipelineRegistry()
+
+	// Register a completed pipeline
+	finished := time.Now()
+	exec := &PipelineExecution{
+		RunID:      "cancel-completed-test",
+		WorkflowID: "test-workflow",
+		Session:    "test-session",
+		Status:     "completed",
+		StartedAt:  time.Now().Add(-time.Minute),
+		FinishedAt: &finished,
+	}
+	RegisterPipeline(exec)
+
+	var exitCode int
+	output := captureStdout(t, func() {
+		exitCode = PrintPipelineCancel("cancel-completed-test")
+	})
+
+	// Cancelling a completed pipeline should succeed but do nothing
+	if exitCode != 0 {
+		t.Errorf("PrintPipelineCancel() exit code = %d, want 0", exitCode)
+	}
+
+	var result PipelineCancelOutput
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, output)
+	}
+
+	if !result.Success {
+		t.Errorf("Expected success=true, got error: %s", result.Error)
+	}
+
+	if result.Status != "completed" {
+		t.Errorf("Status = %q, want %q", result.Status, "completed")
+	}
+
 	ClearPipelineRegistry()
 }

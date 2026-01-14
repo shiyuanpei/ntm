@@ -340,22 +340,28 @@ func PrintPipelineStatus(runID string) int {
 	output := PipelineStatusOutput{}
 
 	if runID == "" {
+		errMsg := "run_id is required"
 		output.RobotResponse = NewErrorResponse(
-			fmt.Errorf("run_id is required"),
+			errors.New(errMsg),
 			ErrCodeInvalidFlag,
 			"Provide a run ID: ntm --robot-pipeline=run-20241230-123456-abcd",
 		)
+		// Set outer Error field to avoid shadowing from embedded RobotResponse
+		output.Error = errMsg
 		outputJSON(output)
 		return 1
 	}
 
 	exec := getPipeline(runID)
 	if exec == nil {
+		errMsg := fmt.Sprintf("pipeline not found: %s", runID)
 		output.RobotResponse = NewErrorResponse(
-			fmt.Errorf("pipeline not found: %s", runID),
+			errors.New(errMsg),
 			ErrCodeSessionNotFound,
 			"Use 'ntm --robot-pipeline-list' to see available pipelines",
 		)
+		// Set outer Error field to avoid shadowing from embedded RobotResponse
+		output.Error = errMsg
 		outputJSON(output)
 		return 1
 	}
