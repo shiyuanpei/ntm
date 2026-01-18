@@ -105,6 +105,21 @@ func parseAgentFromTitle(title string) (AgentType, string, []string) {
 	}
 }
 
+// detectAgentFromCommand checks the running command for known agent process names.
+// Returns AgentUser if no agent is detected.
+func detectAgentFromCommand(command string) AgentType {
+	command = strings.ToLower(command)
+	switch {
+	case strings.Contains(command, "claude"):
+		return AgentClaude
+	case strings.Contains(command, "codex"):
+		return AgentCodex
+	case strings.Contains(command, "gemini"):
+		return AgentGemini
+	}
+	return AgentUser
+}
+
 // parseTags parses a comma-separated tag string into a slice.
 // Returns nil for empty input.
 func parseTags(tagStr string) []string {
@@ -303,6 +318,12 @@ func (c *Client) GetPanesContext(ctx context.Context, session string) ([]Pane, e
 		// Parse pane title using regex to extract type, variant, and tags
 		// Format: {session}__{type}_{index} or {session}__{type}_{index}_{variant}
 		pane.Type, pane.Variant, pane.Tags = parseAgentFromTitle(pane.Title)
+
+		// Fallback: if title-based detection returns User, try process-based detection
+		// This handles cases where agents (like Claude Code) override their pane title
+		if pane.Type == AgentUser {
+			pane.Type = detectAgentFromCommand(pane.Command)
+		}
 
 		panes = append(panes, pane)
 	}
@@ -946,6 +967,12 @@ func (c *Client) GetPanesWithActivityContext(ctx context.Context, session string
 
 		// Parse pane title using regex to extract type, variant, and tags
 		pane.Type, pane.Variant, pane.Tags = parseAgentFromTitle(pane.Title)
+
+		// Fallback: if title-based detection returns User, try process-based detection
+		// This handles cases where agents (like Claude Code) override their pane title
+		if pane.Type == AgentUser {
+			pane.Type = detectAgentFromCommand(pane.Command)
+		}
 
 		panes = append(panes, PaneActivity{
 			Pane:         pane,
