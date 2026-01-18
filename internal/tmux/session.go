@@ -120,6 +120,23 @@ func detectAgentFromCommand(command string) AgentType {
 	return AgentUser
 }
 
+// detectAgentFromTitleKeywords checks pane title for agent type keywords.
+// This is a fallback for agents that run via interpreters (e.g., Gemini via bun)
+// where the process name doesn't reveal the agent type.
+// Returns AgentUser if no agent keyword is found.
+func detectAgentFromTitleKeywords(title string) AgentType {
+	title = strings.ToLower(title)
+	switch {
+	case strings.Contains(title, "claude"):
+		return AgentClaude
+	case strings.Contains(title, "codex"):
+		return AgentCodex
+	case strings.Contains(title, "gemini"):
+		return AgentGemini
+	}
+	return AgentUser
+}
+
 // parseTags parses a comma-separated tag string into a slice.
 // Returns nil for empty input.
 func parseTags(tagStr string) []string {
@@ -319,10 +336,14 @@ func (c *Client) GetPanesContext(ctx context.Context, session string) ([]Pane, e
 		// Format: {session}__{type}_{index} or {session}__{type}_{index}_{variant}
 		pane.Type, pane.Variant, pane.Tags = parseAgentFromTitle(pane.Title)
 
-		// Fallback: if title-based detection returns User, try process-based detection
-		// This handles cases where agents (like Claude Code) override their pane title
+		// Fallback chain for agent detection when NTM title format doesn't match:
+		// 1. Try process-based detection (checks command for "claude", "codex", "gemini")
+		// 2. Try title keyword detection (for agents like Gemini that run via bun)
 		if pane.Type == AgentUser {
 			pane.Type = detectAgentFromCommand(pane.Command)
+		}
+		if pane.Type == AgentUser {
+			pane.Type = detectAgentFromTitleKeywords(pane.Title)
 		}
 
 		panes = append(panes, pane)
@@ -968,10 +989,14 @@ func (c *Client) GetPanesWithActivityContext(ctx context.Context, session string
 		// Parse pane title using regex to extract type, variant, and tags
 		pane.Type, pane.Variant, pane.Tags = parseAgentFromTitle(pane.Title)
 
-		// Fallback: if title-based detection returns User, try process-based detection
-		// This handles cases where agents (like Claude Code) override their pane title
+		// Fallback chain for agent detection when NTM title format doesn't match:
+		// 1. Try process-based detection (checks command for "claude", "codex", "gemini")
+		// 2. Try title keyword detection (for agents like Gemini that run via bun)
 		if pane.Type == AgentUser {
 			pane.Type = detectAgentFromCommand(pane.Command)
+		}
+		if pane.Type == AgentUser {
+			pane.Type = detectAgentFromTitleKeywords(pane.Title)
 		}
 
 		panes = append(panes, PaneActivity{
