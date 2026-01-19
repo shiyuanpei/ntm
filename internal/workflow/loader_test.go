@@ -274,3 +274,139 @@ role = "builder"
 		t.Errorf("expected name 'array-test', got %q", w.Name)
 	}
 }
+
+func TestProfileToAgentType(t *testing.T) {
+	tests := []struct {
+		profile string
+		want    string
+	}{
+		// Claude variants
+		{"claude", "cc"},
+		{"cc", "cc"},
+		{"claude-code", "cc"},
+		{"CLAUDE", "cc"},
+		{"CC", "cc"},
+		// Codex variants
+		{"codex", "cod"},
+		{"cod", "cod"},
+		{"codex-cli", "cod"},
+		{"CODEX", "cod"},
+		// Gemini variants
+		{"gemini", "gmi"},
+		{"gmi", "gmi"},
+		{"gemini-cli", "gmi"},
+		{"GEMINI", "gmi"},
+		// Unknown profiles default to Claude
+		{"tester", "cc"},
+		{"implementer", "cc"},
+		{"explorer", "cc"},
+		{"unknown", "cc"},
+		{"", "cc"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.profile, func(t *testing.T) {
+			got := ProfileToAgentType(tt.profile)
+			if got != tt.want {
+				t.Errorf("ProfileToAgentType(%q) = %q, want %q", tt.profile, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWorkflowTemplate_AgentCounts(t *testing.T) {
+	tests := []struct {
+		name   string
+		agents []WorkflowAgent
+		want   map[string]int
+	}{
+		{
+			name: "single agent defaults to 1",
+			agents: []WorkflowAgent{
+				{Profile: "tester", Role: "red"},
+			},
+			want: map[string]int{"cc": 1},
+		},
+		{
+			name: "explicit count",
+			agents: []WorkflowAgent{
+				{Profile: "explorer", Role: "a", Count: 3},
+			},
+			want: map[string]int{"cc": 3},
+		},
+		{
+			name: "multiple agent types",
+			agents: []WorkflowAgent{
+				{Profile: "claude", Role: "main", Count: 2},
+				{Profile: "codex", Role: "backup", Count: 1},
+			},
+			want: map[string]int{"cc": 2, "cod": 1},
+		},
+		{
+			name: "same type aggregates",
+			agents: []WorkflowAgent{
+				{Profile: "tester", Role: "red"},
+				{Profile: "implementer", Role: "green"},
+				{Profile: "reviewer", Role: "blue"},
+			},
+			want: map[string]int{"cc": 3},
+		},
+		{
+			name: "mixed types with counts",
+			agents: []WorkflowAgent{
+				{Profile: "cc", Role: "main", Count: 2},
+				{Profile: "cod", Role: "helper", Count: 1},
+				{Profile: "gmi", Role: "explorer", Count: 3},
+			},
+			want: map[string]int{"cc": 2, "cod": 1, "gmi": 3},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &WorkflowTemplate{
+				Agents: tt.agents,
+			}
+			got := tmpl.AgentCounts()
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Errorf("AgentCounts()[%q] = %d, want %d", k, got[k], v)
+				}
+			}
+			for k, v := range got {
+				if tt.want[k] != v {
+					t.Errorf("AgentCounts() has extra key %q = %d", k, v)
+				}
+			}
+		})
+	}
+}
+
+func TestBuiltinTemplates_AgentCounts(t *testing.T) {
+	loader := NewLoader()
+
+	// Test that builtin templates return valid agent counts
+	builtins := []string{"red-green", "parallel-explore", "review-pipeline", "specialist-team"}
+	for _, name := range builtins {
+		t.Run(name, func(t *testing.T) {
+			tmpl, err := loader.Get(name)
+			if err != nil {
+				t.Fatalf("Get(%q) failed: %v", name, err)
+			}
+
+			counts := tmpl.AgentCounts()
+			if len(counts) == 0 {
+				t.Errorf("AgentCounts() returned empty for %q", name)
+			}
+
+			// Should have at least one agent
+			total := 0
+			for _, c := range counts {
+				total += c
+			}
+			if total == 0 {
+				t.Errorf("AgentCounts() total is 0 for %q", name)
+			}
+		})
+	}
+}

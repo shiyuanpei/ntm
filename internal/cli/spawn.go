@@ -25,6 +25,7 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/recipe"
 	"github.com/Dicklesworthstone/ntm/internal/resilience"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
+	"github.com/Dicklesworthstone/ntm/internal/workflow"
 )
 
 // optionalDurationValue implements pflag.Value for a duration flag with optional value.
@@ -208,6 +209,7 @@ type RecoveryCMRule struct {
 func newSpawnCmd() *cobra.Command {
 	var noUserPane bool
 	var recipeName string
+	var templateName string
 	var agentSpecs AgentSpecs
 	var personaSpecs PersonaSpecs
 	var autoRestart bool
@@ -245,11 +247,15 @@ and titled with their type (e.g., myproject__cc_1, myproject__cod_1).
 You can use a recipe to quickly spawn a predefined set of agents:
   ntm spawn myproject -r full-stack    # Use the 'full-stack' recipe
 
+Or use a workflow template for coordination patterns:
+  ntm spawn myproject -t red-green     # Use the 'red-green' TDD template
+
 Agent count syntax: N or N:model where N is count and model is optional.
 Multiple flags of the same type accumulate.
 
 Built-in recipes: quick-claude, full-stack, minimal, codex-heavy, balanced, review-team
-Use 'ntm recipes list' to see all available recipes.
+Built-in templates: red-green, review-pipeline, specialist-team, parallel-explore
+Use 'ntm recipes list' or 'ntm workflows list' to see all available options.
 
 Auto-restart mode (--auto-restart):
   Monitors agent health and automatically restarts crashed agents.
@@ -278,6 +284,8 @@ Examples:
   ntm spawn myproject --cc=3 --cod=3 --gmi=1   # 3 Claude, 3 Codex, 1 Gemini
   ntm spawn myproject --cc=4 --no-user         # 4 Claude, no user pane
   ntm spawn myproject -r full-stack            # Use full-stack recipe
+  ntm spawn myproject -t red-green             # Use red-green workflow template
+  ntm spawn myproject -t parallel-explore --cc=4  # Template with count override
   ntm spawn myproject --cc=2:opus --cc=1:sonnet  # 2 Opus + 1 Sonnet
   ntm spawn myproject --cc=2 --auto-restart    # With auto-restart enabled
   ntm spawn myproject --persona=architect --persona=implementer:2  # Using personas
@@ -345,6 +353,38 @@ Examples:
 					agentSpecs = append(agentSpecs, AgentSpec{Type: AgentTypeGemini, Count: counts["gmi"]})
 				}
 				fmt.Printf("Using recipe '%s': %s\n", r.Name, r.Description)
+			}
+
+			// Handle workflow template (similar to recipe but uses workflow templates)
+			if templateName != "" {
+				if recipeName != "" {
+					return fmt.Errorf("cannot use both --recipe and --template; pick one")
+				}
+				wfLoader := workflow.NewLoader()
+				tmpl, err := wfLoader.Get(templateName)
+				if err != nil {
+					available := workflow.BuiltinNames()
+					return fmt.Errorf("%w\n\nAvailable built-in templates: %s",
+						err, strings.Join(available, ", "))
+				}
+				if err := tmpl.Validate(); err != nil {
+					return fmt.Errorf("invalid template %q: %w", templateName, err)
+				}
+				counts := tmpl.AgentCounts()
+				// Apply template agent counts (CLI flags override these)
+				if agentSpecs.ByType(AgentTypeClaude).TotalCount() == 0 && counts["cc"] > 0 {
+					agentSpecs = append(agentSpecs, AgentSpec{Type: AgentTypeClaude, Count: counts["cc"]})
+				}
+				if agentSpecs.ByType(AgentTypeCodex).TotalCount() == 0 && counts["cod"] > 0 {
+					agentSpecs = append(agentSpecs, AgentSpec{Type: AgentTypeCodex, Count: counts["cod"]})
+				}
+				if agentSpecs.ByType(AgentTypeGemini).TotalCount() == 0 && counts["gmi"] > 0 {
+					agentSpecs = append(agentSpecs, AgentSpec{Type: AgentTypeGemini, Count: counts["gmi"]})
+				}
+				if !IsJSONOutput() {
+					fmt.Printf("Using template '%s': %s (%s coordination)\n",
+						tmpl.Name, tmpl.Description, tmpl.Coordination)
+				}
 			}
 
 			// Extract simple counts
@@ -457,6 +497,7 @@ Examples:
 	cmd.Flags().Var(&personaSpecs, "persona", "Persona-defined agents (name or name:count)")
 	cmd.Flags().BoolVar(&noUserPane, "no-user", false, "don't reserve a pane for the user")
 	cmd.Flags().StringVarP(&recipeName, "recipe", "r", "", "use a recipe for agent configuration")
+	cmd.Flags().StringVarP(&templateName, "template", "t", "", "use a workflow template for agent configuration")
 	cmd.Flags().BoolVar(&autoRestart, "auto-restart", false, "monitor and auto-restart crashed agents")
 
 	// Stagger flag for thundering herd prevention

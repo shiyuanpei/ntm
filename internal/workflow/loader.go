@@ -201,3 +201,39 @@ func SourceDescription(source string) string {
 		return source
 	}
 }
+
+// ProfileToAgentType maps a workflow profile name to an agent type.
+// Known mappings:
+//   - "claude", "cc", "claude-code" → "cc"
+//   - "codex", "cod", "codex-cli" → "cod"
+//   - "gemini", "gmi", "gemini-cli" → "gmi"
+//   - Other profiles default to "cc" (Claude Code)
+func ProfileToAgentType(profile string) string {
+	profile = strings.ToLower(profile)
+	switch profile {
+	case "claude", "cc", "claude-code":
+		return "cc"
+	case "codex", "cod", "codex-cli":
+		return "cod"
+	case "gemini", "gmi", "gemini-cli":
+		return "gmi"
+	default:
+		// Default to Claude for unknown profiles (most capable agent)
+		return "cc"
+	}
+}
+
+// AgentCounts returns a map of agent type to count based on template agents.
+// This enables integration with the spawn command.
+func (t *WorkflowTemplate) AgentCounts() map[string]int {
+	counts := make(map[string]int)
+	for _, agent := range t.Agents {
+		agentType := ProfileToAgentType(agent.Profile)
+		count := agent.Count
+		if count == 0 {
+			count = 1 // Default to 1 if not specified
+		}
+		counts[agentType] += count
+	}
+	return counts
+}
