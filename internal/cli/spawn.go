@@ -121,6 +121,12 @@ type SpawnOptions struct {
 	// Stagger configuration for thundering herd prevention
 	Stagger        time.Duration // Delay between agent prompt delivery
 	StaggerEnabled bool          // True if --stagger flag was provided
+
+	// Assignment configuration for spawn+assign workflow
+	Assign            bool          // Enable auto-assignment after spawn
+	AssignStrategy    string        // Assignment strategy: balanced, speed, quality, dependency, round-robin
+	AssignLimit       int           // Maximum assignments (0 = unlimited)
+	AssignReadyTimeout time.Duration // Timeout waiting for agents to become ready
 }
 
 // RecoveryContext holds all the information needed to help an agent recover
@@ -224,6 +230,17 @@ func newSpawnCmd() *cobra.Command {
 	var staggerDuration time.Duration
 	var staggerEnabled bool
 	var safety bool
+
+	// Assignment flags for spawn+assign workflow (bd-3nde)
+	var assignEnabled bool
+	var assignStrategy string
+	var assignLimit int
+	var assignReadyTimeout time.Duration
+	// Silence unused variable warnings until bd-3nde is fully implemented
+	_ = assignEnabled
+	_ = assignStrategy
+	_ = assignLimit
+	_ = assignReadyTimeout
 
 	// Pre-load plugins to avoid double loading in RunE
 	// TODO: This runs eagerly during init() which slows down startup for all commands.
@@ -466,24 +483,28 @@ Examples:
 			}
 
 			opts := SpawnOptions{
-				Session:          sessionName,
-				Agents:           agentSpecs.Flatten(),
-				CCCount:          ccCount,
-				CodCount:         codCount,
-				GmiCount:         gmiCount,
-				UserPane:         !noUserPane,
-				AutoRestart:      autoRestart,
-				RecipeName:       recipeName,
-				PersonaMap:       personaMap,
-				PluginMap:        pluginMap,
-				CassContextQuery: contextQuery,
-				NoCassContext:    noCassContext,
-				Prompt:           prompt,
-				NoHooks:          noHooks,
-				Safety:           safety,
-				Stagger:          staggerDuration,
-				StaggerEnabled:   staggerEnabled,
-				ProfileList:      profileList,
+				Session:            sessionName,
+				Agents:             agentSpecs.Flatten(),
+				CCCount:            ccCount,
+				CodCount:           codCount,
+				GmiCount:           gmiCount,
+				UserPane:           !noUserPane,
+				AutoRestart:        autoRestart,
+				RecipeName:         recipeName,
+				PersonaMap:         personaMap,
+				PluginMap:          pluginMap,
+				CassContextQuery:   contextQuery,
+				NoCassContext:      noCassContext,
+				Prompt:             prompt,
+				NoHooks:            noHooks,
+				Safety:             safety,
+				Stagger:            staggerDuration,
+				StaggerEnabled:     staggerEnabled,
+				ProfileList:        profileList,
+				Assign:             assignEnabled,
+				AssignStrategy:     assignStrategy,
+				AssignLimit:        assignLimit,
+				AssignReadyTimeout: assignReadyTimeout,
 			}
 
 			return spawnSessionLogic(opts)
@@ -513,6 +534,12 @@ Examples:
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to initialize agents with")
 	cmd.Flags().BoolVar(&noHooks, "no-hooks", false, "Disable command hooks")
 	cmd.Flags().BoolVar(&safety, "safety", false, "Fail if session already exists (prevents accidental reuse)")
+
+	// Assignment flags for spawn+assign workflow
+	cmd.Flags().BoolVar(&assignEnabled, "assign", false, "Auto-assign beads to spawned agents after ready")
+	cmd.Flags().StringVar(&assignStrategy, "strategy", "balanced", "Assignment strategy: balanced, speed, quality, dependency, round-robin")
+	cmd.Flags().IntVar(&assignLimit, "limit", 0, "Maximum beads to assign (0 = unlimited)")
+	cmd.Flags().DurationVar(&assignReadyTimeout, "ready-timeout", 2*time.Minute, "Timeout waiting for agents to become ready")
 
 	// Profile flags for mapping personas to agents
 	cmd.Flags().StringVar(&profilesFlag, "profiles", "", "Comma-separated list of profile/persona names to map to agents in order")
@@ -1133,7 +1160,7 @@ func spawnSessionLogic(opts SpawnOptions) error {
 			agentMailStatus = registerSpawnedAgents(dir, spawnedAgents)
 		}
 
-		return output.PrintJSON(output.SpawnResponse{
+		spawnResponse := &output.SpawnResponse{
 			TimestampedResponse: output.NewTimestamped(),
 			Session:             opts.Session,
 			Created:             true, // spawn always creates or reuses
@@ -1142,7 +1169,50 @@ func spawnSessionLogic(opts SpawnOptions) error {
 			AgentCounts:         agentCounts,
 			Stagger:             staggerCfg,
 			AgentMail:           agentMailStatus,
-		})
+		}
+
+		// If assignment is enabled, wait for agents and run assignment phase
+		if opts.Assign {
+			// Wait for agents to become ready
+			readyCount, waitErr := waitForAgentsReady(opts.Session, opts.AssignReadyTimeout)
+
+			var initResult *SpawnInitResult
+			if opts.Prompt != "" {
+				initResult = &SpawnInitResult{
+					PromptSent:    true,
+					AgentsReached: len(launchedAgents),
+				}
+			}
+
+			var assignResult *AssignOutputEnhanced
+			var assignErrors []string
+
+			if waitErr != nil {
+				assignErrors = append(assignErrors, fmt.Sprintf("ready wait failed: %v", waitErr))
+			} else {
+				// Run assignment phase
+				result, err := runAssignmentPhase(opts.Session, opts)
+				if err != nil {
+					assignErrors = append(assignErrors, fmt.Sprintf("assignment failed: %v", err))
+				} else {
+					assignResult = result
+				}
+				_ = readyCount // Used for logging in non-JSON mode
+			}
+
+			// Return combined result
+			combinedResult := SpawnAssignResult{
+				Spawn:  spawnResponse,
+				Init:   initResult,
+				Assign: assignResult,
+			}
+			if len(assignErrors) > 0 && assignResult != nil {
+				assignResult.Errors = assignErrors
+			}
+			return output.PrintJSON(combinedResult)
+		}
+
+		return output.PrintJSON(spawnResponse)
 	}
 
 	// Print "What's next?" suggestions
@@ -1274,6 +1344,31 @@ func spawnSessionLogic(opts SpawnOptions) error {
 
 	// Register session as Agent Mail agent (non-blocking)
 	registerSessionAgent(opts.Session, dir)
+
+	// Run assignment phase if enabled (non-JSON mode)
+	if opts.Assign {
+		steps := output.NewSteps()
+		steps.Start("Waiting for agents to become ready")
+
+		readyCount, err := waitForAgentsReady(opts.Session, opts.AssignReadyTimeout)
+		if err != nil {
+			steps.Warn()
+			output.PrintWarningf("Ready wait failed: %v", err)
+		} else {
+			steps.Done()
+			output.PrintInfof("%d agents ready", readyCount)
+
+			steps.Start("Assigning work to agents")
+			assignResult, err := runAssignmentPhase(opts.Session, opts)
+			if err != nil {
+				steps.Warn()
+				output.PrintWarningf("Assignment failed: %v", err)
+			} else {
+				steps.Done()
+				output.PrintInfof("Assigned %d tasks (strategy: %s)", len(assignResult.Assigned), assignResult.Strategy)
+			}
+		}
+	}
 
 	return nil
 }
@@ -1927,4 +2022,110 @@ func FormatRecoveryPrompt(rc *RecoveryContext) string {
 	sb.WriteString("Reread AGENTS.md and continue from where you left off.\n")
 
 	return sb.String()
+}
+
+// SpawnAssignResult holds the combined result of spawn+assign workflow.
+type SpawnAssignResult struct {
+	Spawn  *output.SpawnResponse  `json:"spawn"`
+	Init   *SpawnInitResult       `json:"init,omitempty"`
+	Assign *AssignOutputEnhanced  `json:"assign,omitempty"`
+}
+
+// SpawnInitResult describes the init phase result.
+type SpawnInitResult struct {
+	PromptSent    bool `json:"prompt_sent"`
+	AgentsReached int  `json:"agents_reached"`
+}
+
+// waitForAgentsReady waits for spawned agents to show ready/idle prompts.
+// Returns the number of ready agents and any error.
+func waitForAgentsReady(session string, timeout time.Duration) (int, error) {
+	deadline := time.Now().Add(timeout)
+	pollInterval := 2 * time.Second
+
+	for {
+		if time.Now().After(deadline) {
+			return 0, fmt.Errorf("timeout waiting for agents to become ready")
+		}
+
+		panes, err := tmux.GetPanes(session)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get panes: %w", err)
+		}
+
+		readyCount := 0
+		agentCount := 0
+
+		for _, pane := range panes {
+			at := detectAgentTypeFromTitle(pane.Title)
+			if at == "user" || at == "unknown" {
+				continue
+			}
+			agentCount++
+
+			scrollback, _ := tmux.CapturePaneOutput(pane.ID, 10)
+			state := detectAgentStateFromScrollback(scrollback)
+			if state == "idle" {
+				readyCount++
+			}
+		}
+
+		if agentCount > 0 && readyCount == agentCount {
+			return readyCount, nil
+		}
+
+		time.Sleep(pollInterval)
+	}
+}
+
+// detectAgentStateFromScrollback checks scrollback for idle patterns.
+// This is a simplified version of determineAgentState from assign.go.
+func detectAgentStateFromScrollback(scrollback string) string {
+	lines := strings.Split(scrollback, "\n")
+	if len(lines) == 0 {
+		return "unknown"
+	}
+
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+
+	// Look for common idle patterns
+	idlePatterns := []string{
+		"$", ">", ">>> ", "claude>", "codex>", "gemini>",
+		"What would you like", "How can I help",
+		"Ready for", "Waiting for",
+	}
+
+	for _, p := range idlePatterns {
+		if strings.HasSuffix(lastLine, p) || strings.Contains(lastLine, p) {
+			return "idle"
+		}
+	}
+
+	return "working"
+}
+
+// runAssignmentPhase executes the assignment phase after spawn.
+// Returns the assignment result or error.
+func runAssignmentPhase(session string, opts SpawnOptions) (*AssignOutputEnhanced, error) {
+	assignOpts := &AssignCommandOptions{
+		Session:  session,
+		Strategy: opts.AssignStrategy,
+		Limit:    opts.AssignLimit,
+		Verbose:  !IsJSONOutput(),
+		Quiet:    IsJSONOutput(),
+		Timeout:  30 * time.Second,
+	}
+
+	// Get assignment recommendations
+	assignOutput, err := getAssignOutputEnhanced(assignOpts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get assignments: %w", err)
+	}
+
+	// Execute assignments (send prompts to agents)
+	if err := executeAssignmentsEnhanced(session, assignOutput, assignOpts); err != nil {
+		return nil, fmt.Errorf("failed to execute assignments: %w", err)
+	}
+
+	return assignOutput, nil
 }
