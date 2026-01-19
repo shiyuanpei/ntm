@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strings"
@@ -50,6 +51,7 @@ type StatusUpdateMsg struct {
 	Time     time.Time
 	Duration time.Duration
 	Err      error
+	Gen      uint64
 }
 
 // ConfigReloadMsg is sent when configuration changes
@@ -69,6 +71,7 @@ type ScanStatusMsg struct {
 	Totals   scanner.ScanTotals
 	Duration time.Duration
 	Err      error
+	Gen      uint64
 }
 
 // AgentMailUpdateMsg is sent when Agent Mail data is fetched
@@ -77,6 +80,7 @@ type AgentMailUpdateMsg struct {
 	Connected bool
 	Locks     int
 	LockInfo  []AgentMailLockInfo
+	Gen       uint64
 }
 
 // CassSelectMsg is sent when a CASS search result is selected
@@ -89,41 +93,48 @@ type BeadsUpdateMsg struct {
 	Summary bv.BeadsSummary
 	Ready   []bv.BeadPreview
 	Err     error
+	Gen     uint64
 }
 
 // AlertsUpdateMsg is sent when alerts are refreshed
 type AlertsUpdateMsg struct {
 	Alerts []alerts.Alert
 	Err    error
+	Gen    uint64
 }
 
 // SpawnUpdateMsg is sent when spawn state is updated
 type SpawnUpdateMsg struct {
 	Data panels.SpawnData
+	Gen  uint64
 }
 
 // MetricsUpdateMsg is sent when session metrics are updated
 type MetricsUpdateMsg struct {
 	Data panels.MetricsData
 	Err  error
+	Gen  uint64
 }
 
 // HistoryUpdateMsg is sent when command history is fetched
 type HistoryUpdateMsg struct {
 	Entries []history.HistoryEntry
 	Err     error
+	Gen     uint64
 }
 
 // FileChangeMsg is sent when file changes are detected
 type FileChangeMsg struct {
 	Changes []tracker.RecordedFileChange
 	Err     error
+	Gen     uint64
 }
 
 // CASSContextMsg is sent when relevant context is found
 type CASSContextMsg struct {
 	Hits []cass.SearchHit
 	Err  error
+	Gen  uint64
 }
 
 // HealthUpdateMsg is sent when agent health check completes
@@ -136,6 +147,7 @@ type HealthUpdateMsg struct {
 type RoutingUpdateMsg struct {
 	Scores map[string]RoutingScore // keyed by pane ID
 	Err    error
+	Gen    uint64
 }
 
 // CheckpointUpdateMsg is sent when checkpoint status is fetched
@@ -145,6 +157,7 @@ type CheckpointUpdateMsg struct {
 	LatestAge time.Duration // Age of latest checkpoint
 	Status    string        // "recent", "stale", "old", "none"
 	Err       error
+	Gen       uint64
 }
 
 // CheckpointCreatedMsg is sent when a new checkpoint is created
@@ -180,6 +193,25 @@ const (
 	PanelHistory
 	PanelSidebar
 	PanelCount // Total number of focusable panels
+)
+
+type refreshSource int
+
+const (
+	refreshSession refreshSource = iota
+	refreshStatus
+	refreshBeads
+	refreshAlerts
+	refreshMetrics
+	refreshHistory
+	refreshFiles
+	refreshCass
+	refreshScan
+	refreshCheckpoint
+	refreshSpawn
+	refreshAgentMail
+	refreshRouting
+	refreshSourceCount
 )
 
 // Model is the session dashboard model
@@ -222,6 +254,10 @@ type Model struct {
 	agentStatuses map[string]status.AgentStatus // keyed by pane ID
 	lastRefresh   time.Time
 	refreshPaused bool
+
+	// Refresh sequencing (prevents stale async updates)
+	refreshSeq  [refreshSourceCount]uint64
+	lastUpdated [refreshSourceCount]time.Time
 
 	// Subsystem refresh timers
 	lastPaneFetch        time.Time
@@ -603,6 +639,98 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
+func (m *Model) nextGen(src refreshSource) uint64 {
+	m.refreshSeq[src]++
+	return m.refreshSeq[src]
+}
+
+func (m *Model) isStale(src refreshSource, gen uint64) bool {
+	return gen > 0 && gen < m.refreshSeq[src]
+}
+
+func (m *Model) markUpdated(src refreshSource, t time.Time) {
+	if t.IsZero() {
+		t = time.Now()
+	}
+	m.lastUpdated[src] = t
+}
+
+func (m *Model) acceptUpdate(src refreshSource, gen uint64) bool {
+	if m.isStale(src, gen) {
+		return false
+	}
+	if gen > m.refreshSeq[src] {
+		m.refreshSeq[src] = gen
+	}
+	return true
+}
+
+func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	prevWidth := m.width
+	prevHeight := m.height
+	prevTier := m.tier
+
+	width := msg.Width
+	height := msg.Height
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+
+	m.width = width
+	m.height = height
+	m.tier = layout.TierForWidth(width)
+
+	m.cycleFocus(0)
+
+	_, detailWidth := layout.SplitProportions(width)
+	contentWidth := detailWidth - 4
+	if contentWidth < 20 {
+		contentWidth = 20
+	}
+	m.initRenderer(contentWidth)
+
+	if prevWidth != m.width || prevHeight != m.height {
+		m.renderedOutputCache = make(map[string]string)
+	}
+
+	searchW := int(float64(width) * 0.6)
+	searchH := int(float64(height) * 0.6)
+	if searchW < 20 {
+		searchW = 20
+	}
+	if searchH < 10 {
+		searchH = 10
+	}
+	m.cassSearch.SetSize(searchW, searchH)
+
+	m.resizePanelsForLayout()
+
+	if dashboardDebugEnabled(m) {
+		contentHeight := contentHeightFor(m.height)
+		log.Printf("[dashboard] resize width=%d height=%d contentHeight=%d tier=%s",
+			m.width, m.height, contentHeight, tierLabel(m.tier))
+		log.Printf("[dashboard] panels %s %s %s %s %s %s %s",
+			logPanelSize("beads", m.beadsPanel),
+			logPanelSize("alerts", m.alertsPanel),
+			logPanelSize("metrics", m.metricsPanel),
+			logPanelSize("history", m.historyPanel),
+			logPanelSize("files", m.filesPanel),
+			logPanelSize("cass", m.cassPanel),
+			logPanelSize("spawn", m.spawnPanel),
+		)
+	}
+
+	if prevTier != m.tier {
+		log.Printf("[dashboard] tier transition %s -> %s (width=%d height=%d)",
+			tierLabel(prevTier), tierLabel(m.tier), m.width, m.height)
+	}
+
+	return m, nil
+}
+
 func (m Model) subscribeToConfig() tea.Cmd {
 	return func() tea.Msg {
 		if m.configSub == nil {
@@ -651,10 +779,11 @@ func (m Model) fetchHealthStatus() tea.Cmd {
 	}
 }
 
-func (m Model) fetchScanStatusWithContext(ctx context.Context) tea.Cmd {
+func (m *Model) fetchScanStatusWithContext(ctx context.Context) tea.Cmd {
+	gen := m.nextGen(refreshScan)
 	return func() tea.Msg {
 		if !scanner.IsAvailable() {
-			return ScanStatusMsg{Status: "unavailable"}
+			return ScanStatusMsg{Status: "unavailable", Gen: gen}
 		}
 
 		if ctx == nil {
@@ -674,17 +803,17 @@ func (m Model) fetchScanStatusWithContext(ctx context.Context) tea.Cmd {
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				if errors.Is(ctxErr, context.Canceled) {
-					return ScanStatusMsg{Err: ctxErr}
+					return ScanStatusMsg{Err: ctxErr, Gen: gen}
 				}
-				return ScanStatusMsg{Status: "error", Err: ctxErr}
+				return ScanStatusMsg{Status: "error", Err: ctxErr, Gen: gen}
 			}
 			if errors.Is(err, context.Canceled) {
-				return ScanStatusMsg{Err: err}
+				return ScanStatusMsg{Err: err, Gen: gen}
 			}
-			return ScanStatusMsg{Status: "error", Err: err}
+			return ScanStatusMsg{Status: "error", Err: err, Gen: gen}
 		}
 		if result == nil {
-			return ScanStatusMsg{Status: "unavailable"}
+			return ScanStatusMsg{Status: "unavailable", Gen: gen}
 		}
 
 		status := "clean"
@@ -704,17 +833,19 @@ func (m Model) fetchScanStatusWithContext(ctx context.Context) tea.Cmd {
 			Status:   status,
 			Totals:   result.Totals,
 			Duration: dur,
+			Gen:      gen,
 		}
 	}
 }
 
 // fetchAgentMailStatus fetches Agent Mail data (locks, connection status)
-func (m Model) fetchAgentMailStatus() tea.Cmd {
+func (m *Model) fetchAgentMailStatus() tea.Cmd {
+	gen := m.nextGen(refreshAgentMail)
 	return func() tea.Msg {
 		// Get project key from current working directory
 		projectKey, err := os.Getwd()
 		if err != nil {
-			return AgentMailUpdateMsg{Available: false}
+			return AgentMailUpdateMsg{Available: false, Gen: gen}
 		}
 
 		client := agentmail.NewClient(agentmail.WithProjectKey(projectKey))
@@ -723,13 +854,13 @@ func (m Model) fetchAgentMailStatus() tea.Cmd {
 
 		// Check availability
 		if !client.IsAvailable() {
-			return AgentMailUpdateMsg{Available: false}
+			return AgentMailUpdateMsg{Available: false, Gen: gen}
 		}
 
 		// Ensure project exists
 		_, err = client.EnsureProject(ctx, projectKey)
 		if err != nil {
-			return AgentMailUpdateMsg{Available: true, Connected: false}
+			return AgentMailUpdateMsg{Available: true, Connected: false, Gen: gen}
 		}
 
 		// Fetch file reservations
@@ -766,12 +897,14 @@ func (m Model) fetchAgentMailStatus() tea.Cmd {
 			Connected: true,
 			Locks:     len(lockInfo),
 			LockInfo:  lockInfo,
+			Gen:       gen,
 		}
 	}
 }
 
 // fetchCheckpointStatus fetches checkpoint status for the session
-func (m Model) fetchCheckpointStatus() tea.Cmd {
+func (m *Model) fetchCheckpointStatus() tea.Cmd {
+	gen := m.nextGen(refreshCheckpoint)
 	session := m.session
 	return func() tea.Msg {
 		storage := checkpoint.NewStorage()
@@ -780,6 +913,7 @@ func (m Model) fetchCheckpointStatus() tea.Cmd {
 			return CheckpointUpdateMsg{
 				Status: "none",
 				Err:    err,
+				Gen:    gen,
 			}
 		}
 
@@ -787,6 +921,7 @@ func (m Model) fetchCheckpointStatus() tea.Cmd {
 			return CheckpointUpdateMsg{
 				Count:  0,
 				Status: "none",
+				Gen:    gen,
 			}
 		}
 
@@ -810,6 +945,7 @@ func (m Model) fetchCheckpointStatus() tea.Cmd {
 			Latest:    latest,
 			LatestAge: age,
 			Status:    status,
+			Gen:       gen,
 		}
 	}
 }
@@ -842,9 +978,10 @@ type SessionDataWithOutputMsg struct {
 	Duration          time.Duration
 	NextCaptureCursor int
 	Err               error
+	Gen               uint64
 }
 
-func (m Model) fetchSessionDataWithOutputs() tea.Cmd {
+func (m *Model) fetchSessionDataWithOutputs() tea.Cmd {
 	return m.fetchSessionDataWithOutputsCtx(context.Background())
 }
 
@@ -950,7 +1087,69 @@ func (m *Model) finishScanFetch() tea.Cmd {
 	return m.startScanFetch()
 }
 
-func (m Model) fetchSessionDataWithOutputsCtx(ctx context.Context) tea.Cmd {
+func (m *Model) fullRefresh(cancelInFlight bool) []tea.Cmd {
+	var cmds []tea.Cmd
+	now := time.Now()
+
+	if cmd := m.requestSessionFetch(cancelInFlight); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := m.requestStatusesFetch(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := m.requestScanFetch(cancelInFlight); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if !m.fetchingBeads {
+		m.fetchingBeads = true
+		m.lastBeadsFetch = now
+		cmds = append(cmds, m.fetchBeadsCmd())
+	}
+	if !m.fetchingAlerts {
+		m.fetchingAlerts = true
+		m.lastAlertsFetch = now
+		cmds = append(cmds, m.fetchAlertsCmd())
+	}
+	if !m.fetchingMetrics {
+		m.fetchingMetrics = true
+		cmds = append(cmds, m.fetchMetricsCmd())
+	}
+	if !m.fetchingRouting {
+		m.fetchingRouting = true
+		cmds = append(cmds, m.fetchRoutingCmd())
+	}
+	if !m.fetchingHistory {
+		m.fetchingHistory = true
+		cmds = append(cmds, m.fetchHistoryCmd())
+	}
+	if !m.fetchingFileChanges {
+		m.fetchingFileChanges = true
+		cmds = append(cmds, m.fetchFileChangesCmd())
+	}
+	if !m.fetchingCassContext {
+		m.fetchingCassContext = true
+		m.lastCassContextFetch = now
+		cmds = append(cmds, m.fetchCASSContextCmd())
+	}
+	if !m.fetchingCheckpoint {
+		m.fetchingCheckpoint = true
+		m.lastCheckpointFetch = now
+		cmds = append(cmds, m.fetchCheckpointStatus())
+	}
+	if !m.fetchingSpawn {
+		m.fetchingSpawn = true
+		m.lastSpawnFetch = now
+		cmds = append(cmds, m.fetchSpawnStateCmd())
+	}
+
+	// Agent mail status is light enough to refresh on demand.
+	cmds = append(cmds, m.fetchAgentMailStatus())
+
+	return cmds
+}
+
+func (m *Model) fetchSessionDataWithOutputsCtx(ctx context.Context) tea.Cmd {
+	gen := m.nextGen(refreshSession)
 	outputLines := m.paneOutputLines
 	budget := m.paneOutputCaptureBudget
 	startCursor := m.paneOutputCaptureCursor
@@ -971,7 +1170,7 @@ func (m Model) fetchSessionDataWithOutputsCtx(ctx context.Context) tea.Cmd {
 
 		panesWithActivity, err := tmux.GetPanesWithActivityContext(ctx, session)
 		if err != nil {
-			return SessionDataWithOutputMsg{Err: err, Duration: time.Since(start)}
+			return SessionDataWithOutputMsg{Err: err, Duration: time.Since(start), Gen: gen}
 		}
 
 		panes := make([]tmux.Pane, 0, len(panesWithActivity))
@@ -984,13 +1183,13 @@ func (m Model) fetchSessionDataWithOutputsCtx(ctx context.Context) tea.Cmd {
 		var outputs []PaneOutputData
 		for _, pane := range plan.Targets {
 			if err := ctx.Err(); err != nil {
-				return SessionDataWithOutputMsg{Err: err, Duration: time.Since(start)}
+				return SessionDataWithOutputMsg{Err: err, Duration: time.Since(start), Gen: gen}
 			}
 
 			out, err := tmux.CapturePaneOutputContext(ctx, pane.Pane.ID, outputLines)
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
-					return SessionDataWithOutputMsg{Err: ctxErr, Duration: time.Since(start)}
+					return SessionDataWithOutputMsg{Err: ctxErr, Duration: time.Since(start), Gen: gen}
 				}
 				continue
 			}
@@ -1005,7 +1204,7 @@ func (m Model) fetchSessionDataWithOutputsCtx(ctx context.Context) tea.Cmd {
 		}
 
 		if err := ctx.Err(); err != nil {
-			return SessionDataWithOutputMsg{Err: err, Duration: time.Since(start)}
+			return SessionDataWithOutputMsg{Err: err, Duration: time.Since(start), Gen: gen}
 		}
 
 		return SessionDataWithOutputMsg{
@@ -1013,6 +1212,7 @@ func (m Model) fetchSessionDataWithOutputsCtx(ctx context.Context) tea.Cmd {
 			Outputs:           outputs,
 			Duration:          time.Since(start),
 			NextCaptureCursor: plan.NextCursor,
+			Gen:               gen,
 		}
 	}
 }
@@ -1136,7 +1336,8 @@ func copyTimeMap(src map[string]time.Time) map[string]time.Time {
 }
 
 // fetchStatuses runs unified status detection across all panes
-func (m Model) fetchStatuses() tea.Cmd {
+func (m *Model) fetchStatuses() tea.Cmd {
+	gen := m.nextGen(refreshStatus)
 	return func() tea.Msg {
 		start := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
@@ -1146,9 +1347,9 @@ func (m Model) fetchStatuses() tea.Cmd {
 		duration := time.Since(start)
 		if err != nil {
 			// Keep UI responsive even if detection fails
-			return StatusUpdateMsg{Statuses: nil, Time: time.Now(), Duration: duration, Err: err}
+			return StatusUpdateMsg{Statuses: nil, Time: time.Now(), Duration: duration, Err: err, Gen: gen}
 		}
-		return StatusUpdateMsg{Statuses: statuses, Time: time.Now(), Duration: duration}
+		return StatusUpdateMsg{Statuses: statuses, Time: time.Now(), Duration: duration, Gen: gen}
 	}
 }
 
@@ -1213,27 +1414,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case BeadsUpdateMsg:
+		if !m.acceptUpdate(refreshBeads, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingBeads = false
 		m.beadsError = msg.Err
 		if msg.Err == nil {
 			m.beadsSummary = msg.Summary
 			m.beadsReady = msg.Ready
+			m.markUpdated(refreshBeads, time.Now())
 		}
 		m.beadsPanel.SetData(m.beadsSummary, m.beadsReady, m.beadsError)
 		return m, nil
 
 	case AlertsUpdateMsg:
+		if !m.acceptUpdate(refreshAlerts, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingAlerts = false
 		m.alertsError = msg.Err
 		if msg.Err == nil {
 			m.activeAlerts = msg.Alerts
+			m.markUpdated(refreshAlerts, time.Now())
 		}
 		m.alertsPanel.SetData(m.activeAlerts, m.alertsError)
 		return m, nil
 
 	case SpawnUpdateMsg:
+		if !m.acceptUpdate(refreshSpawn, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingSpawn = false
 		m.spawnPanel.SetData(msg.Data)
+		m.markUpdated(refreshSpawn, time.Now())
 
 		// Adaptive polling: faster when spawn is active for smooth countdown display,
 		// slower when idle to reduce CPU/render churn
@@ -1252,6 +1465,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case MetricsUpdateMsg:
+		if !m.acceptUpdate(refreshMetrics, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingMetrics = false
 		if msg.Err != nil && errors.Is(msg.Err, context.Canceled) {
 			return m, nil
@@ -1261,11 +1477,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.metricsTokens = msg.Data.TotalTokens
 			m.metricsCost = msg.Data.TotalCost
 			m.metricsData = msg.Data
+			m.markUpdated(refreshMetrics, time.Now())
 		}
 		m.metricsPanel.SetData(m.metricsData, m.metricsError)
 		return m, nil
 
 	case HistoryUpdateMsg:
+		if !m.acceptUpdate(refreshHistory, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingHistory = false
 		if msg.Err != nil && errors.Is(msg.Err, context.Canceled) {
 			return m, nil
@@ -1273,11 +1493,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.historyError = msg.Err
 		if msg.Err == nil {
 			m.cmdHistory = msg.Entries
+			m.markUpdated(refreshHistory, time.Now())
 		}
 		m.historyPanel.SetEntries(m.cmdHistory, m.historyError)
 		return m, nil
 
 	case FileChangeMsg:
+		if !m.acceptUpdate(refreshFiles, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingFileChanges = false
 		if msg.Err != nil && errors.Is(msg.Err, context.Canceled) {
 			return m, nil
@@ -1285,6 +1509,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fileChangesError = msg.Err
 		if msg.Err == nil {
 			m.fileChanges = msg.Changes
+			m.markUpdated(refreshFiles, time.Now())
 		}
 		if m.filesPanel != nil {
 			m.filesPanel.SetData(m.fileChanges, m.fileChangesError)
@@ -1292,15 +1517,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case CASSContextMsg:
+		if !m.acceptUpdate(refreshCass, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingCassContext = false
 		m.cassError = msg.Err
 		m.cassContext = msg.Hits
 		if m.cassPanel != nil {
 			m.cassPanel.SetData(m.cassContext, m.cassError)
 		}
+		if msg.Err == nil {
+			m.markUpdated(refreshCass, time.Now())
+		}
 		return m, nil
 
 	case RoutingUpdateMsg:
+		if !m.acceptUpdate(refreshRouting, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingRouting = false
 		m.routingError = msg.Err
 		if msg.Err == nil && msg.Scores != nil {
@@ -1308,13 +1542,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Merge routing data into metrics data
 			m.metricsData = m.mergeRoutingIntoMetrics(m.metricsData, msg.Scores)
 			m.metricsPanel.SetData(m.metricsData, m.metricsError)
+			m.markUpdated(refreshRouting, time.Now())
 		}
 		return m, nil
 
 	case tea.WindowSizeMsg:
+		prevWidth := m.width
+		prevHeight := m.height
+		prevTier := m.tier
+
 		m.width = msg.Width
 		m.height = msg.Height
 		m.tier = layout.TierForWidth(msg.Width)
+
+		m.cycleFocus(0)
 
 		_, detailWidth := layout.SplitProportions(msg.Width)
 		contentWidth := detailWidth - 4
@@ -1323,9 +1564,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.initRenderer(contentWidth)
 
+		if prevWidth != m.width || prevHeight != m.height {
+			m.renderedOutputCache = make(map[string]string)
+		}
+
 		searchW := int(float64(msg.Width) * 0.6)
 		searchH := int(float64(msg.Height) * 0.6)
 		m.cassSearch.SetSize(searchW, searchH)
+
+		m.resizePanelsForLayout()
+
+		if dashboardDebugEnabled(&m) {
+			contentHeight := contentHeightFor(m.height)
+			log.Printf("[dashboard] resize width=%d height=%d contentHeight=%d tier=%s",
+				m.width, m.height, contentHeight, tierLabel(m.tier))
+			log.Printf("[dashboard] panels %s %s %s %s %s %s %s",
+				logPanelSize("beads", m.beadsPanel),
+				logPanelSize("alerts", m.alertsPanel),
+				logPanelSize("metrics", m.metricsPanel),
+				logPanelSize("history", m.historyPanel),
+				logPanelSize("files", m.filesPanel),
+				logPanelSize("cass", m.cassPanel),
+				logPanelSize("spawn", m.spawnPanel),
+			)
+		}
+
+		if prevTier != m.tier {
+			log.Printf("[dashboard] tier transition %s -> %s (width=%d height=%d)",
+				tierLabel(prevTier), tierLabel(m.tier), m.width, m.height)
+		}
 
 		return m, tea.Batch(cmds...)
 
@@ -1338,110 +1605,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Drive staggered refreshes on the animation ticker to avoid a single heavy burst.
 		now := time.Now()
 		if !m.refreshPaused {
-			if now.Sub(m.lastPaneFetch) >= m.paneRefreshInterval && !m.fetchingSession {
-				if cmd := m.requestSessionFetch(false); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			}
-			if !m.scanDisabled && m.scanRefreshInterval > 0 && now.Sub(m.lastScanFetch) >= m.scanRefreshInterval && !m.fetchingScan {
-				m.lastScanFetch = now
-				if cmd := m.requestScanFetch(false); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			}
-			if now.Sub(m.lastContextFetch) >= m.contextRefreshInterval && !m.fetchingContext {
-				if cmd := m.requestStatusesFetch(); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-
-				if !m.fetchingMetrics {
-					m.fetchingMetrics = true
-					cmds = append(cmds, m.fetchMetricsCmd())
-				}
-				if !m.fetchingRouting {
-					m.fetchingRouting = true
-					cmds = append(cmds, m.fetchRoutingCmd())
-				}
-				if !m.fetchingHistory {
-					m.fetchingHistory = true
-					cmds = append(cmds, m.fetchHistoryCmd())
-				}
-				if !m.fetchingFileChanges {
-					m.fetchingFileChanges = true
-					cmds = append(cmds, m.fetchFileChangesCmd())
-				}
-			}
-			if now.Sub(m.lastAlertsFetch) >= m.alertsRefreshInterval && !m.fetchingAlerts {
-				m.fetchingAlerts = true
-				cmds = append(cmds, m.fetchAlertsCmd())
-				m.lastAlertsFetch = now
-			}
-			if now.Sub(m.lastBeadsFetch) >= m.beadsRefreshInterval && !m.fetchingBeads {
-				m.fetchingBeads = true
-				m.lastBeadsFetch = now
-				cmds = append(cmds, m.fetchBeadsCmd())
-			}
-			if now.Sub(m.lastCassContextFetch) >= m.cassContextRefreshInterval && !m.fetchingCassContext {
-				m.fetchingCassContext = true
-				m.lastCassContextFetch = now
-				cmds = append(cmds, m.fetchCASSContextCmd())
-			}
-			if now.Sub(m.lastCheckpointFetch) >= m.checkpointRefreshInterval && !m.fetchingCheckpoint {
-				m.fetchingCheckpoint = true
-				m.lastCheckpointFetch = now
-				cmds = append(cmds, m.fetchCheckpointStatus())
-			}
-		}
-
-		// Poll spawn state at adaptive rate (faster when active, slower when idle)
-		// This prevents jitter from polling 10x/sec when no spawn is happening
-		if now.Sub(m.lastSpawnFetch) >= m.spawnRefreshInterval && !m.fetchingSpawn {
-			m.fetchingSpawn = true
-			m.lastSpawnFetch = now
-			cmds = append(cmds, m.fetchSpawnStateCmd())
+			cmds = append(cmds, m.scheduleRefreshes(now)...)
 		}
 
 		cmds = append(cmds, m.tick())
 		return m, tea.Batch(cmds...)
 
 	case RefreshMsg:
-		// Trigger async fetches across subsystems (coalesced to avoid pile-up).
-		if cmd := m.requestSessionFetch(false); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		if cmd := m.requestStatusesFetch(); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		if !m.fetchingBeads {
-			m.fetchingBeads = true
-			m.lastBeadsFetch = time.Now()
-			cmds = append(cmds, m.fetchBeadsCmd())
-		}
-		if !m.fetchingAlerts {
-			m.fetchingAlerts = true
-			m.lastAlertsFetch = time.Now()
-			cmds = append(cmds, m.fetchAlertsCmd())
-		}
-		if !m.fetchingMetrics {
-			m.fetchingMetrics = true
-			cmds = append(cmds, m.fetchMetricsCmd())
-		}
-		if !m.fetchingHistory {
-			m.fetchingHistory = true
-			cmds = append(cmds, m.fetchHistoryCmd())
-		}
-		if !m.fetchingFileChanges {
-			m.fetchingFileChanges = true
-			cmds = append(cmds, m.fetchFileChangesCmd())
-		}
-		if !m.fetchingCassContext {
-			m.fetchingCassContext = true
-			m.lastCassContextFetch = time.Now()
-			cmds = append(cmds, m.fetchCASSContextCmd())
-		}
-		return m, tea.Batch(cmds...)
+		// Trigger a coordinated refresh across subsystems (coalesced to avoid pile-up).
+		return m, tea.Batch(m.fullRefresh(false)...)
 
 	case SessionDataWithOutputMsg:
+		if !m.acceptUpdate(refreshSession, msg.Gen) {
+			return m, nil
+		}
 		followUp := m.finishSessionFetch()
 		m.sessionFetchLatency = msg.Duration
 
@@ -1454,6 +1631,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = nil
 		m.lastRefresh = time.Now()
+		m.markUpdated(refreshSession, time.Now())
 
 		{
 			prevSelectedID := ""
@@ -1515,25 +1693,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				// Map type string to model name for context limits
-				agentType := "unknown"
+				statusAgentType := data.AgentType
 				modelName := ""
 				switch data.AgentType {
 				case string(tmux.AgentClaude):
-					agentType = "claude"
 					if m.cfg != nil {
 						modelName = m.cfg.Models.DefaultClaude
 					} else {
 						modelName = "claude-sonnet-4-20250514"
 					}
 				case string(tmux.AgentCodex):
-					agentType = "codex"
 					if m.cfg != nil {
 						modelName = m.cfg.Models.DefaultCodex
 					} else {
 						modelName = "gpt-4"
 					}
 				case string(tmux.AgentGemini):
-					agentType = "gemini"
 					if m.cfg != nil {
 						modelName = m.cfg.Models.DefaultGemini
 					} else {
@@ -1550,7 +1725,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				ps := m.paneStatus[data.PaneIndex]
 
 				// Update LIVE STATUS using local analysis (avoid waiting for slow full fetch)
-				st := m.detector.Analyze(data.PaneID, currentPane.Title, agentType, data.Output, data.LastActivity)
+				st := m.detector.Analyze(data.PaneID, currentPane.Title, statusAgentType, data.Output, data.LastActivity)
 
 				state := string(st.State)
 				// Rate limit check
@@ -1573,7 +1748,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				// Compaction check
-				event, recoverySent, _ := m.compaction.CheckAndRecover(data.Output, agentType, m.session, data.PaneIndex)
+				event, recoverySent, _ := m.compaction.CheckAndRecover(data.Output, statusAgentType, m.session, data.PaneIndex)
 
 				if event != nil {
 					now := time.Now()
@@ -1588,6 +1763,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, followUp
 
 	case StatusUpdateMsg:
+		if !m.acceptUpdate(refreshStatus, msg.Gen) {
+			return m, nil
+		}
 		followUp := m.finishStatusesFetch()
 		m.statusFetchLatency = msg.Duration
 		m.statusFetchErr = msg.Err
@@ -1630,6 +1808,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.renderedOutputCache[st.PaneID] = rendered
 				}
 			}
+		}
+		if msg.Err == nil {
+			m.markUpdated(refreshStatus, msg.Time)
 		}
 		m.lastRefresh = msg.Time
 		// Also refresh health data after status update
@@ -1684,6 +1865,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ScanStatusMsg:
+		if !m.acceptUpdate(refreshScan, msg.Gen) {
+			return m, nil
+		}
 		followUp := m.finishScanFetch()
 		if msg.Err != nil && errors.Is(msg.Err, context.Canceled) {
 			return m, followUp
@@ -1694,17 +1878,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scanStatus = msg.Status
 			m.scanTotals = msg.Totals
 			m.scanDuration = msg.Duration
+			m.markUpdated(refreshScan, time.Now())
 		}
 		return m, followUp
 
 	case AgentMailUpdateMsg:
+		if !m.acceptUpdate(refreshAgentMail, msg.Gen) {
+			return m, nil
+		}
 		m.agentMailAvailable = msg.Available
 		m.agentMailConnected = msg.Connected
 		m.agentMailLocks = msg.Locks
 		m.agentMailLockInfo = msg.LockInfo
+		m.markUpdated(refreshAgentMail, time.Now())
 		return m, nil
 
 	case CheckpointUpdateMsg:
+		if !m.acceptUpdate(refreshCheckpoint, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingCheckpoint = false
 		m.lastCheckpointFetch = time.Now()
 		if msg.Err != nil {
@@ -1718,6 +1910,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.latestCheckpoint = msg.Latest
 			m.checkpointStatus = msg.Status
 			m.checkpointError = nil
+			m.markUpdated(refreshCheckpoint, time.Now())
 		}
 		return m, nil
 
@@ -1791,31 +1984,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, dashKeys.Refresh):
 			// Manual refresh (coalesced; cancels in-flight where supported)
-			var refreshCmds []tea.Cmd
-			if cmd := m.requestSessionFetch(true); cmd != nil {
-				refreshCmds = append(refreshCmds, cmd)
-			}
-			if cmd := m.requestStatusesFetch(); cmd != nil {
-				refreshCmds = append(refreshCmds, cmd)
-			}
-			if cmd := m.requestScanFetch(true); cmd != nil {
-				refreshCmds = append(refreshCmds, cmd)
-			}
-			return m, tea.Batch(refreshCmds...)
+			return m, tea.Batch(m.fullRefresh(true)...)
 
 		case key.Matches(msg, dashKeys.ContextRefresh):
 			// Force context refresh (same as regular refresh but with user intent to see context)
-			var refreshCmds []tea.Cmd
-			if cmd := m.requestSessionFetch(true); cmd != nil {
-				refreshCmds = append(refreshCmds, cmd)
-			}
-			if cmd := m.requestStatusesFetch(); cmd != nil {
-				refreshCmds = append(refreshCmds, cmd)
-			}
-			if cmd := m.requestScanFetch(true); cmd != nil {
-				refreshCmds = append(refreshCmds, cmd)
-			}
-			return m, tea.Batch(refreshCmds...)
+			return m, tea.Batch(m.fullRefresh(true)...)
 
 		case key.Matches(msg, dashKeys.MailRefresh):
 			// Refresh Agent Mail data
@@ -1919,12 +2092,25 @@ func (m *Model) updateStats() {
 
 // updateTickerData updates the ticker panel with current dashboard data
 func (m *Model) updateTickerData() {
-	// Count active agents (those with "working" state)
+	// Count active agents (those with any known status, not just "working")
+	// "Active" means status has been determined - could be working, idle, error, or compacted
+	// This gives a more accurate picture than only counting actively working agents
 	activeAgents := 0
 	for _, ps := range m.paneStatus {
-		if ps.State == "working" {
+		// Count as active if state is known (non-empty)
+		// Empty or missing state means status detection hasn't run yet
+		if ps.State != "" {
 			activeAgents++
 		}
+	}
+	// Fallback: if no panes have determined status yet but we have panes, count agent panes
+	// (excludes user panes which are type "user" or empty)
+	// Note: We check activeAgents==0 rather than len(paneStatus)==0 because paneStatus
+	// may have entries with empty State when status detection is still pending
+	if activeAgents == 0 && len(m.panes) > 0 {
+		// Status detection hasn't populated yet; show total agents as placeholder
+		// This prevents showing "0/17" when we simply haven't fetched status yet
+		activeAgents = m.claudeCount + m.codexCount + m.geminiCount
 	}
 
 	// Count alerts by severity
@@ -1947,6 +2133,7 @@ func (m *Model) updateTickerData() {
 		ClaudeCount:      m.claudeCount,
 		CodexCount:       m.codexCount,
 		GeminiCount:      m.geminiCount,
+		UserCount:        m.userCount,
 		CriticalAlerts:   critAlerts,
 		WarningAlerts:    warnAlerts,
 		InfoAlerts:       infoAlerts,
@@ -1970,11 +2157,50 @@ func (m *Model) updateTickerData() {
 
 // View implements tea.Model
 func (m Model) View() string {
+	if m.showHelp {
+		helpOverlay := components.HelpOverlay(components.HelpOverlayOptions{
+			Title:    "Dashboard Shortcuts",
+			Sections: components.DashboardHelpSections(),
+			MaxWidth: 60,
+		})
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpOverlay)
+	}
+
+	if m.showCassSearch {
+		searchView := m.cassSearch.View()
+		modalStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(m.theme.Primary).
+			Background(m.theme.Base).
+			Padding(1, 2)
+		modal := modalStyle.Render(searchView)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	}
+
+	header := m.renderHeaderSection()
+	footer := m.renderFooterSection()
+	content := m.renderMainContentSection()
+
+	if m.height > 0 {
+		available := m.height - lipgloss.Height(header) - lipgloss.Height(footer)
+		if available < 1 {
+			available = 1
+		}
+		// Truncate content to fit within available height.
+		// lipgloss Height/MaxHeight don't truncate - they're CSS-like properties.
+		content = truncateToHeight(content, available)
+		// Apply height style to ensure consistent spacing
+		content = lipgloss.NewStyle().Height(available).MaxHeight(available).Render(content)
+	}
+
+	return header + content + footer
+}
+
+func (m Model) renderHeaderSection() string {
 	t := m.theme
 	ic := m.icons
 
 	var b strings.Builder
-
 	b.WriteString("\n")
 
 	// ═══════════════════════════════════════════════════════════════
@@ -2015,6 +2241,12 @@ func (m Model) View() string {
 	if alert := m.renderRateLimitAlert(); alert != "" {
 		b.WriteString(alert + "\n\n")
 	}
+
+	return b.String()
+}
+
+func (m Model) renderMainContentSection() string {
+	var b strings.Builder
 
 	// ═══════════════════════════════════════════════════════════════
 	// PANE GRID VISUALIZATION
@@ -2062,6 +2294,14 @@ func (m Model) View() string {
 		}
 	}
 
+	return b.String()
+}
+
+func (m Model) renderFooterSection() string {
+	t := m.theme
+
+	var b strings.Builder
+
 	// ═══════════════════════════════════════════════════════════════
 	// TICKER BAR (scrolling status summary)
 	// ═══════════════════════════════════════════════════════════════
@@ -2083,30 +2323,7 @@ func (m Model) View() string {
 		string(t.Surface2), string(t.Surface1)) + "\n")
 	b.WriteString("  " + m.renderHelpBar() + "\n")
 
-	content := b.String()
-
-	// Show help overlay if toggled
-	if m.showHelp {
-		helpOverlay := components.HelpOverlay(components.HelpOverlayOptions{
-			Title:    "Dashboard Shortcuts",
-			Sections: components.DashboardHelpSections(),
-			MaxWidth: 60,
-		})
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpOverlay)
-	}
-
-	if m.showCassSearch {
-		searchView := m.cassSearch.View()
-		modalStyle := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(t.Primary).
-			Background(t.Base).
-			Padding(1, 2)
-		modal := modalStyle.Render(searchView)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
-	}
-
-	return content
+	return b.String()
 }
 
 func (m Model) renderStatsBar() string {
@@ -2546,7 +2763,7 @@ func (m Model) renderPaneGrid() string {
 		var line2Parts []string
 		line2Parts = append(line2Parts, numBadge)
 		if p.Variant != "" {
-			label := layout.TruncateRunes(p.Variant, 12, "…")
+			label := layout.TruncateWidthDefault(p.Variant, 12)
 			modelBadge := styles.TextBadge(label, iconColor, t.Base, styles.BadgeOptions{
 				Style:    styles.BadgeStyleCompact,
 				Bold:     false,
@@ -2633,7 +2850,7 @@ func (m Model) renderPaneGrid() string {
 			// Show first health issue as tooltip
 			if len(ps.HealthIssues) > 0 && showExtendedInfo {
 				issueStyle := lipgloss.NewStyle().Foreground(t.Overlay).Italic(true)
-				issue := layout.TruncateRunes(ps.HealthIssues[0], maxInt(cardWidth-4, 10), "…")
+				issue := layout.TruncateWidthDefault(ps.HealthIssues[0], maxInt(cardWidth-4, 10))
 				healthBadges = append(healthBadges, issueStyle.Render(issue))
 			}
 
@@ -2653,7 +2870,7 @@ func (m Model) renderPaneGrid() string {
 		// Command running (if any) - only when there is room
 		if p.Command != "" && showExtendedInfo {
 			cmdStyle := lipgloss.NewStyle().Foreground(t.Overlay).Italic(true)
-			cmd := layout.TruncateRunes(p.Command, maxInt(cardWidth-4, 8), "…")
+			cmd := layout.TruncateWidthDefault(p.Command, maxInt(cardWidth-4, 8))
 			cardContent.WriteString(cmdStyle.Render(cmd))
 		}
 
@@ -2903,7 +3120,7 @@ func (m Model) renderHeaderContextLine(width int) string {
 	}
 
 	line := strings.Join(parts, " · ")
-	line = truncateRunes(line, width-4)
+	line = layout.TruncateWidthDefault(line, width-4)
 
 	return lipgloss.NewStyle().
 		Foreground(t.Subtext).
@@ -2935,19 +3152,19 @@ func formatRelativeTime(d time.Duration) string {
 	return fmt.Sprintf("%dd ago", days)
 }
 
-func truncateRunes(s string, maxLen int) string {
-	if maxLen <= 0 {
-		return ""
+func formatAgeShort(d time.Duration) string {
+	if d < 0 {
+		d = 0
 	}
-
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
+	d = d.Round(time.Second)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
-	if maxLen == 1 {
-		return "…"
-	}
-	return string(runes[:maxLen-1]) + "…"
 }
 
 func (m Model) renderDiagnosticsBar(width int) string {
@@ -2984,6 +3201,17 @@ func (m Model) renderDiagnosticsBar(width int) string {
 		labelStyle.Render("diag"),
 		labelStyle.Render("tmux") + ":" + sessionPart,
 		labelStyle.Render("status") + ":" + statusPart,
+	}
+	if width >= 120 {
+		age := func(src refreshSource) string {
+			t := m.lastUpdated[src]
+			if t.IsZero() {
+				return "n/a"
+			}
+			return formatAgeShort(time.Since(t))
+		}
+		agePart := valueStyle.Render(fmt.Sprintf("panes %s, status %s, beads %s", age(refreshSession), age(refreshStatus), age(refreshBeads)))
+		parts = append(parts, labelStyle.Render("age")+":"+agePart)
 	}
 
 	box := lipgloss.NewStyle().
@@ -3028,6 +3256,229 @@ func maxInt(a, b int) int {
 	return b
 }
 
+func contentHeightFor(total int) int {
+	contentHeight := total - 14
+	if contentHeight < 5 {
+		contentHeight = 5
+	}
+	return contentHeight
+}
+
+// truncateToHeight truncates content to fit within maxLines.
+// If the content has more lines than maxLines, it truncates and optionally
+// shows a "more" indicator. This is needed because lipgloss's Height/MaxHeight
+// don't actually truncate content - they're CSS-like properties for layout.
+func truncateToHeight(content string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) <= maxLines {
+		return content
+	}
+	// Truncate to maxLines
+	return strings.Join(lines[:maxLines], "\n")
+}
+
+func dashboardDebugEnabled(m *Model) bool {
+	if m != nil && m.showDiagnostics {
+		return true
+	}
+	value := strings.TrimSpace(os.Getenv("NTM_DASH_DEBUG"))
+	if value == "" {
+		return false
+	}
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+type sizedPanel interface {
+	Width() int
+	Height() int
+}
+
+func logPanelSize(name string, panel sizedPanel) string {
+	if panel == nil {
+		return fmt.Sprintf("%s=0x0", name)
+	}
+	return fmt.Sprintf("%s=%dx%d", name, panel.Width(), panel.Height())
+}
+
+func tierLabel(tier layout.Tier) string {
+	switch tier {
+	case layout.TierNarrow:
+		return "narrow"
+	case layout.TierSplit:
+		return "split"
+	case layout.TierWide:
+		return "wide"
+	case layout.TierUltra:
+		return "ultra"
+	case layout.TierMega:
+		return "mega"
+	default:
+		return fmt.Sprintf("tier-%d", int(tier))
+	}
+}
+
+func (m *Model) resizeSidebarPanels(width, height int) {
+	if m.spawnPanel != nil {
+		m.spawnPanel.SetSize(width, height)
+	}
+	if m.metricsPanel != nil {
+		m.metricsPanel.SetSize(width, height)
+	}
+	if m.historyPanel != nil {
+		m.historyPanel.SetSize(width, height)
+	}
+	if m.filesPanel != nil {
+		m.filesPanel.SetSize(width, height)
+	}
+	if m.cassPanel != nil {
+		m.cassPanel.SetSize(width, height)
+	}
+}
+
+func (m *Model) resizePanelsForLayout() {
+	contentHeight := contentHeightFor(m.height)
+	panelHeight := maxInt(contentHeight-2, 0)
+
+	switch {
+	case m.tier >= layout.TierMega:
+		_, _, p3, p4, p5 := layout.MegaProportions(m.width)
+		p3Inner := maxInt(p3-4, 0)
+		p4Inner := maxInt(p4-4, 0)
+		p5Inner := maxInt(p5-4, 0)
+
+		if m.beadsPanel != nil {
+			m.beadsPanel.SetSize(p3Inner, panelHeight)
+		}
+		if m.alertsPanel != nil {
+			m.alertsPanel.SetSize(p4Inner, panelHeight)
+		}
+		m.resizeSidebarPanels(p5Inner, panelHeight)
+
+	case m.tier >= layout.TierUltra:
+		_, _, rightWidth := layout.UltraProportions(m.width)
+		rightWidth = maxInt(rightWidth-2, 0)
+		sidebarWidth := maxInt(rightWidth-4, 0)
+		m.resizeSidebarPanels(sidebarWidth, panelHeight)
+		if m.beadsPanel != nil {
+			m.beadsPanel.SetSize(0, 0)
+		}
+		if m.alertsPanel != nil {
+			m.alertsPanel.SetSize(0, 0)
+		}
+
+	default:
+		m.resizeSidebarPanels(0, 0)
+		if m.beadsPanel != nil {
+			m.beadsPanel.SetSize(0, 0)
+		}
+		if m.alertsPanel != nil {
+			m.alertsPanel.SetSize(0, 0)
+		}
+	}
+
+	if m.tickerPanel != nil {
+		m.tickerPanel.SetSize(maxInt(m.width-4, 0), 1)
+	}
+}
+
+func refreshDue(last time.Time, interval time.Duration) bool {
+	if interval <= 0 {
+		return false
+	}
+	if last.IsZero() {
+		return true
+	}
+	return time.Since(last) >= interval
+}
+
+func (m *Model) scheduleRefreshes(now time.Time) []tea.Cmd {
+	var cmds []tea.Cmd
+
+	paneDue := refreshDue(m.lastPaneFetch, m.paneRefreshInterval)
+	contextDue := refreshDue(m.lastContextFetch, m.contextRefreshInterval)
+	coreDue := paneDue || contextDue
+
+	if coreDue {
+		if cmd := m.requestSessionFetch(false); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if cmd := m.requestStatusesFetch(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
+	if contextDue && !m.fetchingContext {
+		if !m.fetchingMetrics {
+			m.fetchingMetrics = true
+			cmds = append(cmds, m.fetchMetricsCmd())
+		}
+		if !m.fetchingRouting {
+			m.fetchingRouting = true
+			cmds = append(cmds, m.fetchRoutingCmd())
+		}
+		if !m.fetchingHistory {
+			m.fetchingHistory = true
+			cmds = append(cmds, m.fetchHistoryCmd())
+		}
+		if !m.fetchingFileChanges {
+			m.fetchingFileChanges = true
+			cmds = append(cmds, m.fetchFileChangesCmd())
+		}
+		// Refresh Agent Mail status along with context updates.
+		cmds = append(cmds, m.fetchAgentMailStatus())
+	}
+
+	if !m.scanDisabled && refreshDue(m.lastScanFetch, m.scanRefreshInterval) && !m.fetchingScan {
+		m.lastScanFetch = now
+		if cmd := m.requestScanFetch(false); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
+	if refreshDue(m.lastAlertsFetch, m.alertsRefreshInterval) && !m.fetchingAlerts {
+		m.fetchingAlerts = true
+		m.lastAlertsFetch = now
+		cmds = append(cmds, m.fetchAlertsCmd())
+	}
+
+	if refreshDue(m.lastBeadsFetch, m.beadsRefreshInterval) && !m.fetchingBeads {
+		m.fetchingBeads = true
+		m.lastBeadsFetch = now
+		cmds = append(cmds, m.fetchBeadsCmd())
+	}
+
+	if refreshDue(m.lastCassContextFetch, m.cassContextRefreshInterval) && !m.fetchingCassContext {
+		m.fetchingCassContext = true
+		m.lastCassContextFetch = now
+		cmds = append(cmds, m.fetchCASSContextCmd())
+	}
+
+	if refreshDue(m.lastCheckpointFetch, m.checkpointRefreshInterval) && !m.fetchingCheckpoint {
+		m.fetchingCheckpoint = true
+		m.lastCheckpointFetch = now
+		cmds = append(cmds, m.fetchCheckpointStatus())
+	}
+
+	return cmds
+}
+
+func (m *Model) scheduleSpawnRefresh(now time.Time) tea.Cmd {
+	if refreshDue(m.lastSpawnFetch, m.spawnRefreshInterval) && !m.fetchingSpawn {
+		m.fetchingSpawn = true
+		m.lastSpawnFetch = now
+		return m.fetchSpawnStateCmd()
+	}
+	return nil
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // SPLIT VIEW RENDERING (for wide terminals ≥110 cols)
 // Inspired by beads_viewer's responsive layout patterns
@@ -3039,10 +3490,7 @@ func (m Model) renderSplitView() string {
 	leftWidth, rightWidth := layout.SplitProportions(m.width)
 
 	// Calculate content height (leave room for header/footer)
-	contentHeight := m.height - 14
-	if contentHeight < 5 {
-		contentHeight = 5
-	}
+	contentHeight := contentHeightFor(m.height)
 
 	listBorder := t.Surface1
 	if m.focusedPanel == PanelPaneList {
@@ -3088,10 +3536,7 @@ func (m Model) renderUltraLayout() string {
 	// rendered width stays within the terminal width at exact thresholds.
 	rightWidth = maxInt(rightWidth-2, 0)
 
-	contentHeight := m.height - 14
-	if contentHeight < 5 {
-		contentHeight = 5
-	}
+	contentHeight := contentHeightFor(m.height)
 
 	listBorder := t.Surface1
 	if m.focusedPanel == PanelPaneList {
@@ -3175,7 +3620,7 @@ func (m Model) renderSidebar(width, height int) string {
 	if len(m.agentMailLockInfo) > 0 {
 		lines = append(lines, lipgloss.NewStyle().Foreground(t.Lavender).Bold(true).Render("Active Locks"))
 		for _, lock := range m.agentMailLockInfo {
-			lines = append(lines, fmt.Sprintf("🔒 %s", layout.Truncate(lock.PathPattern, width-4)))
+			lines = append(lines, fmt.Sprintf("🔒 %s", layout.TruncateWidthDefault(lock.PathPattern, width-4)))
 			lines = append(lines, lipgloss.NewStyle().Foreground(t.Subtext).Render(fmt.Sprintf("  by %s (%s)", lock.AgentName, lock.ExpiresIn)))
 		}
 		lines = append(lines, "")
@@ -3288,10 +3733,7 @@ func (m Model) renderMegaLayout() string {
 	p4Inner := maxInt(p4-4, 0)
 	p5Inner := maxInt(p5-4, 0)
 
-	contentHeight := m.height - 14
-	if contentHeight < 5 {
-		contentHeight = 5
-	}
+	contentHeight := contentHeightFor(m.height)
 
 	listBorder := t.Surface1
 	if m.focusedPanel == PanelPaneList {
@@ -3573,13 +4015,20 @@ func (m Model) renderPaneDetail(width int) string {
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(t.Lavender).Render("Status"))
 	lines = append(lines, "")
 
-	statusText := ps.State
+	statusState := ps.State
+	if statusState == "" || statusState == "unknown" {
+		if st, ok := m.agentStatuses[p.ID]; ok && st.State != status.StateUnknown {
+			statusState = st.State.String()
+		}
+	}
+	statusText := statusState
 	if statusText == "" {
 		statusText = "unknown"
+		statusState = statusText
 	}
 	var statusColor lipgloss.Color
 	var statusIcon string
-	switch ps.State {
+	switch statusState {
 	case "working":
 		// Animated spinner for working state
 		statusIcon = WorkingSpinnerFrame(m.animTick)
@@ -3618,7 +4067,7 @@ func (m Model) renderPaneDetail(width int) string {
 				lines = append(lines, fmt.Sprintf("  ...and %d more", len(m.agentMailLockInfo)-5))
 				break
 			}
-			lines = append(lines, fmt.Sprintf("  🔒 %s (%s)", layout.Truncate(lock.PathPattern, 20), lock.AgentName))
+			lines = append(lines, fmt.Sprintf("  🔒 %s (%s)", layout.TruncateWidthDefault(lock.PathPattern, 20), lock.AgentName))
 		}
 	}
 
@@ -3650,17 +4099,17 @@ func (m Model) renderPaneDetail(width int) string {
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(t.Lavender).Render("Recent Output"))
 		lines = append(lines, "")
 
-		// Use cached rendering if available
+		// Use cached rendering if available (cache is populated in Update, not here)
 		if cached, ok := m.renderedOutputCache[p.ID]; ok {
 			lines = append(lines, cached)
 		} else {
-			// Fallback (should be covered by cache update, but safe default)
+			// Fallback: render on demand but don't cache here (View must be pure)
+			// The Update handler will populate the cache on the next status update
 			rendered, err := m.renderer.Render(st.LastOutput)
 			if err == nil {
-				m.renderedOutputCache[p.ID] = rendered
 				lines = append(lines, rendered)
 			} else {
-				lines = append(lines, layout.Truncate(st.LastOutput, 500))
+				lines = append(lines, layout.TruncateWidthDefault(st.LastOutput, 500))
 			}
 		}
 	}
