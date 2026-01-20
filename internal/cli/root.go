@@ -814,8 +814,13 @@ Shell Integration:
 			return
 		}
 
-		// Show stunning help with gradients when run without subcommand
-		PrintStunningHelp(cmd.OutOrStdout())
+		// Show help with appropriate verbosity when run without subcommand
+		if helpMinimal {
+			PrintMinimalHelp(cmd.OutOrStdout())
+		} else {
+			// Default to full help (current stunning help)
+			PrintStunningHelp(cmd.OutOrStdout())
+		}
 	},
 }
 
@@ -1044,6 +1049,10 @@ var (
 	// Robot-triage flag for direct bv triage integration
 	robotTriage      bool // bv triage output
 	robotTriageLimit int  // max recommendations to return
+
+	// Help verbosity flags
+	helpMinimal bool // show minimal help with essential commands only
+	helpFull    bool // show full help (default behavior)
 )
 
 func init() {
@@ -1267,6 +1276,10 @@ func init() {
 	// Robot-summary flags for session activity summary
 	rootCmd.Flags().StringVar(&robotSummary, "robot-summary", "", "Get session activity summary with agent metrics. Required: SESSION. Example: ntm --robot-summary=myproject --summary-since=30m")
 	rootCmd.Flags().StringVar(&robotSummarySince, "summary-since", "30m", "Duration to look back (e.g., 30m, 1h). Optional with --robot-summary. Default: 30m")
+
+	// Help verbosity flags
+	rootCmd.Flags().BoolVar(&helpMinimal, "minimal", false, "Show minimal help with essential commands only (spawn, send, status, kill, help)")
+	rootCmd.Flags().BoolVar(&helpFull, "full", false, "Show full help with all commands (default behavior)")
 
 	// Sync version info with robot package
 	robot.Version = Version

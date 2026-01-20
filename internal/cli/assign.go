@@ -48,6 +48,7 @@ var (
 	// Clear assignment flags
 	assignClear     string // Clear specific bead assignments (comma-separated)
 	assignClearPane int    // Clear all assignments for a pane (-1 = disabled)
+	assignClearFailed bool // Clear all failed assignments
 )
 
 // assignAgentInfo holds information about an agent pane for assignment matching
@@ -91,10 +92,14 @@ Direct Pane Assignment:
 Clear Assignments:
   Use --clear to remove assignment from agents and release file reservations.
   Use --clear-pane to clear all assignments for a specific pane (agent crashed).
+  Use --clear-failed to clear all failed assignments.
+  Use --force to clear completed assignments.
 
   ntm assign myproject --clear bd-xyz             # Clear single assignment
   ntm assign myproject --clear bd-xyz,bd-abc      # Clear multiple assignments
   ntm assign myproject --clear-pane=3             # Clear all assignments for pane 3
+  ntm assign myproject --clear-failed             # Clear all failed assignments
+  ntm assign myproject --clear bd-xyz --force     # Clear completed assignment
 
 Examples:
   ntm assign myproject                         # Show assignment recommendations
@@ -109,7 +114,9 @@ Examples:
   ntm assign myproject --json                  # Output as JSON
   ntm assign myproject --dry-run               # Preview without executing
   ntm assign myproject --clear bd-123          # Clear assignment for bead bd-123
-  ntm assign myproject --clear-pane=3          # Clear all assignments for pane 3`,
+  ntm assign myproject --clear-pane=3          # Clear all assignments for pane 3
+  ntm assign myproject --clear-failed          # Clear all failed assignments
+  ntm assign myproject --clear bd-123 --force  # Clear completed assignment`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runAssign,
 	}
@@ -139,13 +146,14 @@ Examples:
 
 	// Direct pane assignment flags
 	cmd.Flags().IntVar(&assignPane, "pane", -1, "Assign bead directly to a specific pane (requires --beads)")
-	cmd.Flags().BoolVar(&assignForce, "force", false, "Force assignment even if pane is busy")
+	cmd.Flags().BoolVar(&assignForce, "force", false, "Force assignment even if pane is busy (also allows --clear to remove completed assignments)")
 	cmd.Flags().BoolVar(&assignIgnoreDeps, "ignore-deps", false, "Ignore dependency checks for assignment")
 	cmd.Flags().StringVar(&assignPrompt, "prompt", "", "Custom prompt for direct assignment")
 
 	// Clear assignment flags
 	cmd.Flags().StringVar(&assignClear, "clear", "", "Clear specific bead assignments (comma-separated bead IDs)")
 	cmd.Flags().IntVar(&assignClearPane, "clear-pane", -1, "Clear all assignments for a pane (use when agent crashed)")
+	cmd.Flags().BoolVar(&assignClearFailed, "clear-failed", false, "Clear all failed assignments")
 
 	return cmd
 }
@@ -172,7 +180,7 @@ func runAssign(cmd *cobra.Command, args []string) error {
 	session = res.Session
 
 	// Handle clear operations first
-	if assignClear != "" || assignClearPane >= 0 {
+	if assignClear != "" || assignClearPane >= 0 || assignClearFailed {
 		return runClearAssignments(cmd, session)
 	}
 

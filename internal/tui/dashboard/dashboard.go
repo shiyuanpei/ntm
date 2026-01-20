@@ -859,10 +859,9 @@ func (m *Model) fetchScanStatusWithContext(ctx context.Context) tea.Cmd {
 // fetchAgentMailStatus fetches Agent Mail data (locks, connection status)
 func (m *Model) fetchAgentMailStatus() tea.Cmd {
 	gen := m.nextGen(refreshAgentMail)
+	projectKey := m.projectDir
 	return func() tea.Msg {
-		// Get project key from current working directory
-		projectKey, err := os.Getwd()
-		if err != nil {
+		if projectKey == "" {
 			return AgentMailUpdateMsg{Available: false, Gen: gen}
 		}
 
@@ -883,7 +882,7 @@ func (m *Model) fetchAgentMailStatus() tea.Cmd {
 		}
 
 		// Ensure project exists
-		_, err = client.EnsureProject(ctx, projectKey)
+		_, err := client.EnsureProject(ctx, projectKey)
 		if err != nil {
 			return AgentMailUpdateMsg{Available: true, Connected: false, Gen: gen}
 		}

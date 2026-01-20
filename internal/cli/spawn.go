@@ -16,6 +16,7 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/bv"
 	"github.com/Dicklesworthstone/ntm/internal/cm"
 	"github.com/Dicklesworthstone/ntm/internal/config"
+	contextpkg "github.com/Dicklesworthstone/ntm/internal/context"
 	"github.com/Dicklesworthstone/ntm/internal/events"
 	"github.com/Dicklesworthstone/ntm/internal/gemini"
 	"github.com/Dicklesworthstone/ntm/internal/hooks"
@@ -25,6 +26,7 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/ratelimit"
 	"github.com/Dicklesworthstone/ntm/internal/recipe"
 	"github.com/Dicklesworthstone/ntm/internal/resilience"
+	"github.com/Dicklesworthstone/ntm/internal/state"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
 	"github.com/Dicklesworthstone/ntm/internal/workflow"
 )
@@ -112,6 +114,7 @@ type SpawnOptions struct {
 	CassContextQuery string
 	NoCassContext    bool
 	Prompt           string
+	InitPrompt       string
 
 	// Hooks
 	NoHooks bool
@@ -233,6 +236,7 @@ func newSpawnCmd() *cobra.Command {
 	var contextLimit int
 	var contextDays int
 	var prompt string
+	var initPrompt string
 	var noHooks bool
 	var profilesFlag string
 	var profileSetFlag string
@@ -249,11 +253,6 @@ func newSpawnCmd() *cobra.Command {
 	var assignStrategy string
 	var assignLimit int
 	var assignReadyTimeout time.Duration
-	// Silence unused variable warnings until bd-3nde is fully implemented
-	_ = assignEnabled
-	_ = assignStrategy
-	_ = assignLimit
-	_ = assignReadyTimeout
 
 	// Pre-load plugins to avoid double loading in RunE
 	// TODO: This runs eagerly during init() which slows down startup for all commands.
@@ -293,6 +292,16 @@ Auto-restart mode (--auto-restart):
     max_restarts = 3         # Max restart attempts per agent
     restart_delay_seconds = 30  # Delay before restart
     health_check_seconds = 10   # Health check interval
+
+Assignment mode (--assign):
+  Spawns agents, waits for them to become ready, then assigns work using ntm assign.
+  Optional init prompt is sent only after agents are ready.
+
+  Examples:
+    ntm spawn myproject --cc=4 --assign
+    ntm spawn myproject --cc=2 --cod=2 --assign --strategy=dependency
+    ntm spawn myproject --cc=4 --assign --init-prompt='Read AGENTS.md first'
+    ntm spawn myproject --cc=4 --assign --limit=8
 
 Persona mode:
   Use --persona to spawn agents with predefined roles and system prompts.
@@ -518,6 +527,7 @@ Examples:
 				CassContextQuery:   contextQuery,
 				NoCassContext:      noCassContext,
 				Prompt:             prompt,
+				InitPrompt:         initPrompt,
 				NoHooks:            noHooks,
 				Safety:             safety,
 				StaggerMode:        staggerMode,
@@ -560,6 +570,7 @@ Examples:
 	cmd.Flags().IntVar(&contextLimit, "cass-context-limit", 0, "Max past sessions to include")
 	cmd.Flags().IntVar(&contextDays, "cass-context-days", 0, "Look back N days")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to initialize agents with")
+	cmd.Flags().StringVar(&initPrompt, "init-prompt", "", "Prompt to send after agents are ready (used with --assign)")
 	cmd.Flags().BoolVar(&noHooks, "no-hooks", false, "Disable command hooks")
 	cmd.Flags().BoolVar(&safety, "safety", false, "Fail if session already exists (prevents accidental reuse)")
 
@@ -567,7 +578,7 @@ Examples:
 	cmd.Flags().BoolVar(&assignEnabled, "assign", false, "Auto-assign beads to spawned agents after ready")
 	cmd.Flags().StringVar(&assignStrategy, "strategy", "balanced", "Assignment strategy: balanced, speed, quality, dependency, round-robin")
 	cmd.Flags().IntVar(&assignLimit, "limit", 0, "Maximum beads to assign (0 = unlimited)")
-	cmd.Flags().DurationVar(&assignReadyTimeout, "ready-timeout", 2*time.Minute, "Timeout waiting for agents to become ready")
+	cmd.Flags().DurationVar(&assignReadyTimeout, "ready-timeout", 60*time.Second, "Timeout waiting for agents to become ready")
 
 	// Profile flags for mapping personas to agents
 	cmd.Flags().StringVar(&profilesFlag, "profiles", "", "Comma-separated list of profile/persona names to map to agents in order")
@@ -1229,29 +1240,33 @@ func spawnSessionLogic(opts SpawnOptions) error {
 			// Wait for agents to become ready
 			readyCount, waitErr := waitForAgentsReady(opts.Session, opts.AssignReadyTimeout)
 
-			var initResult *SpawnInitResult
-			if opts.Prompt != "" {
-				initResult = &SpawnInitResult{
-					PromptSent:    true,
-					AgentsReached: len(launchedAgents),
-				}
-			}
-
 			var assignResult *AssignOutputEnhanced
 			var assignErrors []string
 
 			if waitErr != nil {
 				assignErrors = append(assignErrors, fmt.Sprintf("ready wait failed: %v", waitErr))
-			} else {
-				// Run assignment phase
-				result, err := runAssignmentPhase(opts.Session, opts)
-				if err != nil {
-					assignErrors = append(assignErrors, fmt.Sprintf("assignment failed: %v", err))
-				} else {
-					assignResult = result
-				}
-				_ = readyCount // Used for logging in non-JSON mode
 			}
+
+			var initResult *SpawnInitResult
+			if opts.InitPrompt != "" {
+				agentsReached, initErr := sendInitPromptToReadyAgents(opts.Session, opts.InitPrompt)
+				initResult = &SpawnInitResult{
+					PromptSent:    initErr == nil,
+					AgentsReached: agentsReached,
+				}
+				if initErr != nil {
+					assignErrors = append(assignErrors, fmt.Sprintf("init prompt failed: %v", initErr))
+				}
+			}
+
+			// Run assignment phase (even if ready wait timed out)
+			result, err := runAssignmentPhase(opts.Session, opts)
+			if err != nil {
+				assignErrors = append(assignErrors, fmt.Sprintf("assignment failed: %v", err))
+			} else {
+				assignResult = result
+			}
+			_ = readyCount // Used for logging in non-JSON mode
 
 			// Return combined result
 			combinedResult := SpawnAssignResult{
@@ -1259,8 +1274,12 @@ func spawnSessionLogic(opts SpawnOptions) error {
 				Init:   initResult,
 				Assign: assignResult,
 			}
-			if len(assignErrors) > 0 && assignResult != nil {
-				assignResult.Errors = assignErrors
+			if len(assignErrors) > 0 {
+				if assignResult == nil {
+					assignResult = &AssignOutputEnhanced{Strategy: opts.AssignStrategy}
+					combinedResult.Assign = assignResult
+				}
+				assignResult.Errors = append(assignResult.Errors, assignErrors...)
 			}
 			return output.PrintJSON(combinedResult)
 		}
@@ -1406,20 +1425,32 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		readyCount, err := waitForAgentsReady(opts.Session, opts.AssignReadyTimeout)
 		if err != nil {
 			steps.Warn()
-			output.PrintWarningf("Ready wait failed: %v", err)
+			output.PrintWarningf("Ready wait failed: %v (continuing with %d ready agents)", err, readyCount)
 		} else {
 			steps.Done()
 			output.PrintInfof("%d agents ready", readyCount)
+		}
 
-			steps.Start("Assigning work to agents")
-			assignResult, err := runAssignmentPhase(opts.Session, opts)
-			if err != nil {
+		if opts.InitPrompt != "" {
+			steps.Start("Sending init prompt to ready agents")
+			agentsReached, initErr := sendInitPromptToReadyAgents(opts.Session, opts.InitPrompt)
+			if initErr != nil {
 				steps.Warn()
-				output.PrintWarningf("Assignment failed: %v", err)
+				output.PrintWarningf("Init prompt failed: %v", initErr)
 			} else {
 				steps.Done()
-				output.PrintInfof("Assigned %d tasks (strategy: %s)", len(assignResult.Assigned), assignResult.Strategy)
+				output.PrintInfof("Init prompt sent to %d agents", agentsReached)
 			}
+		}
+
+		steps.Start("Assigning work to agents")
+		assignResult, err := runAssignmentPhase(opts.Session, opts)
+		if err != nil {
+			steps.Warn()
+			output.PrintWarningf("Assignment failed: %v", err)
+		} else {
+			steps.Done()
+			output.PrintInfof("Assigned %d tasks (strategy: %s)", len(assignResult.Assigned), assignResult.Strategy)
 		}
 	}
 
@@ -2095,12 +2126,10 @@ type SpawnInitResult struct {
 func waitForAgentsReady(session string, timeout time.Duration) (int, error) {
 	deadline := time.Now().Add(timeout)
 	pollInterval := 2 * time.Second
+	lastReady := 0
+	lastAgents := 0
 
 	for {
-		if time.Now().After(deadline) {
-			return 0, fmt.Errorf("timeout waiting for agents to become ready")
-		}
-
 		panes, err := tmux.GetPanes(session)
 		if err != nil {
 			return 0, fmt.Errorf("failed to get panes: %w", err)
@@ -2117,44 +2146,66 @@ func waitForAgentsReady(session string, timeout time.Duration) (int, error) {
 			agentCount++
 
 			scrollback, _ := tmux.CapturePaneOutput(pane.ID, 10)
-			state := detectAgentStateFromScrollback(scrollback)
+			state := determineAgentState(scrollback, at)
 			if state == "idle" {
 				readyCount++
 			}
 		}
 
+		lastReady = readyCount
+		lastAgents = agentCount
+
 		if agentCount > 0 && readyCount == agentCount {
 			return readyCount, nil
+		}
+
+		if time.Now().After(deadline) {
+			return lastReady, fmt.Errorf("timeout waiting for agents to become ready (%d/%d ready)", lastReady, lastAgents)
 		}
 
 		time.Sleep(pollInterval)
 	}
 }
 
-// detectAgentStateFromScrollback checks scrollback for idle patterns.
-// This is a simplified version of determineAgentState from assign.go.
-func detectAgentStateFromScrollback(scrollback string) string {
-	lines := strings.Split(scrollback, "\n")
-	if len(lines) == 0 {
-		return "unknown"
+// sendInitPromptToReadyAgents sends the init prompt to agents that appear idle.
+// Returns the number of agents that received the prompt.
+func sendInitPromptToReadyAgents(session, prompt string) (int, error) {
+	if strings.TrimSpace(prompt) == "" {
+		return 0, nil
 	}
 
-	lastLine := strings.TrimSpace(lines[len(lines)-1])
-
-	// Look for common idle patterns
-	idlePatterns := []string{
-		"$", ">", ">>> ", "claude>", "codex>", "gemini>",
-		"What would you like", "How can I help",
-		"Ready for", "Waiting for",
+	panes, err := tmux.GetPanes(session)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get panes: %w", err)
 	}
 
-	for _, p := range idlePatterns {
-		if strings.HasSuffix(lastLine, p) || strings.Contains(lastLine, p) {
-			return "idle"
+	agentsReached := 0
+	var errs []string
+
+	for _, pane := range panes {
+		at := detectAgentTypeFromTitle(pane.Title)
+		if at == "user" || at == "unknown" {
+			continue
 		}
+
+		scrollback, _ := tmux.CapturePaneOutput(pane.ID, 10)
+		state := determineAgentState(scrollback, at)
+		if state != "idle" {
+			continue
+		}
+
+		if err := tmux.SendKeys(pane.ID, prompt, true); err != nil {
+			errs = append(errs, fmt.Sprintf("pane %d: %v", pane.Index, err))
+			continue
+		}
+		agentsReached++
 	}
 
-	return "working"
+	if len(errs) > 0 {
+		return agentsReached, fmt.Errorf("init prompt delivery issues: %s", strings.Join(errs, "; "))
+	}
+
+	return agentsReached, nil
 }
 
 // runAssignmentPhase executes the assignment phase after spawn.

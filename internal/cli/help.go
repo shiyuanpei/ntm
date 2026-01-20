@@ -301,3 +301,107 @@ func PrintCompactHelp(w io.Writer) {
 
 	_ = ic // Use icons in future enhancements
 }
+
+// PrintMinimalHelp prints a minimal help showing only essential commands
+func PrintMinimalHelp(w io.Writer) {
+	t := theme.Current()
+	ic := icons.Current()
+
+	// Get terminal width
+	width := 80
+	if f, ok := w.(*os.File); ok {
+		if terminalWidth, _, err := term.GetSize(int(f.Fd())); err == nil && terminalWidth > 0 {
+			width = terminalWidth
+		}
+	}
+	if width > 100 {
+		width = 100
+	}
+
+	var b strings.Builder
+
+	// ═══════════════════════════════════════════════════════════════
+	// BANNER with gradient (simplified)
+	// ═══════════════════════════════════════════════════════════════
+	b.WriteString("\n")
+	banner := components.RenderBanner(false, 0)
+	for _, line := range strings.Split(banner, "\n") {
+		b.WriteString("  " + line + "\n")
+	}
+
+	// Subtitle
+	subtitle := components.RenderSubtitle("Named Tmux Session Manager for AI Agents")
+	b.WriteString("  " + styles.CenterText(subtitle, 30) + "\n\n")
+
+	// Gradient divider
+	b.WriteString("  " + styles.GradientDivider(width-4,
+		string(t.Blue), string(t.Lavender), string(t.Mauve)) + "\n\n")
+
+	// ═══════════════════════════════════════════════════════════════
+	// ESSENTIAL COMMANDS ONLY
+	// ═══════════════════════════════════════════════════════════════
+
+	// Essential commands: spawn, send, status, kill, help
+	essentialCommands := []commandHelp{
+		{"spawn", "sat", "<name> --cc=N --cod=N --gmi=N", "Create session and launch agents"},
+		{"send", "bp", "<session> <prompt> [--agents]", "Send prompt to agents"},
+		{"status", "snt", "<session>", "Show detailed session status"},
+		{"kill", "knt", "[-f] <session>", "Kill a session"},
+		{"help", "", "[--minimal|--full]", "Show help information"},
+	}
+
+	headerText := ic.Rocket + "  ESSENTIAL COMMANDS"
+	headerGradient := styles.GradientText(headerText, string(t.Green), string(t.Text))
+	b.WriteString("  " + headerGradient + "\n")
+
+	// Subtle underline
+	underlineWidth := lipgloss.Width(headerText)
+	if underlineWidth < 1 {
+		underlineWidth = 1
+	}
+	underline := lipgloss.NewStyle().Foreground(t.Surface2).Render(strings.Repeat("─", underlineWidth))
+	b.WriteString("  " + underline + "\n\n")
+
+	// Commands table
+	for _, cmd := range essentialCommands {
+		line := renderCommandLine(cmd, t, ic)
+		b.WriteString(line + "\n")
+	}
+
+	b.WriteString("\n")
+
+	// ═══════════════════════════════════════════════════════════════
+	// QUICK START EXAMPLE
+	// ═══════════════════════════════════════════════════════════════
+	headerText = ic.Lightning + "  QUICK START"
+	headerGradient = styles.GradientText(headerText, string(t.Peach), string(t.Yellow))
+	b.WriteString("  " + headerGradient + "\n")
+	underline = lipgloss.NewStyle().Foreground(t.Surface2).Render(strings.Repeat("─", 15))
+	b.WriteString("  " + underline + "\n\n")
+
+	cmdStyle := lipgloss.NewStyle().
+		Foreground(t.Yellow).
+		Bold(true)
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(t.Overlay).
+		Italic(true)
+
+	b.WriteString("    " + cmdStyle.Render("ntm spawn myproject --cc=2 --cod=2") + "\n")
+	b.WriteString("    " + descStyle.Render("→ Create session with 2 Claude + 2 Codex agents") + "\n\n")
+
+	// ═══════════════════════════════════════════════════════════════
+	// FOOTER
+	// ═══════════════════════════════════════════════════════════════
+	b.WriteString("  " + styles.GradientDivider(width-4,
+		string(t.Surface2), string(t.Surface1)) + "\n\n")
+
+	// Usage hint
+	hintStyle := lipgloss.NewStyle().Foreground(t.Overlay).Italic(true)
+	cmdHighlight := lipgloss.NewStyle().Foreground(t.Blue).Bold(true)
+	b.WriteString("  " + hintStyle.Render("For all commands: ") + cmdHighlight.Render("ntm --full") +
+		hintStyle.Render(" or ") + cmdHighlight.Render("ntm help --full") + "\n")
+	b.WriteString("  " + hintStyle.Render("Shell setup: ") + cmdHighlight.Render("eval \"$(ntm shell zsh)\"") + "\n\n")
+
+	fmt.Fprint(w, b.String())
+}
