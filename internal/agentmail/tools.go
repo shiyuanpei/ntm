@@ -642,17 +642,31 @@ func (c *Client) SendOverseerMessage(ctx context.Context, opts OverseerMessageOp
 func (c *Client) ListProjectAgents(ctx context.Context, projectKey string) ([]Agent, error) {
 	// Use the MCP resource to list agents
 	// Resource URI: resource://agents/{project_key}
-	args := map[string]interface{}{
-		"project_key": projectKey,
-	}
+	uri := fmt.Sprintf("resource://agents/%s", projectKey)
 
-	result, err := c.callTool(ctx, "list_agents", args)
+	result, err := c.ReadResource(ctx, uri)
 	if err != nil {
 		return nil, err
 	}
 
+	// MCP Resources Read result structure:
+	// { "contents": [ { "uri": "...", "mimeType": "...", "text": "..." } ] }
+	var resourceResp struct {
+		Contents []struct {
+			Text string `json:"text"`
+		} `json:"contents"`
+	}
+
+	if err := json.Unmarshal(result, &resourceResp); err != nil {
+		return nil, NewAPIError("list_agents", 0, err)
+	}
+
+	if len(resourceResp.Contents) == 0 {
+		return []Agent{}, nil
+	}
+
 	var agents []Agent
-	if err := json.Unmarshal(result, &agents); err != nil {
+	if err := json.Unmarshal([]byte(resourceResp.Contents[0].Text), &agents); err != nil {
 		return nil, NewAPIError("list_agents", 0, err)
 	}
 

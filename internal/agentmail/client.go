@@ -324,6 +324,71 @@ func (c *Client) callToolWithTimeout(ctx context.Context, toolName string, args 
 	return c.callTool(ctx, toolName, args)
 }
 
+// ReadResource reads a resource from the Agent Mail server.
+func (c *Client) ReadResource(ctx context.Context, uri string) (json.RawMessage, error) {
+	reqID := c.requestID.Add(1)
+
+	rpcReq := JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      reqID,
+		Method:  "resources/read",
+		Params: map[string]string{
+			"uri": uri,
+		},
+	}
+
+	body, err := json.Marshal(rpcReq)
+	if err != nil {
+		return nil, NewAPIError("resources/read", 0, err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, NewAPIError("resources/read", 0, err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, NewAPIError("resources/read", 0, ErrTimeout)
+		}
+		return nil, NewAPIError("resources/read", 0, ErrServerUnavailable)
+	}
+	defer resp.Body.Close()
+
+	// Read response body (limit to 10MB to prevent DoS/OOM)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return nil, NewAPIError("resources/read", 0, err)
+	}
+
+	// Check HTTP status
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, NewAPIError("resources/read", resp.StatusCode, ErrUnauthorized)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, NewAPIError("resources/read", resp.StatusCode, fmt.Errorf("unexpected status: %s", resp.Status))
+	}
+
+	// Parse JSON-RPC response
+	var rpcResp JSONRPCResponse
+	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
+		return nil, NewAPIError("resources/read", 0, err)
+	}
+
+	// Check for JSON-RPC error
+	if rpcResp.Error != nil {
+		return nil, NewAPIError("resources/read", 0, mapJSONRPCError(rpcResp.Error))
+	}
+
+	return rpcResp.Result, nil
+}
+
 // httpBaseURL returns the HTTP REST API base URL derived from the MCP base URL.
 // The MCP endpoint is typically at /mcp/ while the HTTP endpoints are at the root.
 // Example: "http://127.0.0.1:8765/mcp/" -> "http://127.0.0.1:8765"
