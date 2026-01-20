@@ -108,6 +108,7 @@ func (t *RateLimitTracker) getOrCreateState(provider string) *ProviderState {
 
 // RecordRateLimit records a rate limit event and adjusts delays.
 func (t *RateLimitTracker) RecordRateLimit(provider, action string) {
+	provider = NormalizeProvider(provider)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -137,6 +138,7 @@ func (t *RateLimitTracker) RecordRateLimit(provider, action string) {
 
 // RecordSuccess records a successful request.
 func (t *RateLimitTracker) RecordSuccess(provider string) {
+	provider = NormalizeProvider(provider)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -158,6 +160,7 @@ func (t *RateLimitTracker) RecordSuccess(provider string) {
 
 // GetOptimalDelay returns the current optimal delay for a provider.
 func (t *RateLimitTracker) GetOptimalDelay(provider string) time.Duration {
+	provider = NormalizeProvider(provider)
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -169,6 +172,7 @@ func (t *RateLimitTracker) GetOptimalDelay(provider string) time.Duration {
 
 // GetProviderState returns a copy of the state for a provider.
 func (t *RateLimitTracker) GetProviderState(provider string) *ProviderState {
+	provider = NormalizeProvider(provider)
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -195,6 +199,7 @@ func (t *RateLimitTracker) GetAllProviders() []string {
 
 // GetRecentEvents returns recent rate limit events for a provider.
 func (t *RateLimitTracker) GetRecentEvents(provider string, limit int) []RateLimitEvent {
+	provider = NormalizeProvider(provider)
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -215,6 +220,7 @@ func (t *RateLimitTracker) GetRecentEvents(provider string, limit int) []RateLim
 
 // Reset resets the state for a provider to defaults.
 func (t *RateLimitTracker) Reset(provider string) {
+	provider = NormalizeProvider(provider)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -233,10 +239,15 @@ func (t *RateLimitTracker) ResetAll() {
 
 // LoadFromDir loads rate limit data from the .ntm directory.
 func (t *RateLimitTracker) LoadFromDir(dir string) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	if dir == "" {
+		dir = t.dataDir
+	}
+	if dir == "" {
+		return nil // persistence disabled
+	}
 
 	path := filepath.Join(dir, ".ntm", "rate_limits.json")
+	// Read without lock (IO)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -250,6 +261,9 @@ func (t *RateLimitTracker) LoadFromDir(dir string) error {
 		return fmt.Errorf("parse rate limits file: %w", err)
 	}
 
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	if pd.State != nil {
 		t.state = pd.State
 	}
@@ -262,17 +276,31 @@ func (t *RateLimitTracker) LoadFromDir(dir string) error {
 
 // SaveToDir saves rate limit data to the .ntm directory.
 func (t *RateLimitTracker) SaveToDir(dir string) error {
+	if dir == "" {
+		dir = t.dataDir
+	}
+	if dir == "" {
+		return nil // persistence disabled
+	}
+
 	t.mu.RLock()
-	defer t.mu.RUnlock()
+	pd := persistedData{
+		State:   make(map[string]*ProviderState),
+		History: make(map[string][]RateLimitEvent),
+	}
+	// Deep copy to release lock early
+	for k, v := range t.state {
+		val := *v
+		pd.State[k] = &val
+	}
+	for k, v := range t.history {
+		pd.History[k] = append([]RateLimitEvent(nil), v...)
+	}
+	t.mu.RUnlock()
 
 	ntmDir := filepath.Join(dir, ".ntm")
 	if err := os.MkdirAll(ntmDir, 0755); err != nil {
 		return fmt.Errorf("create .ntm dir: %w", err)
-	}
-
-	pd := persistedData{
-		State:   t.state,
-		History: t.history,
 	}
 
 	data, err := json.MarshalIndent(pd, "", "  ")
