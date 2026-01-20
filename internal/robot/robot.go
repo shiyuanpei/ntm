@@ -4296,14 +4296,13 @@ type FileRelationsOptions struct {
 }
 
 // PrintForecast outputs BV forecast analysis for ETA predictions
-/*
 func PrintForecast(target string) error {
 	output := struct {
 		RobotResponse
-		Target    string                 `json:"target"`
-		Available bool                   `json:"available"`
-		Forecast  *bv.ForecastResponse   `json:"forecast,omitempty"`
-		Error     string                 `json:"error,omitempty"`
+		Target    string               `json:"target"`
+		Available bool                 `json:"available"`
+		Forecast  *bv.ForecastResponse `json:"forecast,omitempty"`
+		Error     string               `json:"error,omitempty"`
 	}{
 		RobotResponse: NewRobotResponse(true),
 		Target:        target,
@@ -4316,9 +4315,8 @@ func PrintForecast(target string) error {
 		return encodeJSON(output)
 	}
 
-	adapter := tools.NewBVAdapter()
 	wd := mustGetwd()
-	forecast, err := adapter.GetForecast(context.Background(), wd, target)
+	forecast, err := bv.GetForecast(wd, target)
 	if err != nil {
 		output.Error = fmt.Sprintf("failed to get forecast: %v", err)
 		output.Success = false
@@ -4334,9 +4332,9 @@ func PrintForecast(target string) error {
 func PrintSuggest() error {
 	output := struct {
 		RobotResponse
-		Available   bool            `json:"available"`
-		Suggestions json.RawMessage `json:"suggestions,omitempty"`
-		Error       string          `json:"error,omitempty"`
+		Available   bool                    `json:"available"`
+		Suggestions *bv.SuggestionsResponse `json:"suggestions,omitempty"`
+		Error       string                  `json:"error,omitempty"`
 	}{
 		RobotResponse: NewRobotResponse(true),
 		Available:     bv.IsInstalled(),
@@ -4348,9 +4346,8 @@ func PrintSuggest() error {
 		return encodeJSON(output)
 	}
 
-	adapter := tools.NewBVAdapter()
 	wd := mustGetwd()
-	suggestions, err := adapter.GetSuggestions(context.Background(), wd)
+	suggestions, err := bv.GetSuggestions(wd)
 	if err != nil {
 		output.Error = fmt.Sprintf("failed to get suggestions: %v", err)
 		output.Success = false
@@ -4366,10 +4363,10 @@ func PrintSuggest() error {
 func PrintImpact(filePath string) error {
 	output := struct {
 		RobotResponse
-		FilePath  string          `json:"file_path"`
-		Available bool            `json:"available"`
-		Impact    json.RawMessage `json:"impact,omitempty"`
-		Error     string          `json:"error,omitempty"`
+		FilePath  string             `json:"file_path"`
+		Available bool               `json:"available"`
+		Impact    *bv.ImpactResponse `json:"impact,omitempty"`
+		Error     string             `json:"error,omitempty"`
 	}{
 		RobotResponse: NewRobotResponse(true),
 		FilePath:      filePath,
@@ -4382,9 +4379,8 @@ func PrintImpact(filePath string) error {
 		return encodeJSON(output)
 	}
 
-	adapter := tools.NewBVAdapter()
 	wd := mustGetwd()
-	impact, err := adapter.GetImpact(context.Background(), wd, filePath)
+	impact, err := bv.GetImpact(wd, filePath)
 	if err != nil {
 		output.Error = fmt.Sprintf("failed to get impact analysis: %v", err)
 		output.Success = false
@@ -4400,10 +4396,10 @@ func PrintImpact(filePath string) error {
 func PrintSearch(query string) error {
 	output := struct {
 		RobotResponse
-		Query     string          `json:"query"`
-		Available bool            `json:"available"`
-		Results   json.RawMessage `json:"results,omitempty"`
-		Error     string          `json:"error,omitempty"`
+		Query     string             `json:"query"`
+		Available bool               `json:"available"`
+		Results   *bv.SearchResponse `json:"results,omitempty"`
+		Error     string             `json:"error,omitempty"`
 	}{
 		RobotResponse: NewRobotResponse(true),
 		Query:         query,
@@ -4416,9 +4412,8 @@ func PrintSearch(query string) error {
 		return encodeJSON(output)
 	}
 
-	adapter := tools.NewBVAdapter()
 	wd := mustGetwd()
-	results, err := adapter.GetSearch(context.Background(), wd, query)
+	results, err := bv.GetSearch(wd, query)
 	if err != nil {
 		output.Error = fmt.Sprintf("failed to perform search: %v", err)
 		output.Success = false
@@ -4429,17 +4424,15 @@ func PrintSearch(query string) error {
 
 	return encodeJSON(output)
 }
-*/
 
 // PrintLabelAttention outputs BV label attention ranking
-/*
 func PrintLabelAttention(opts LabelAttentionOptions) error {
 	output := struct {
 		RobotResponse
-		Available bool            `json:"available"`
-		Labels    json.RawMessage `json:"labels,omitempty"`
-		Limit     int             `json:"limit"`
-		Error     string          `json:"error,omitempty"`
+		Available bool                     `json:"available"`
+		Labels    *bv.LabelAttentionResponse `json:"labels,omitempty"`
+		Limit     int                      `json:"limit"`
+		Error     string                   `json:"error,omitempty"`
 	}{
 		RobotResponse: NewRobotResponse(true),
 		Available:     bv.IsInstalled(),
@@ -4452,9 +4445,8 @@ func PrintLabelAttention(opts LabelAttentionOptions) error {
 		return encodeJSON(output)
 	}
 
-	adapter := tools.NewBVAdapter()
 	wd := mustGetwd()
-	labels, err := adapter.GetLabelAttention(context.Background(), wd, opts.Limit)
+	labels, err := bv.GetLabelAttention(wd, opts.Limit)
 	if err != nil {
 		output.Error = fmt.Sprintf("failed to get label attention: %v", err)
 		output.Success = false
@@ -4465,16 +4457,14 @@ func PrintLabelAttention(opts LabelAttentionOptions) error {
 
 	return encodeJSON(output)
 }
-*/
 
 // PrintLabelFlow outputs BV cross-label dependency flow analysis
-/*
 func PrintLabelFlow() error {
 	output := struct {
 		RobotResponse
-		Available bool            `json:"available"`
-		Flow      json.RawMessage `json:"flow,omitempty"`
-		Error     string          `json:"error,omitempty"`
+		Available bool                  `json:"available"`
+		Flow      *bv.LabelFlowResponse `json:"flow,omitempty"`
+		Error     string                `json:"error,omitempty"`
 	}{
 		RobotResponse: NewRobotResponse(true),
 		Available:     bv.IsInstalled(),
@@ -4486,9 +4476,8 @@ func PrintLabelFlow() error {
 		return encodeJSON(output)
 	}
 
-	adapter := tools.NewBVAdapter()
 	wd := mustGetwd()
-	flow, err := adapter.GetLabelFlow(context.Background(), wd)
+	flow, err := bv.GetLabelFlow(wd)
 	if err != nil {
 		output.Error = fmt.Sprintf("failed to get label flow: %v", err)
 		output.Success = false
@@ -4499,16 +4488,14 @@ func PrintLabelFlow() error {
 
 	return encodeJSON(output)
 }
-*/
 
 // PrintLabelHealth outputs BV per-label health analysis
-/*
 func PrintLabelHealth() error {
 	output := struct {
 		RobotResponse
-		Available bool            `json:"available"`
-		Health    json.RawMessage `json:"health,omitempty"`
-		Error     string          `json:"error,omitempty"`
+		Available bool                    `json:"available"`
+		Health    *bv.LabelHealthResponse `json:"health,omitempty"`
+		Error     string                  `json:"error,omitempty"`
 	}{
 		RobotResponse: NewRobotResponse(true),
 		Available:     bv.IsInstalled(),
@@ -4520,9 +4507,8 @@ func PrintLabelHealth() error {
 		return encodeJSON(output)
 	}
 
-	adapter := tools.NewBVAdapter()
 	wd := mustGetwd()
-	health, err := adapter.GetLabelHealth(context.Background(), wd)
+	health, err := bv.GetLabelHealth(wd)
 	if err != nil {
 		output.Error = fmt.Sprintf("failed to get label health: %v", err)
 		output.Success = false
@@ -4533,18 +4519,16 @@ func PrintLabelHealth() error {
 
 	return encodeJSON(output)
 }
-*/
 
 // PrintFileBeads outputs BV file-to-beads mapping
-/*
 func PrintFileBeads(opts FileBeadsOptions) error {
 	output := struct {
 		RobotResponse
-		FilePath  string          `json:"file_path"`
-		Available bool            `json:"available"`
-		Beads     json.RawMessage `json:"beads,omitempty"`
-		Limit     int             `json:"limit"`
-		Error     string          `json:"error,omitempty"`
+		FilePath  string                `json:"file_path"`
+		Available bool                  `json:"available"`
+		Beads     *bv.FileBeadsResponse `json:"beads,omitempty"`
+		Limit     int                   `json:"limit"`
+		Error     string                `json:"error,omitempty"`
 	}{
 		RobotResponse: NewRobotResponse(true),
 		FilePath:      opts.FilePath,
@@ -4558,9 +4542,8 @@ func PrintFileBeads(opts FileBeadsOptions) error {
 		return encodeJSON(output)
 	}
 
-	adapter := tools.NewBVAdapter()
 	wd := mustGetwd()
-	beads, err := adapter.GetFileBeads(context.Background(), wd, opts.FilePath, opts.Limit)
+	beads, err := bv.GetFileBeads(wd, opts.FilePath, opts.Limit)
 	if err != nil {
 		output.Error = fmt.Sprintf("failed to get file beads: %v", err)
 		output.Success = false
@@ -4571,17 +4554,15 @@ func PrintFileBeads(opts FileBeadsOptions) error {
 
 	return encodeJSON(output)
 }
-*/
 
 // PrintFileHotspots outputs BV file quality hotspots
-/*
 func PrintFileHotspots(opts FileHotspotsOptions) error {
 	output := struct {
 		RobotResponse
-		Available bool            `json:"available"`
-		Hotspots  json.RawMessage `json:"hotspots,omitempty"`
-		Limit     int             `json:"limit"`
-		Error     string          `json:"error,omitempty"`
+		Available bool                     `json:"available"`
+		Hotspots  *bv.FileHotspotsResponse `json:"hotspots,omitempty"`
+		Limit     int                      `json:"limit"`
+		Error     string                   `json:"error,omitempty"`
 	}{
 		RobotResponse: NewRobotResponse(true),
 		Available:     bv.IsInstalled(),
@@ -4594,9 +4575,8 @@ func PrintFileHotspots(opts FileHotspotsOptions) error {
 		return encodeJSON(output)
 	}
 
-	adapter := tools.NewBVAdapter()
 	wd := mustGetwd()
-	hotspots, err := adapter.GetFileHotspots(context.Background(), wd, opts.Limit)
+	hotspots, err := bv.GetFileHotspots(wd, opts.Limit)
 	if err != nil {
 		output.Error = fmt.Sprintf("failed to get file hotspots: %v", err)
 		output.Success = false
@@ -4607,19 +4587,17 @@ func PrintFileHotspots(opts FileHotspotsOptions) error {
 
 	return encodeJSON(output)
 }
-*/
 
 // PrintFileRelations outputs BV file co-change relations
-/*
 func PrintFileRelations(opts FileRelationsOptions) error {
 	output := struct {
 		RobotResponse
-		FilePath  string          `json:"file_path"`
-		Available bool            `json:"available"`
-		Relations json.RawMessage `json:"relations,omitempty"`
-		Limit     int             `json:"limit"`
-		Threshold float64         `json:"threshold"`
-		Error     string          `json:"error,omitempty"`
+		FilePath  string                    `json:"file_path"`
+		Available bool                      `json:"available"`
+		Relations *bv.FileRelationsResponse `json:"relations,omitempty"`
+		Limit     int                       `json:"limit"`
+		Threshold float64                   `json:"threshold"`
+		Error     string                    `json:"error,omitempty"`
 	}{
 		RobotResponse: NewRobotResponse(true),
 		FilePath:      opts.FilePath,
@@ -4634,9 +4612,8 @@ func PrintFileRelations(opts FileRelationsOptions) error {
 		return encodeJSON(output)
 	}
 
-	adapter := tools.NewBVAdapter()
 	wd := mustGetwd()
-	relations, err := adapter.GetFileRelations(context.Background(), wd, opts.FilePath, opts.Limit, opts.Threshold)
+	relations, err := bv.GetFileRelations(wd, opts.FilePath, opts.Limit, opts.Threshold)
 	if err != nil {
 		output.Error = fmt.Sprintf("failed to get file relations: %v", err)
 		output.Success = false
@@ -4647,4 +4624,3 @@ func PrintFileRelations(opts FileRelationsOptions) error {
 
 	return encodeJSON(output)
 }
-*/

@@ -177,45 +177,78 @@ Shell Integration:
 			}
 			return
 		}
-		// TODO: These robot functions are commented out in robot.go pending BV adapter implementation
 		if robotForecast != "" {
-			robot.PrintRobotUnavailable("forecast", "BV forecast analysis not yet implemented", "v2.1.0", "Use bv --robot-forecast directly")
+			if err := robot.PrintForecast(robotForecast); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		}
 		if robotSuggest {
-			robot.PrintRobotUnavailable("suggest", "BV hygiene suggestions not yet implemented", "v2.1.0", "Use bv --robot-suggest directly")
+			if err := robot.PrintSuggest(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		}
 		if robotImpact != "" {
-			robot.PrintRobotUnavailable("impact", "BV impact analysis not yet implemented", "v2.1.0", "Use bv --robot-impact directly")
+			if err := robot.PrintImpact(robotImpact); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		}
 		if robotSearch != "" {
-			robot.PrintRobotUnavailable("search", "BV semantic search not yet implemented", "v2.1.0", "Use bv --robot-search directly")
+			if err := robot.PrintSearch(robotSearch); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		}
 		if robotLabelAttention {
-			robot.PrintRobotUnavailable("label-attention", "BV label attention ranking not yet implemented", "v2.1.0", "Use bv --robot-label-attention directly")
+			opts := robot.LabelAttentionOptions{Limit: robotAttentionLimit}
+			if err := robot.PrintLabelAttention(opts); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		}
 		if robotLabelFlow {
-			robot.PrintRobotUnavailable("label-flow", "BV label flow analysis not yet implemented", "v2.1.0", "Use bv --robot-label-flow directly")
+			if err := robot.PrintLabelFlow(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		}
 		if robotLabelHealth {
-			robot.PrintRobotUnavailable("label-health", "BV label health analysis not yet implemented", "v2.1.0", "Use bv --robot-label-health directly")
+			if err := robot.PrintLabelHealth(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		}
 		if robotFileBeads != "" {
-			robot.PrintRobotUnavailable("file-beads", "File beads analysis not yet implemented", "v2.1.0", "Use bv --robot-file-beads directly")
+			opts := robot.FileBeadsOptions{FilePath: robotFileBeads, Limit: robotFileBeadsLimit}
+			if err := robot.PrintFileBeads(opts); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		}
 		if robotFileHotspots {
-			robot.PrintRobotUnavailable("file-hotspots", "File hotspots analysis not yet implemented", "v2.1.0", "Use bv --robot-file-hotspots directly")
+			opts := robot.FileHotspotsOptions{Limit: robotHotspotsLimit}
+			if err := robot.PrintFileHotspots(opts); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		}
 		if robotFileRelations != "" {
-			robot.PrintRobotUnavailable("file-relations", "File relations analysis not yet implemented", "v2.1.0", "Use bv --robot-file-relations directly")
+			opts := robot.FileRelationsOptions{FilePath: robotFileRelations, Limit: robotRelationsLimit, Threshold: robotRelationsThreshold}
+			if err := robot.PrintFileRelations(opts); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		}
 		if robotDashboard {
