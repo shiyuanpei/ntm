@@ -8,10 +8,11 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/Dicklesworthstone/ntm/internal/config"
-	"github.com/Dicklesworthstone/ntm/internal/output"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
+
+	"github.com/Dicklesworthstone/ntm/internal/config"
+	"github.com/Dicklesworthstone/ntm/internal/output"
 )
 
 // ValidationResult represents the outcome of validating a config file or section.
