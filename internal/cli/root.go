@@ -513,6 +513,28 @@ Shell Integration:
 			}
 			return
 		}
+		if robotSmartRestart != "" {
+			// Parse pane filter
+			panes, err := robot.ParsePanesArg(robotPanes)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: invalid --panes: %v\n", err)
+				os.Exit(3)
+			}
+			opts := robot.SmartRestartOptions{
+				Session:       robotSmartRestart,
+				Panes:         panes,
+				Force:         robotSmartRestartForce,
+				DryRun:        robotSmartRestartDryRun,
+				Prompt:        robotSmartRestartPrompt,
+				LinesCaptured: robotLines,
+				Verbose:       robotSmartRestartVerbose,
+			}
+			if err := robot.PrintSmartRestart(opts); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
 		if robotSend != "" {
 			// Validate message is provided
 			if robotSendMsg == "" {
@@ -1278,6 +1300,13 @@ var (
 	robotAgentHealthNoCaut  bool   // skip caut provider query
 	robotAgentHealthVerbose bool   // include raw sample output
 
+	// Robot-smart-restart flags for safe agent restarts (bd-2c7f4)
+	robotSmartRestart        string // session name to restart
+	robotSmartRestartForce   bool   // force restart even if working
+	robotSmartRestartDryRun  bool   // show what would happen without doing it
+	robotSmartRestartPrompt  string // prompt to send after restart
+	robotSmartRestartVerbose bool   // include extra debugging info
+
 	// Help verbosity flags
 	helpMinimal bool // show minimal help with essential commands only
 	helpFull    bool // show full help (default behavior)
@@ -1309,6 +1338,11 @@ func init() {
 	rootCmd.Flags().StringVar(&robotAgentHealth, "robot-agent-health", "", "Comprehensive agent health check combining local state and provider usage. Required: SESSION. Example: ntm --robot-agent-health=myproject --panes=2,3")
 	rootCmd.Flags().BoolVar(&robotAgentHealthNoCaut, "no-caut", false, "Skip caut provider query for faster local-only health check. Optional with --robot-agent-health")
 	rootCmd.Flags().BoolVar(&robotAgentHealthVerbose, "agent-health-verbose", false, "Include raw sample output in --robot-agent-health response. Example: --agent-health-verbose")
+	rootCmd.Flags().StringVar(&robotSmartRestart, "robot-smart-restart", "", "SAFE restart: checks --robot-is-working first, refuses to interrupt working agents. Required: SESSION. Example: ntm --robot-smart-restart=myproject --panes=2,3")
+	rootCmd.Flags().BoolVar(&robotSmartRestartForce, "force", false, "DANGEROUS: Force restart even if agent is working. Optional with --robot-smart-restart. Use with extreme caution!")
+	rootCmd.Flags().BoolVar(&robotSmartRestartDryRun, "dry-run", false, "Show what would happen without performing restart. Optional with --robot-smart-restart")
+	rootCmd.Flags().StringVar(&robotSmartRestartPrompt, "prompt", "", "Send this prompt to the agent after restart. Optional with --robot-smart-restart")
+	rootCmd.Flags().BoolVar(&robotSmartRestartVerbose, "smart-restart-verbose", false, "Include extra debugging info in --robot-smart-restart response")
 	rootCmd.Flags().BoolVar(&robotGraph, "robot-graph", false, "Get bv dependency graph insights: PageRank, critical path, cycles (JSON)")
 	rootCmd.Flags().BoolVar(&robotTriage, "robot-triage", false, "Get bv triage analysis with recommendations, quick wins, blockers (JSON). Example: ntm --robot-triage --triage-limit=20")
 	rootCmd.Flags().IntVar(&robotTriageLimit, "triage-limit", 10, "Max recommendations per category. Optional with --robot-triage. Example: --triage-limit=20")
@@ -2170,7 +2204,8 @@ func needsConfigLoading(cmdName string) bool {
 			robotSend != "" || robotAck != "" || robotSpawn != "" ||
 			robotInterrupt != "" || robotRestartPane != "" || robotGraph || robotMail || robotHealth != "" ||
 			robotDiagnose != "" || robotTerse || robotMarkdown || robotSave != "" || robotRestore != "" ||
-			robotContext != "" || robotAlerts || robotIsWorking != "" || robotAgentHealth != "" {
+			robotContext != "" || robotAlerts || robotIsWorking != "" || robotAgentHealth != "" ||
+			robotSmartRestart != "" {
 			return true
 		}
 	}

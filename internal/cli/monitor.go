@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -42,6 +43,7 @@ func runMonitor(session string) error {
 	// Ensure session exists
 	if !tmux.SessionExists(session) {
 		// If session is gone, clean up and exit
+		fmt.Fprintf(os.Stderr, "Session '%s' missing on monitor start (%s)\n", session, detectSessionTerminationCause(session))
 		_ = resilience.DeleteManifest(session)
 		return nil
 	}
@@ -116,7 +118,7 @@ func runMonitor(session string) error {
 			return nil
 		case <-ticker.C:
 			if !tmux.SessionExists(session) {
-				fmt.Println("Session ended, stopping monitor...")
+				fmt.Printf("Session ended unexpectedly, stopping monitor (%s)\n", detectSessionTerminationCause(session))
 				monitor.Stop()
 				generateEndSessionSummary(session, lastOutputs, manifest)
 				_ = resilience.DeleteManifest(session)
@@ -126,6 +128,35 @@ func runMonitor(session string) error {
 			captureSessionOutputs(session, lastOutputs)
 		}
 	}
+}
+
+func detectSessionTerminationCause(session string) string {
+	output, err := tmux.DefaultClient.Run("list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		errMsg := err.Error()
+		switch {
+		case strings.Contains(errMsg, "no server running"),
+			strings.Contains(errMsg, "error connecting to"),
+			strings.Contains(errMsg, "No such file or directory"):
+			return "tmux server not running"
+		case strings.Contains(errMsg, "no sessions"):
+			return "tmux reports no sessions"
+		default:
+			return fmt.Sprintf("tmux error: %s", errMsg)
+		}
+	}
+
+	if strings.TrimSpace(output) == "" {
+		return "no tmux sessions found"
+	}
+
+	for _, line := range strings.Split(output, "\n") {
+		if strings.TrimSpace(line) == session {
+			return "session still exists (race)"
+		}
+	}
+
+	return "session not found in tmux list"
 }
 
 func captureSessionOutputs(session string, lastOutputs map[string]string) {
