@@ -1112,6 +1112,24 @@ Shell Integration:
 			return
 		}
 
+		// Robot-quota-status handler for caut quota status
+		if robotQuotaStatus {
+			if err := robot.PrintQuotaStatus(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+
+		// Robot-quota-check handler for caut quota check (single provider)
+		if robotQuotaCheck {
+			if err := robot.PrintQuotaCheck(robotQuotaCheckProvider); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+
 		// Show help with appropriate verbosity when run without subcommand
 		if helpMinimal {
 			PrintMinimalHelp(cmd.OutOrStdout())
@@ -1431,6 +1449,11 @@ var (
 
 	// Robot-dcg-status flag for DCG status
 	robotDCGStatus bool // --robot-dcg-status flag
+
+	// Robot-quota-status and robot-quota-check flags for caut
+	robotQuotaStatus        bool   // --robot-quota-status flag
+	robotQuotaCheck         bool   // --robot-quota-check flag
+	robotQuotaCheckProvider string // --provider filter for quota-check
 )
 
 func init() {
@@ -1730,6 +1753,11 @@ func init() {
 
 	// Robot-dcg-status flag for DCG
 	rootCmd.Flags().BoolVar(&robotDCGStatus, "robot-dcg-status", false, "Show DCG status and configuration. JSON output. Example: ntm --robot-dcg-status")
+
+	// Robot-quota-status and robot-quota-check flags for caut
+	rootCmd.Flags().BoolVar(&robotQuotaStatus, "robot-quota-status", false, "Show caut quota status for all providers. JSON output. Example: ntm --robot-quota-status")
+	rootCmd.Flags().BoolVar(&robotQuotaCheck, "robot-quota-check", false, "Check quota for specific provider. JSON output. Example: ntm --robot-quota-check --quota-check-provider=claude")
+	rootCmd.Flags().StringVar(&robotQuotaCheckProvider, "quota-check-provider", "", "Provider for quota check. Required with --robot-quota-check. Example: --quota-check-provider=claude")
 
 	// Sync version info with robot package
 	robot.Version = Version
