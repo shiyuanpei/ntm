@@ -957,12 +957,13 @@ func TestWatchProjectConfig(t *testing.T) {
 claude = "global-claude"
 `), 0644)
 
-	// Project config
+	// Project config - NOTE: agent commands in project config are ignored
+	// for security (RCE prevention). Test with defaults.agents instead.
 	os.Mkdir(".ntm", 0755)
 	projPath := filepath.Join(cwd, ".ntm", "config.toml")
 	os.WriteFile(projPath, []byte(`
-[agents]
-claude = "project-claude"
+[defaults]
+agents = { cc = 2 }
 `), 0644)
 
 	// Setup watcher
@@ -978,18 +979,23 @@ claude = "project-claude"
 	}
 	defer closeWatcher()
 
-	// Modify project config
+	// Modify project config - change the defaults.agents which IS merged
 	time.Sleep(600 * time.Millisecond) // Wait for debounce/start
 	os.WriteFile(projPath, []byte(`
-[agents]
-claude = "updated-project-claude"
+[defaults]
+agents = { cc = 5 }
 `), 0644)
 
 	// Wait for update
 	select {
 	case cfg := <-updated:
-		if cfg.Agents.Claude != "updated-project-claude" {
-			t.Errorf("Expected 'updated-project-claude', got %q", cfg.Agents.Claude)
+		// Agent commands should still be from global config (security feature)
+		if cfg.Agents.Claude != "global-claude" {
+			t.Errorf("Expected 'global-claude' (agent override disabled), got %q", cfg.Agents.Claude)
+		}
+		// Project defaults SHOULD be updated
+		if cfg.ProjectDefaults["cc"] != 5 {
+			t.Errorf("Expected project defaults cc=5, got %d", cfg.ProjectDefaults["cc"])
 		}
 	case <-time.After(3 * time.Second):
 		t.Error("Timed out waiting for config update")

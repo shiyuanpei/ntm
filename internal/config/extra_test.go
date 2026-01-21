@@ -549,9 +549,12 @@ claude = "claude --project-override"
 			t.Fatalf("LoadMerged failed: %v", err)
 		}
 
-		// Project should override claude
-		if cfg.Agents.Claude != "claude --project-override" {
-			t.Errorf("expected project claude override, got=%s", cfg.Agents.Claude)
+		// SECURITY: Project should NOT override agent commands (RCE prevention)
+		// Agent commands are only loaded from global/user config, never from
+		// project repos to prevent malicious repositories from executing
+		// arbitrary commands.
+		if cfg.Agents.Claude != "claude --global" {
+			t.Errorf("expected global claude (agent override disabled for security), got=%s", cfg.Agents.Claude)
 		}
 
 		// Global codex should be preserved
@@ -559,7 +562,7 @@ claude = "claude --project-override"
 			t.Errorf("expected global codex, got=%s", cfg.Agents.Codex)
 		}
 
-		// Project defaults should be set
+		// Project defaults (agent counts) SHOULD still be set - this is safe
 		if cfg.ProjectDefaults["cc"] != 4 {
 			t.Errorf("expected cc=4, got=%d", cfg.ProjectDefaults["cc"])
 		}
@@ -570,9 +573,17 @@ claude = "claude --project-override"
 		if err != nil {
 			t.Fatalf("LoadMerged failed: %v", err)
 		}
-		// Should still merge project config
-		if cfg.Agents.Claude != "claude --project-override" {
-			t.Errorf("expected project claude override even without global, got=%s", cfg.Agents.Claude)
+		// SECURITY: Project should NOT override agent commands (RCE prevention)
+		// When global config is missing, default agent commands are used,
+		// NOT project-specified commands. This prevents malicious repositories
+		// from specifying arbitrary agent commands.
+		defaultCfg := Default()
+		if cfg.Agents.Claude != defaultCfg.Agents.Claude {
+			t.Errorf("expected default claude command, got=%s", cfg.Agents.Claude)
+		}
+		// But project defaults (agent counts) should still be merged
+		if cfg.ProjectDefaults["cc"] != 4 {
+			t.Errorf("expected project defaults cc=4, got=%d", cfg.ProjectDefaults["cc"])
 		}
 	})
 
@@ -593,7 +604,10 @@ claude = "claude --project-override"
 }
 
 func TestMergeConfig(t *testing.T) {
-	t.Run("project overrides global agents", func(t *testing.T) {
+	t.Run("project does NOT override global agents for security", func(t *testing.T) {
+		// SECURITY: Agent command overrides from project configs are disabled
+		// to prevent RCE from malicious repositories. Project configs can
+		// specify agent COUNTS (defaults.agents) but NOT agent COMMANDS.
 		global := &Config{
 			Agents: AgentConfig{
 				Claude: "claude-global",
@@ -603,13 +617,14 @@ func TestMergeConfig(t *testing.T) {
 		}
 		project := &ProjectConfig{
 			Agents: AgentConfig{
-				Claude: "claude-project",
+				Claude: "claude-project", // This SHOULD be ignored for security
 			},
 		}
 
 		result := MergeConfig(global, project, "/project")
-		if result.Agents.Claude != "claude-project" {
-			t.Errorf("expected claude-project, got=%s", result.Agents.Claude)
+		// Agent commands should NOT be overridden (security feature)
+		if result.Agents.Claude != "claude-global" {
+			t.Errorf("expected claude-global (agent override disabled), got=%s", result.Agents.Claude)
 		}
 		if result.Agents.Codex != "codex-global" {
 			t.Errorf("expected codex-global to be preserved, got=%s", result.Agents.Codex)

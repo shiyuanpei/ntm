@@ -3554,8 +3554,14 @@ func reserveFilesForBead(session, beadID, beadTitle, agentType string, verbose b
 	// Create agent name from session and agent type
 	agentName := fmt.Sprintf("%s_%s", session, agentType)
 
-	// Create reservation manager
-	manager := assign.NewFileReservationManager(nil, projectKey)
+	// Create reservation manager (use Agent Mail if available)
+	var manager *assign.FileReservationManager
+	amClient := agentmail.NewClient(agentmail.WithProjectKey(projectKey))
+	if amClient.IsAvailable() {
+		manager = assign.NewFileReservationManager(amClient, projectKey)
+	} else {
+		manager = assign.NewFileReservationManager(nil, projectKey)
+	}
 
 	// Attempt reservation (will return result even without client)
 	result, err := manager.ReserveForBead(context.Background(), beadID, beadTitle, "", agentName)
