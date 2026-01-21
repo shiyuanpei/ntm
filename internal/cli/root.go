@@ -474,6 +474,25 @@ Shell Integration:
 			}
 			return
 		}
+		if robotIsWorking != "" {
+			// Parse pane filter
+			panes, err := robot.ParsePanesArg(robotPanes)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: invalid --panes: %v\n", err)
+				os.Exit(3)
+			}
+			opts := robot.IsWorkingOptions{
+				Session:       robotIsWorking,
+				Panes:         panes,
+				LinesCaptured: robotLines,
+				Verbose:       robotIsWorkingVerbose,
+			}
+			if err := robot.PrintIsWorking(opts); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
 		if robotSend != "" {
 			// Validate message is provided
 			if robotSendMsg == "" {
@@ -1230,6 +1249,10 @@ var (
 	// Robot-restart-pane flag
 	robotRestartPane string // session name for pane restart
 
+	// Robot-is-working flags for agent work state detection (bd-16ptx)
+	robotIsWorking        string // session name to check
+	robotIsWorkingVerbose bool   // include raw sample output
+
 	// Help verbosity flags
 	helpMinimal bool // show minimal help with essential commands only
 	helpFull    bool // show full help (default behavior)
@@ -1255,7 +1278,9 @@ func init() {
 	rootCmd.Flags().StringVar(&robotSince, "since", "", "RFC3339 timestamp for delta snapshot. Optional with --robot-snapshot. Example: --since=2025-12-15T10:00:00Z")
 	rootCmd.Flags().StringVar(&robotTail, "robot-tail", "", "Capture recent pane output. Required: SESSION. Example: ntm --robot-tail=myproject --lines=50")
 	rootCmd.Flags().IntVar(&robotLines, "lines", 20, "Lines to capture per pane. Optional with --robot-tail. Example: --lines=100")
-	rootCmd.Flags().StringVar(&robotPanes, "panes", "", "Filter to specific pane indices. Optional with --robot-tail, --robot-send, --robot-ack, --robot-interrupt. Example: --panes=1,2")
+	rootCmd.Flags().StringVar(&robotPanes, "panes", "", "Filter to specific pane indices. Optional with --robot-tail, --robot-send, --robot-ack, --robot-interrupt, --robot-is-working. Example: --panes=1,2")
+	rootCmd.Flags().StringVar(&robotIsWorking, "robot-is-working", "", "Check if agents are working. Returns work state with recommendations. Required: SESSION. Example: ntm --robot-is-working=myproject --panes=2,3")
+	rootCmd.Flags().BoolVar(&robotIsWorkingVerbose, "is-working-verbose", false, "Include raw sample output in --robot-is-working response. Example: --is-working-verbose")
 	rootCmd.Flags().BoolVar(&robotGraph, "robot-graph", false, "Get bv dependency graph insights: PageRank, critical path, cycles (JSON)")
 	rootCmd.Flags().BoolVar(&robotTriage, "robot-triage", false, "Get bv triage analysis with recommendations, quick wins, blockers (JSON). Example: ntm --robot-triage --triage-limit=20")
 	rootCmd.Flags().IntVar(&robotTriageLimit, "triage-limit", 10, "Max recommendations per category. Optional with --robot-triage. Example: --triage-limit=20")
@@ -2117,7 +2142,7 @@ func needsConfigLoading(cmdName string) bool {
 			robotSend != "" || robotAck != "" || robotSpawn != "" ||
 			robotInterrupt != "" || robotRestartPane != "" || robotGraph || robotMail || robotHealth != "" ||
 			robotDiagnose != "" || robotTerse || robotMarkdown || robotSave != "" || robotRestore != "" ||
-			robotContext != "" || robotAlerts {
+			robotContext != "" || robotAlerts || robotIsWorking != "" {
 			return true
 		}
 	}
