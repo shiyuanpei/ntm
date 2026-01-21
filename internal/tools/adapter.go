@@ -42,11 +42,12 @@ const (
 	ToolRCH  ToolName = "rch"  // RCH - Remote Compilation Helper for build offloading
 	ToolRano ToolName = "rano" // rano - Network observer for per-agent API tracking
 	ToolCaut ToolName = "caut" // caut - Cloud API Usage Tracker for quota monitoring
+	ToolPT   ToolName = "pt"   // pt - process_triage - Bayesian agent health classification
 )
 
 // AllTools returns a list of all supported tools
 func AllTools() []ToolName {
-	return []ToolName{ToolBV, ToolBD, ToolAM, ToolCM, ToolCASS, ToolS2P, ToolJFP, ToolDCG, ToolSLB, ToolACFS, ToolRU, ToolMS, ToolXF, ToolGIIL, ToolUBS, ToolCAAM, ToolRCH, ToolRano, ToolCaut}
+	return []ToolName{ToolBV, ToolBD, ToolAM, ToolCM, ToolCASS, ToolS2P, ToolJFP, ToolDCG, ToolSLB, ToolACFS, ToolRU, ToolMS, ToolXF, ToolGIIL, ToolUBS, ToolCAAM, ToolRCH, ToolRano, ToolCaut, ToolPT}
 }
 
 // HealthStatus represents the health state of a tool

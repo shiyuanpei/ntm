@@ -49,4 +49,16 @@ func init() {
 
 	// Register CAAM adapter (Coding Agent Account Manager - rate limit recovery)
 	Register(NewCAAMAdapter())
+
+	// Register RCH adapter (Remote Compilation Helper - build offloading)
+	Register(NewRCHAdapter())
+
+	// Register rano adapter (Network observer - per-agent API tracking)
+	Register(NewRanoAdapter())
+
+	// Register caut adapter (Cloud API Usage Tracker - quota monitoring)
+	Register(NewCautAdapter())
+
+	// Register PT adapter (process_triage - Bayesian agent health classification)
+	Register(NewPTAdapter())
 }
