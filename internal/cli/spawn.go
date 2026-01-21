@@ -18,6 +18,7 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/cm"
 	"github.com/Dicklesworthstone/ntm/internal/config"
 	"github.com/Dicklesworthstone/ntm/internal/events"
+	"github.com/Dicklesworthstone/ntm/internal/integrations/dcg"
 	"github.com/Dicklesworthstone/ntm/internal/gemini"
 	"github.com/Dicklesworthstone/ntm/internal/handoff"
 	"github.com/Dicklesworthstone/ntm/internal/hooks"
@@ -983,6 +984,33 @@ func spawnSessionLogic(opts SpawnOptions) error {
 				// Unknown type, skip
 				fmt.Printf("⚠ Warning: unknown agent type %s\n", agent.Type)
 				continue
+			}
+		}
+
+		// Configure DCG hooks for Claude agents when DCG integration is enabled
+		if agent.Type == AgentTypeClaude && cfg.Integrations.DCG.Enabled {
+			if dcg.ShouldConfigureHooks(cfg.Integrations.DCG.Enabled, cfg.Integrations.DCG.BinaryPath) {
+				dcgOpts := dcg.DCGHookOptions{
+					BinaryPath:      cfg.Integrations.DCG.BinaryPath,
+					AuditLog:        cfg.Integrations.DCG.AuditLog,
+					Timeout:         5000, // 5 second timeout for hook
+					CustomBlocklist: cfg.Integrations.DCG.CustomBlocklist,
+					CustomWhitelist: cfg.Integrations.DCG.CustomWhitelist,
+				}
+				dcgEnvVars, err := dcg.HookEnvVars(dcgOpts)
+				if err == nil {
+					if envVars == nil {
+						envVars = make(map[string]string)
+					}
+					for k, v := range dcgEnvVars {
+						envVars[k] = v
+					}
+					if !IsJSONOutput() {
+						output.PrintInfof("DCG hooks configured for agent %d", agent.Index)
+					}
+				} else if !IsJSONOutput() {
+					output.PrintWarningf("Failed to configure DCG hooks for agent %d: %v", agent.Index, err)
+				}
 			}
 		}
 
