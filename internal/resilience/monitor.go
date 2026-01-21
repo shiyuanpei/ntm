@@ -423,6 +423,11 @@ func (m *Monitor) handleCrash(ctx context.Context, agent *AgentState, reason str
 		}
 	}()
 
+	// Offer manual respawn if auto-restart is disabled or max restarts reached
+	if !m.autoRestart || agent.RestartCount >= m.cfg.Resilience.MaxRestarts {
+		m.suggestManualRespawn(agent)
+	}
+
 	// Attempt restart if enabled and under the limit
 	if m.autoRestart && agent.RestartCount < m.cfg.Resilience.MaxRestarts {
 		// Schedule restart
@@ -435,6 +440,15 @@ func (m *Monitor) handleCrash(ctx context.Context, agent *AgentState, reason str
 				agent.PaneID, m.cfg.Resilience.MaxRestarts)
 		}
 	}
+}
+
+func (m *Monitor) suggestManualRespawn(agent *AgentState) {
+	if m.session == "" {
+		return
+	}
+	respawnCmd := fmt.Sprintf("ntm respawn %s --panes=%d", m.session, agent.PaneIndex)
+	log.Printf("[resilience] Suggest manual respawn for %s: %s", agent.PaneID, respawnCmd)
+	displayTmuxMessage(m.session, fmt.Sprintf("⚠️ Agent crashed (pane %d). Run: %s", agent.PaneIndex, respawnCmd))
 }
 
 // restartAgent restarts a crashed agent after the configured delay

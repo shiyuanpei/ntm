@@ -35,19 +35,10 @@ type PromptHistory struct {
 	UpdateAt time.Time     `json:"updated_at"`
 }
 
-// NTMDir returns the path to the ~/.ntm directory.
-func NTMDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get home directory: %w", err)
-	}
-	return filepath.Join(home, ".ntm"), nil
-}
-
 // SessionDir returns the path to the session-specific directory.
 // Creates the directory if it doesn't exist.
 func SessionDir(sessionName string) (string, error) {
-	ntmDir, err := NTMDir()
+	ntmDir, err := util.NTMDir()
 	if err != nil {
 		return "", err
 	}
@@ -186,7 +177,7 @@ func ClearPromptHistory(sessionName string) error {
 
 // ListSessionDirs returns all sessions that have prompt history.
 func ListSessionDirs() ([]string, error) {
-	ntmDir, err := NTMDir()
+	ntmDir, err := util.NTMDir()
 	if err != nil {
 		return nil, err
 	}

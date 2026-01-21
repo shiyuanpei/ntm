@@ -21,7 +21,7 @@ const (
 // Uses ~/.ntm/sessions by default.
 // Falls back to temp directory if home directory is unavailable.
 func StorageDir() string {
-	ntmDir, err := NTMDir()
+	ntmDir, err := util.NTMDir()
 	if err != nil || ntmDir == "" {
 		// Fallback to temp directory to ensure an absolute path
 		// (relative paths would fragment sessions across working directories)

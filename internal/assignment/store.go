@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/Dicklesworthstone/ntm/internal/util"
 )
 
 const (
@@ -83,27 +85,30 @@ func (e *InvalidTransitionError) Error() string {
 }
 
 // StorageDir returns the path to the assignment storage directory.
-// Uses XDG_DATA_HOME if set, otherwise ~/.local/share/ntm/assignments/
+// Uses ~/.ntm/sessions/ (assignments are stored within session directories).
 func StorageDir() string {
-	dataDir := os.Getenv("XDG_DATA_HOME")
-	if dataDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil || home == "" {
-			return filepath.Join(os.TempDir(), "ntm", assignmentsDirName)
-		}
-		dataDir = filepath.Join(home, ".local", "share")
+	ntmDir, err := util.NTMDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "ntm", "sessions")
 	}
-	return filepath.Join(dataDir, "ntm", assignmentsDirName)
+	return filepath.Join(ntmDir, "sessions")
 }
 
 // NewStore creates a new AssignmentStore for a session
 func NewStore(sessionName string) *AssignmentStore {
+	// Store assignments inside the session directory: ~/.ntm/sessions/<session>/assignments.json
+	baseDir := StorageDir()
+	sessionDir := filepath.Join(baseDir, sessionName)
+	
+	// Ensure session directory exists (it might not if we are just creating assignments before session save)
+	_ = os.MkdirAll(sessionDir, 0755)
+
 	return &AssignmentStore{
 		SessionName: sessionName,
 		Assignments: make(map[string]*Assignment),
 		UpdatedAt:   time.Now().UTC(),
 		Version:     1,
-		path:        filepath.Join(StorageDir(), sessionName+fileExtension),
+		path:        filepath.Join(sessionDir, assignmentsDirName+fileExtension),
 	}
 }
 

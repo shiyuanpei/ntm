@@ -535,6 +535,58 @@ Shell Integration:
 			}
 			return
 		}
+		if robotMonitor != "" {
+			// Parse pane filter
+			panes, err := robot.ParsePanesArg(robotPanes)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: invalid --panes: %v\n", err)
+				os.Exit(3)
+			}
+			// Parse interval
+			interval, err := robot.ParseIntervalArg(robotMonitorInterval)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			// Parse thresholds
+			warnThresh, err := robot.ParseThresholdArg(robotMonitorWarn, 25.0)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			critThresh, err := robot.ParseThresholdArg(robotMonitorCrit, 15.0)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			infoThresh, err := robot.ParseThresholdArg(robotMonitorInfo, 40.0)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			alertThresh, err := robot.ParseThresholdArg(robotMonitorAlert, 80.0)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			config := robot.MonitorConfig{
+				Session:        robotMonitor,
+				Panes:          panes,
+				Interval:       interval,
+				InfoThreshold:  infoThresh,
+				WarnThreshold:  warnThresh,
+				CritThreshold:  critThresh,
+				AlertThreshold: alertThresh,
+				IncludeCaut:    robotMonitorIncludeCaut,
+				OutputFile:     robotMonitorOutput,
+				LinesCaptured:  robotLines,
+			}
+			if err := robot.PrintMonitor(config); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
 		if robotSend != "" {
 			// Validate message is provided
 			if robotSendMsg == "" {
@@ -1307,6 +1359,16 @@ var (
 	robotSmartRestartPrompt  string // prompt to send after restart
 	robotSmartRestartVerbose bool   // include extra debugging info
 
+	// Robot-monitor flags for proactive usage limit warnings (bd-3gh5m)
+	robotMonitor          string // session name to monitor
+	robotMonitorInterval  string // polling interval (e.g. "30s", "1m")
+	robotMonitorWarn      string // warning threshold percentage
+	robotMonitorCrit      string // critical threshold percentage
+	robotMonitorInfo      string // info threshold percentage
+	robotMonitorAlert     string // provider usage alert threshold
+	robotMonitorIncludeCaut bool // include caut provider data
+	robotMonitorOutput    string // output file path (empty = stdout)
+
 	// Help verbosity flags
 	helpMinimal bool // show minimal help with essential commands only
 	helpFull    bool // show full help (default behavior)
@@ -1343,6 +1405,14 @@ func init() {
 	rootCmd.Flags().BoolVar(&robotSmartRestartDryRun, "dry-run", false, "Show what would happen without performing restart. Optional with --robot-smart-restart")
 	rootCmd.Flags().StringVar(&robotSmartRestartPrompt, "prompt", "", "Send this prompt to the agent after restart. Optional with --robot-smart-restart")
 	rootCmd.Flags().BoolVar(&robotSmartRestartVerbose, "smart-restart-verbose", false, "Include extra debugging info in --robot-smart-restart response")
+	rootCmd.Flags().StringVar(&robotMonitor, "robot-monitor", "", "Start proactive monitoring for usage limits. Emits JSONL warnings. Required: SESSION. Example: ntm --robot-monitor=myproject --interval=30s")
+	rootCmd.Flags().StringVar(&robotMonitorInterval, "interval", "", "Polling interval for --robot-monitor. Example: --interval=30s (default 30s)")
+	rootCmd.Flags().StringVar(&robotMonitorWarn, "warn-threshold", "", "Context % for WARNING level. Optional with --robot-monitor. Example: --warn-threshold=25 (default 25)")
+	rootCmd.Flags().StringVar(&robotMonitorCrit, "crit-threshold", "", "Context % for CRITICAL level. Optional with --robot-monitor. Example: --crit-threshold=15 (default 15)")
+	rootCmd.Flags().StringVar(&robotMonitorInfo, "info-threshold", "", "Context % for INFO level. Optional with --robot-monitor. Example: --info-threshold=40 (default 40)")
+	rootCmd.Flags().StringVar(&robotMonitorAlert, "alert-threshold", "", "Provider usage % for ALERT level. Optional with --robot-monitor. Example: --alert-threshold=80 (default 80)")
+	rootCmd.Flags().BoolVar(&robotMonitorIncludeCaut, "include-caut", false, "Query caut for provider usage data. Optional with --robot-monitor")
+	rootCmd.Flags().StringVar(&robotMonitorOutput, "output", "", "Output file path for JSONL. Optional with --robot-monitor. Example: --output=/tmp/monitor.jsonl")
 	rootCmd.Flags().BoolVar(&robotGraph, "robot-graph", false, "Get bv dependency graph insights: PageRank, critical path, cycles (JSON)")
 	rootCmd.Flags().BoolVar(&robotTriage, "robot-triage", false, "Get bv triage analysis with recommendations, quick wins, blockers (JSON). Example: ntm --robot-triage --triage-limit=20")
 	rootCmd.Flags().IntVar(&robotTriageLimit, "triage-limit", 10, "Max recommendations per category. Optional with --robot-triage. Example: --triage-limit=20")
@@ -2205,7 +2275,7 @@ func needsConfigLoading(cmdName string) bool {
 			robotInterrupt != "" || robotRestartPane != "" || robotGraph || robotMail || robotHealth != "" ||
 			robotDiagnose != "" || robotTerse || robotMarkdown || robotSave != "" || robotRestore != "" ||
 			robotContext != "" || robotAlerts || robotIsWorking != "" || robotAgentHealth != "" ||
-			robotSmartRestart != "" {
+			robotSmartRestart != "" || robotMonitor != "" {
 			return true
 		}
 	}

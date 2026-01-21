@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/Dicklesworthstone/ntm/internal/util"
 )
 
 const (
@@ -83,15 +85,11 @@ func NewPendingRotationStoreWithPath(path string) *PendingRotationStore {
 
 // defaultPendingRotationPath returns the path to the pending rotation file.
 func defaultPendingRotationPath() string {
-	dataDir := os.Getenv("XDG_DATA_HOME")
-	if dataDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return filepath.Join(os.TempDir(), "ntm", pendingRotationDir, pendingRotationFile)
-		}
-		dataDir = filepath.Join(home, ".local", "share")
+	ntmDir, err := util.NTMDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "ntm", pendingRotationDir, pendingRotationFile)
 	}
-	return filepath.Join(dataDir, "ntm", pendingRotationDir, pendingRotationFile)
+	return filepath.Join(ntmDir, pendingRotationDir, pendingRotationFile)
 }
 
 // StoragePath returns the path to the pending rotation file.
