@@ -641,7 +641,7 @@ func PrintStatus() error {
 	}
 
 	// Enrich with Agent Mail summary (best-effort; degrade gracefully)
-	if summary := getAgentMailSummary(); summary != nil {
+	if summary, _ := getAgentMailSummary(); summary != nil {
 		output.AgentMail = summary
 	}
 
@@ -3456,10 +3456,10 @@ func getTerseMailCount() int {
 }
 
 // getAgentMailSummary returns a best-effort Agent Mail summary for --robot-status.
-func getAgentMailSummary() *AgentMailSummary {
+func getAgentMailSummary() (*AgentMailSummary, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	projectKey := cwd
