@@ -4,10 +4,14 @@ package robot
 
 import (
 	"context"
+	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Dicklesworthstone/ntm/internal/caut"
+	"github.com/Dicklesworthstone/ntm/internal/integrations/pt"
+	"github.com/Dicklesworthstone/ntm/internal/tools"
 )
 
 // =============================================================================
@@ -27,7 +31,9 @@ type AgentHealthOptions struct {
 	Panes         []int         // Pane indices to check (empty = all non-control panes)
 	LinesCaptured int           // Number of lines to capture (default: 100)
 	IncludeCaut   bool          // Whether to query caut for provider usage (default: true)
+	IncludePT     bool          // Whether to query process_triage for health states (default: true)
 	CautTimeout   time.Duration // Timeout for caut queries (default: 10s)
+	PTTimeout     time.Duration // Timeout for PT queries (default: 10s)
 	Verbose       bool          // Include raw sample in output
 }
 
@@ -36,7 +42,9 @@ func DefaultAgentHealthOptions() AgentHealthOptions {
 	return AgentHealthOptions{
 		LinesCaptured: 100,
 		IncludeCaut:   true,
+		IncludePT:     true,
 		CautTimeout:   10 * time.Second,
+		PTTimeout:     10 * time.Second,
 		Verbose:       false,
 	}
 }
@@ -75,11 +83,40 @@ type ProviderStatusInfo struct {
 	Message     string `json:"message,omitempty"`
 }
 
+// PTHealthSignals contains process_triage signals for an agent.
+type PTHealthSignals struct {
+	CPUPercent    *float64 `json:"cpu_percent,omitempty"`    // CPU usage percentage (if available)
+	IOActive      bool     `json:"io_active"`                // Whether IO is active
+	NetworkActive bool     `json:"network_active"`           // Whether network is active (from rano)
+	OutputRecent  bool     `json:"output_recent"`            // Whether there was recent output
+}
+
+// PTHealthInfo contains process_triage classification data for a pane.
+type PTHealthInfo struct {
+	Classification  string           `json:"classification"`             // useful, waiting, idle, stuck, zombie, unknown
+	Since           string           `json:"since,omitempty"`            // RFC3339 timestamp when classification started
+	DurationSeconds int              `json:"duration_seconds,omitempty"` // Seconds in current state
+	Signals         *PTHealthSignals `json:"signals,omitempty"`          // Underlying signals
+	Confidence      float64          `json:"confidence"`                 // 0.0 to 1.0
+	Reason          string           `json:"reason,omitempty"`           // Classification reason
+}
+
+// PTHealthSummary contains counts by classification.
+type PTHealthSummary struct {
+	Useful  int `json:"useful"`
+	Waiting int `json:"waiting"`
+	Idle    int `json:"idle"`
+	Stuck   int `json:"stuck"`
+	Zombie  int `json:"zombie"`
+	Unknown int `json:"unknown"`
+}
+
 // PaneHealthStatus contains the full health status for a single pane.
 type PaneHealthStatus struct {
 	AgentType            string             `json:"agent_type"`
 	LocalState           LocalStateInfo     `json:"local_state"`
 	ProviderUsage        *ProviderUsageInfo `json:"provider_usage,omitempty"`
+	PTHealth             *PTHealthInfo      `json:"pt_health,omitempty"` // process_triage health state
 	HealthScore          int                `json:"health_score"`
 	HealthGrade          string             `json:"health_grade"`
 	Issues               []string           `json:"issues"`
@@ -110,17 +147,20 @@ type AgentHealthQuery struct {
 	PanesRequested []int `json:"panes_requested"`
 	LinesCaptured  int   `json:"lines_captured"`
 	CautEnabled    bool  `json:"caut_enabled"`
+	PTEnabled      bool  `json:"pt_enabled"`
 }
 
 // AgentHealthOutput is the response for --robot-agent-health.
 type AgentHealthOutput struct {
 	RobotResponse
-	Session         string                     `json:"session"`
-	Query           AgentHealthQuery           `json:"query"`
-	CautAvailable   bool                       `json:"caut_available"`
+	Session         string                      `json:"session"`
+	Query           AgentHealthQuery            `json:"query"`
+	CautAvailable   bool                        `json:"caut_available"`
+	PTAvailable     bool                        `json:"pt_available"`
 	Panes           map[string]PaneHealthStatus `json:"panes"`
-	ProviderSummary map[string]ProviderStats   `json:"provider_summary"`
-	FleetHealth     FleetHealthSummary         `json:"fleet_health"`
+	ProviderSummary map[string]ProviderStats    `json:"provider_summary"`
+	PTSummary       *PTHealthSummary            `json:"pt_summary,omitempty"`
+	FleetHealth     FleetHealthSummary          `json:"fleet_health"`
 }
 
 // PrintAgentHealth outputs the health state for specified panes in a session.
@@ -143,6 +183,7 @@ func AgentHealth(opts AgentHealthOptions) (*AgentHealthOutput, error) {
 			PanesRequested: opts.Panes,
 			LinesCaptured:  opts.LinesCaptured,
 			CautEnabled:    opts.IncludeCaut,
+			PTEnabled:      opts.IncludePT,
 		},
 		Panes:           make(map[string]PaneHealthStatus),
 		ProviderSummary: make(map[string]ProviderStats),
@@ -188,6 +229,25 @@ func AgentHealth(opts AgentHealthOptions) (*AgentHealthOutput, error) {
 		}
 	}
 
+	// Step 2.5: Query process_triage for health states (if enabled)
+	var ptStates map[string]*pt.AgentState
+	var ptSummary *PTHealthSummary
+	if opts.IncludePT {
+		ptAdapter := tools.NewPTAdapter()
+		ctx, cancel := context.WithTimeout(context.Background(), opts.PTTimeout)
+		if ptAdapter.IsAvailable(ctx) {
+			output.PTAvailable = true
+			// Get states from the global monitor if running, otherwise fetch on-demand
+			monitor := pt.GetGlobalMonitor()
+			if monitor.Running() {
+				ptStates = monitor.GetAllStates()
+			}
+			// Initialize summary
+			ptSummary = &PTHealthSummary{}
+		}
+		cancel()
+	}
+
 	// Step 3: Build health status for each pane
 	totalScore := 0
 	for paneStr, workStatus := range isWorkingResult.Panes {
@@ -220,6 +280,18 @@ func AgentHealth(opts AgentHealthOptions) (*AgentHealthOutput, error) {
 					// Track in provider summary
 					paneNum, _ := strconv.Atoi(paneStr)
 					updateProviderSummary(output.ProviderSummary, provider, cached, paneNum)
+				}
+			}
+		}
+
+		// Get PT health state if available
+		if output.PTAvailable && ptStates != nil {
+			// Try to find state by pane identifier (e.g., "myproject__cc_1")
+			if state := findPTState(ptStates, opts.Session, paneStr, workStatus.AgentType); state != nil {
+				healthStatus.PTHealth = convertPTState(state, workStatus.IsWorking)
+				// Update PT summary
+				if ptSummary != nil {
+					updatePTSummary(ptSummary, state.Classification)
 				}
 			}
 		}
@@ -258,6 +330,11 @@ func AgentHealth(opts AgentHealthOptions) (*AgentHealthOutput, error) {
 	}
 	output.FleetHealth.OverallGrade = HealthGrade(int(output.FleetHealth.AvgHealthScore))
 	output.Query.PanesRequested = isWorkingResult.Query.PanesRequested
+
+	// Include PT summary if we have PT data
+	if output.PTAvailable && ptSummary != nil {
+		output.PTSummary = ptSummary
+	}
 
 	return output, nil
 }
@@ -333,5 +410,95 @@ func updateProviderSummary(summary map[string]ProviderStats, provider string, pa
 	}
 
 	summary[provider] = stats
+}
+
+// findPTState finds the PT state for a pane by trying various identifier patterns.
+func findPTState(ptStates map[string]*pt.AgentState, session, paneStr, agentType string) *pt.AgentState {
+	if ptStates == nil {
+		return nil
+	}
+
+	// Try direct pane string match first
+	if state, ok := ptStates[paneStr]; ok {
+		return state
+	}
+
+	// Try session__agenttype_pane pattern (e.g., "myproject__cc_1")
+	agentPrefix := ""
+	switch agentType {
+	case "claude-code":
+		agentPrefix = "cc"
+	case "codex":
+		agentPrefix = "codex"
+	case "gemini":
+		agentPrefix = "gemini"
+	}
+
+	if agentPrefix != "" {
+		key := fmt.Sprintf("%s__%s_%s", session, agentPrefix, paneStr)
+		if state, ok := ptStates[key]; ok {
+			return state
+		}
+	}
+
+	// Try matching by pane number suffix
+	for key, state := range ptStates {
+		if strings.HasSuffix(key, "_"+paneStr) {
+			return state
+		}
+	}
+
+	return nil
+}
+
+// convertPTState converts a pt.AgentState to PTHealthInfo for JSON output.
+func convertPTState(state *pt.AgentState, isWorking bool) *PTHealthInfo {
+	if state == nil {
+		return nil
+	}
+
+	info := &PTHealthInfo{
+		Classification:  string(state.Classification),
+		Confidence:      state.Confidence,
+		DurationSeconds: int(time.Since(state.Since).Seconds()),
+	}
+
+	if !state.Since.IsZero() {
+		info.Since = state.Since.Format(time.RFC3339)
+	}
+
+	// Extract signals from recent history if available
+	if len(state.History) > 0 {
+		latest := state.History[len(state.History)-1]
+		info.Reason = latest.Reason
+		info.Signals = &PTHealthSignals{
+			NetworkActive: latest.NetworkActive,
+			OutputRecent:  isWorking, // Use local state as proxy for output activity
+		}
+	}
+
+	return info
+}
+
+// updatePTSummary updates the PT health summary with a classification.
+func updatePTSummary(summary *PTHealthSummary, classification pt.Classification) {
+	if summary == nil {
+		return
+	}
+
+	switch classification {
+	case pt.ClassUseful:
+		summary.Useful++
+	case pt.ClassWaiting:
+		summary.Waiting++
+	case pt.ClassIdle:
+		summary.Idle++
+	case pt.ClassStuck:
+		summary.Stuck++
+	case pt.ClassZombie:
+		summary.Zombie++
+	default:
+		summary.Unknown++
+	}
 }
 

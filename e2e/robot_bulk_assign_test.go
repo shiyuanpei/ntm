@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/Dicklesworthstone/ntm/internal/tmux"
 )
 
 // BulkAssignOutput represents the JSON response from --robot-bulk-assign.
@@ -365,7 +367,7 @@ func TestE2E_RobotBulkAssign_UnassignedPanes(t *testing.T) {
 
 	// Create additional panes
 	for i := 0; i < 3; i++ {
-		cmd := exec.Command("tmux", "split-window", "-t", suite.Session(), "-h")
+		cmd := exec.Command(tmux.BinaryPath(), "split-window", "-t", suite.Session(), "-h")
 		if err := cmd.Run(); err != nil {
 			suite.Logger().Log("[E2E-BULK-ASSIGN] Warning: could not create pane %d: %v", i, err)
 		}
@@ -473,14 +475,14 @@ func TestE2E_RobotBulkAssign_MultiPaneSession(t *testing.T) {
 
 	// Create 5 panes for testing
 	for i := 0; i < 4; i++ {
-		cmd := exec.Command("tmux", "split-window", "-t", suite.Session(), "-h")
+		cmd := exec.Command(tmux.BinaryPath(), "split-window", "-t", suite.Session(), "-h")
 		if err := cmd.Run(); err != nil {
 			suite.Logger().Log("[E2E-BULK-ASSIGN] Warning: could not create pane %d: %v", i+1, err)
 		}
 	}
 
 	// Balance the layout
-	cmd := exec.Command("tmux", "select-layout", "-t", suite.Session(), "tiled")
+	cmd := exec.Command(tmux.BinaryPath(), "select-layout", "-t", suite.Session(), "tiled")
 	cmd.Run()
 
 	// Test allocation to multiple panes
@@ -551,10 +553,10 @@ func TestE2E_RobotBulkAssign_SkipMultiplePanes(t *testing.T) {
 
 	// Create additional panes
 	for i := 0; i < 4; i++ {
-		cmd := exec.Command("tmux", "split-window", "-t", suite.Session(), "-h")
+		cmd := exec.Command(tmux.BinaryPath(), "split-window", "-t", suite.Session(), "-h")
 		cmd.Run()
 	}
-	exec.Command("tmux", "select-layout", "-t", suite.Session(), "tiled").Run()
+	exec.Command(tmux.BinaryPath(), "select-layout", "-t", suite.Session(), "tiled").Run()
 
 	// Skip multiple panes
 	allocation := `{"0":"bd-s0","1":"bd-s1","2":"bd-s2","3":"bd-s3","4":"bd-s4"}`
@@ -723,7 +725,7 @@ func TestE2E_RobotBulkAssign_CombinedFlags(t *testing.T) {
 
 	// Create a few panes
 	for i := 0; i < 2; i++ {
-		exec.Command("tmux", "split-window", "-t", suite.Session(), "-h").Run()
+		exec.Command(tmux.BinaryPath(), "split-window", "-t", suite.Session(), "-h").Run()
 	}
 
 	// Test multiple flags combined

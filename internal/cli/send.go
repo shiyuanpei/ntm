@@ -852,6 +852,33 @@ func runSendInternal(opts SendOptions) error {
 		if len(selectedPanes) == 0 {
 			return outputError(fmt.Errorf("pane %d not found", paneIndex))
 		}
+	} else if opts.PanesSpecified {
+		// --panes was specified: select only the specified pane indices
+		paneSet := make(map[int]bool)
+		for _, idx := range opts.Panes {
+			paneSet[idx] = true
+		}
+		for _, p := range panes {
+			if paneSet[p.Index] {
+				selectedPanes = append(selectedPanes, p)
+			}
+		}
+		// Check for missing panes
+		if len(selectedPanes) != len(opts.Panes) {
+			foundSet := make(map[int]bool)
+			for _, p := range selectedPanes {
+				foundSet[p.Index] = true
+			}
+			var missing []int
+			for _, idx := range opts.Panes {
+				if !foundSet[idx] {
+					missing = append(missing, idx)
+				}
+			}
+			if len(missing) > 0 {
+				return outputError(fmt.Errorf("pane(s) not found: %v", missing))
+			}
+		}
 	} else {
 		noFilter := !targetCC && !targetCod && !targetGmi && !targetAll && len(tags) == 0
 		hasVariantFilter := len(targets) > 0
