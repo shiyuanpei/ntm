@@ -270,6 +270,7 @@ const (
 	refreshAgentMailInbox
 	refreshRouting
 	refreshDCG
+	refreshPendingRotations
 	refreshSourceCount
 )
 
@@ -1010,6 +1011,20 @@ func (m *Model) fetchDCGStatus() tea.Cmd {
 		// For now, we just report availability status
 
 		return msg
+	}
+}
+
+// fetchPendingRotations fetches pending rotation confirmations for the session
+func (m *Model) fetchPendingRotations() tea.Cmd {
+	gen := m.nextGen(refreshPendingRotations)
+	session := m.session
+	return func() tea.Msg {
+		pending, err := ctxmon.GetPendingRotationsForSession(session)
+		return PendingRotationsUpdateMsg{
+			Pending: pending,
+			Err:     err,
+			Gen:     gen,
+		}
 	}
 }
 
@@ -2427,6 +2442,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.markUpdated(refreshDCG, time.Now())
 		}
 		return m, nil
+
+	case PendingRotationsUpdateMsg:
+		if !m.acceptUpdate(refreshPendingRotations, msg.Gen) {
+			return m, nil
+		}
+		m.fetchingPendingRot = false
+		m.lastPendingFetch = time.Now()
+		m.pendingRotationsErr = msg.Err
+		if msg.Err == nil {
+			m.pendingRotations = msg.Pending
+			m.markUpdated(refreshPendingRotations, time.Now())
+		}
+		// Update the panel with the new data
+		if m.rotationConfirmPanel != nil {
+			m.rotationConfirmPanel.SetData(m.pendingRotations, m.pendingRotationsErr)
+		}
+		return m, nil
+
+	case panels.RotationConfirmActionMsg:
+		// Handle rotation confirmation action from the panel
+		return m, m.executeRotationConfirmAction(msg.AgentID, msg.Action)
 
 	case HandoffUpdateMsg:
 		if !m.acceptUpdate(refreshHandoff, msg.Gen) {

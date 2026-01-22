@@ -22,6 +22,12 @@ type RotationConfirmPanelData struct {
 	Selected int // Index of selected pending rotation
 }
 
+// RotationConfirmActionMsg is sent when the user confirms a rotation action.
+type RotationConfirmActionMsg struct {
+	AgentID string
+	Action  context.ConfirmAction
+}
+
 // rotationConfirmConfig returns the configuration for the rotation confirmation panel.
 func rotationConfirmConfig() PanelConfig {
 	return PanelConfig{
@@ -73,6 +79,46 @@ func (p *RotationConfirmPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "k", "up":
 			if p.data.Selected > 0 {
 				p.data.Selected--
+			}
+		case "r":
+			// Confirm rotation for selected pending
+			if pending := p.SelectedPending(); pending != nil {
+				return p, func() tea.Msg {
+					return RotationConfirmActionMsg{
+						AgentID: pending.AgentID,
+						Action:  context.ConfirmRotate,
+					}
+				}
+			}
+		case "c":
+			// Compact instead of rotating
+			if pending := p.SelectedPending(); pending != nil {
+				return p, func() tea.Msg {
+					return RotationConfirmActionMsg{
+						AgentID: pending.AgentID,
+						Action:  context.ConfirmCompact,
+					}
+				}
+			}
+		case "i":
+			// Ignore/cancel the rotation
+			if pending := p.SelectedPending(); pending != nil {
+				return p, func() tea.Msg {
+					return RotationConfirmActionMsg{
+						AgentID: pending.AgentID,
+						Action:  context.ConfirmIgnore,
+					}
+				}
+			}
+		case "p":
+			// Postpone the rotation
+			if pending := p.SelectedPending(); pending != nil {
+				return p, func() tea.Msg {
+					return RotationConfirmActionMsg{
+						AgentID: pending.AgentID,
+						Action:  context.ConfirmPostpone,
+					}
+				}
 			}
 		}
 	}
