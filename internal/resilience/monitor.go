@@ -54,6 +54,7 @@ type Monitor struct {
 	agents map[string]*AgentState // keyed by pane ID
 	cancel context.CancelFunc
 	done   chan struct{}
+	wg     sync.WaitGroup // Waits for background tasks on shutdown
 }
 
 // NewMonitor creates a new resilience monitor for a session
@@ -101,50 +102,68 @@ func (m *Monitor) ScanAndRegisterAgents() error {
 
 	for _, p := range panes {
 		// Only monitor agent panes (not user or unknown)
-		if p.Type == tmux.AgentClaude || p.Type == tmux.AgentCodex || p.Type == tmux.AgentGemini {
-			// Skip if already registered
-			if _, exists := m.agents[p.ID]; exists {
-				continue
+		if p.Type == tmux.AgentUser {
+			continue
+		}
+
+		// Skip if already registered
+		if _, exists := m.agents[p.ID]; exists {
+			continue
+		}
+
+		// Determine command template
+		var agentCmdTemplate string
+		switch p.Type {
+		case tmux.AgentClaude:
+			agentCmdTemplate = m.cfg.Agents.Claude
+		case tmux.AgentCodex:
+			agentCmdTemplate = m.cfg.Agents.Codex
+		case tmux.AgentGemini:
+			agentCmdTemplate = m.cfg.Agents.Gemini
+		default:
+			// Check plugins
+			if cmd, ok := m.cfg.Agents.Plugins[string(p.Type)]; ok {
+				agentCmdTemplate = cmd
 			}
+		}
 
-			// Reconstruct command template
-			var agentCmdTemplate string
-			switch p.Type {
-			case tmux.AgentClaude:
-				agentCmdTemplate = m.cfg.Agents.Claude
-			case tmux.AgentCodex:
-				agentCmdTemplate = m.cfg.Agents.Codex
-			case tmux.AgentGemini:
-				agentCmdTemplate = m.cfg.Agents.Gemini
-			}
+		if agentCmdTemplate == "" {
+			log.Printf("[resilience] Warning: no command template found for agent type %s (pane %s)", p.Type, p.ID)
+			continue
+		}
 
-			// Resolve model
-			modelName := m.cfg.Models.GetModelName(string(p.Type), p.Variant)
+		// Resolve model
+		modelName := m.cfg.Models.GetModelName(string(p.Type), p.Variant)
 
-			// Generate command
-			cmd, err := config.GenerateAgentCommand(agentCmdTemplate, config.AgentTemplateVars{
-				Model:       modelName,
-				ModelAlias:  p.Variant,
-				SessionName: m.session,
-				PaneIndex:   p.Index,
-				AgentType:   string(p.Type),
-				ProjectDir:  m.projectDir,
-				// Note: SystemPromptFile is lost in reconstruction
-			})
+		// Generate command
+		// Use NTM index (logical agent number) if available, otherwise fallback to tmux pane index
+		paneIdx := p.Index
+		if p.NTMIndex > 0 {
+			paneIdx = p.NTMIndex
+		}
 
-			if err != nil {
-				log.Printf("[resilience] Failed to reconstruct command for %s: %v", p.ID, err)
-				continue
-			}
+		cmd, err := config.GenerateAgentCommand(agentCmdTemplate, config.AgentTemplateVars{
+			Model:       modelName,
+			ModelAlias:  p.Variant,
+			SessionName: m.session,
+			PaneIndex:   paneIdx,
+			AgentType:   string(p.Type),
+			ProjectDir:  m.projectDir,
+			// Note: SystemPromptFile is lost in reconstruction
+		})
 
-			m.agents[p.ID] = &AgentState{
-				PaneID:    p.ID,
-				PaneIndex: p.Index,
-				AgentType: string(p.Type),
-				Model:     p.Variant,
-				Command:   cmd,
-				Healthy:   true,
-			}
+		if err != nil {
+			log.Printf("[resilience] Failed to reconstruct command for %s: %v", p.ID, err)
+			continue
+		}
+
+		m.agents[p.ID] = &AgentState{
+			PaneID:    p.ID,
+			PaneIndex: paneIdx,
+			AgentType: string(p.Type),
+			Model:     p.Variant,
+			Command:   cmd,
+			Healthy:   true,
 		}
 	}
 	return nil
@@ -166,6 +185,7 @@ func (m *Monitor) Stop() {
 	}
 	m.cancel()
 	<-m.done
+	m.wg.Wait()
 }
 
 // GetRestartCount returns the number of restarts for an agent
@@ -303,7 +323,9 @@ func (m *Monitor) handleRateLimit(agent *AgentState, waitSeconds int) {
 	rotateConfig := m.cfg.Rotation
 
 	// Run notifications and rotation triggers asynchronously
+	m.wg.Add(1)
 	go func() {
+		defer m.wg.Done()
 		// Send rate limit notification if enabled
 		if notifyEnabled && m.notifier != nil {
 			event := notify.NewRateLimitEvent(session, paneID, agentType, waitSeconds)
@@ -379,7 +401,9 @@ func (m *Monitor) handleCrash(ctx context.Context, agent *AgentState, reason str
 	currentRestarts := agent.RestartCount
 
 	// Run notifications asynchronously
+	m.wg.Add(1)
 	go func() {
+		defer m.wg.Done()
 		// Send crash notification if enabled
 		if notifyCrash && m.notifier != nil {
 			event := notify.NewAgentCrashedEvent(session, paneID, agentType)
@@ -405,10 +429,19 @@ func (m *Monitor) handleCrash(ctx context.Context, agent *AgentState, reason str
 		}
 	}()
 
+	// Offer manual respawn if auto-restart is disabled or max restarts reached
+	if !m.autoRestart || agent.RestartCount >= m.cfg.Resilience.MaxRestarts {
+		m.suggestManualRespawn(agent)
+	}
+
 	// Attempt restart if enabled and under the limit
 	if m.autoRestart && agent.RestartCount < m.cfg.Resilience.MaxRestarts {
 		// Schedule restart
-		go m.restartAgent(ctx, agent)
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.restartAgent(ctx, agent)
+		}()
 	} else {
 		if !m.autoRestart {
 			log.Printf("[resilience] Auto-restart disabled. Agent %s stopped.", agent.PaneID)
@@ -417,6 +450,15 @@ func (m *Monitor) handleCrash(ctx context.Context, agent *AgentState, reason str
 				agent.PaneID, m.cfg.Resilience.MaxRestarts)
 		}
 	}
+}
+
+func (m *Monitor) suggestManualRespawn(agent *AgentState) {
+	if m.session == "" {
+		return
+	}
+	respawnCmd := fmt.Sprintf("ntm respawn %s --panes=%d", m.session, agent.PaneIndex)
+	log.Printf("[resilience] Suggest manual respawn for %s: %s", agent.PaneID, respawnCmd)
+	displayTmuxMessage(m.session, fmt.Sprintf("⚠️ Agent crashed (pane %d). Run: %s", agent.PaneIndex, respawnCmd))
 }
 
 // restartAgent restarts a crashed agent after the configured delay

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Dicklesworthstone/ntm/internal/tmux"
 )
 
 func TestNewDetector(t *testing.T) {
@@ -461,8 +463,7 @@ func TestDefaultConfig(t *testing.T) {
 
 // tmuxAvailable checks if tmux is installed and returns true if so
 func tmuxAvailable() bool {
-	_, err := exec.LookPath("tmux")
-	return err == nil
+	return tmux.DefaultClient.IsInstalled()
 }
 
 // createTestSession creates a tmux session for testing and returns the session name
@@ -470,14 +471,14 @@ func createTestSession(t *testing.T) string {
 	t.Helper()
 	sessionName := "ntm_status_test_" + time.Now().Format("150405")
 
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	cmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Skipf("Failed to create test session (tmux may be unavailable): %v: %s", err, output)
 	}
 
 	t.Cleanup(func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	})
 
 	// Give tmux a moment to set up
@@ -495,7 +496,7 @@ func TestDetect(t *testing.T) {
 	sessionName := createTestSession(t)
 
 	// Get the pane ID from the session
-	cmd := exec.Command("tmux", "list-panes", "-t", sessionName, "-F", "#{pane_id}")
+	cmd := exec.Command(tmux.BinaryPath(), "list-panes", "-t", sessionName, "-F", "#{pane_id}")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to get pane ID: %v", err)
@@ -599,7 +600,7 @@ func TestDetectWithErrorOutput(t *testing.T) {
 	sessionName := createTestSession(t)
 
 	// Get pane ID
-	cmd := exec.Command("tmux", "list-panes", "-t", sessionName, "-F", "#{pane_id}")
+	cmd := exec.Command(tmux.BinaryPath(), "list-panes", "-t", sessionName, "-F", "#{pane_id}")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to get pane ID: %v", err)
@@ -607,7 +608,7 @@ func TestDetectWithErrorOutput(t *testing.T) {
 	paneID := strings.TrimSpace(string(output))
 
 	// Send an error message to the pane
-	exec.Command("tmux", "send-keys", "-t", paneID, "echo 'Error: rate limit exceeded'", "Enter").Run()
+	exec.Command(tmux.BinaryPath(), "send-keys", "-t", paneID, "echo 'Error: rate limit exceeded'", "Enter").Run()
 	time.Sleep(200 * time.Millisecond)
 
 	d := NewDetector()
@@ -634,7 +635,7 @@ func TestDetectWithIdlePrompt(t *testing.T) {
 	sessionName := createTestSession(t)
 
 	// Get pane ID
-	cmd := exec.Command("tmux", "list-panes", "-t", sessionName, "-F", "#{pane_id}")
+	cmd := exec.Command(tmux.BinaryPath(), "list-panes", "-t", sessionName, "-F", "#{pane_id}")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to get pane ID: %v", err)
@@ -665,7 +666,7 @@ func TestDetectAllWithMultiplePanes(t *testing.T) {
 	sessionName := createTestSession(t)
 
 	// Split pane to create a second one
-	exec.Command("tmux", "split-window", "-t", sessionName).Run()
+	exec.Command(tmux.BinaryPath(), "split-window", "-t", sessionName).Run()
 	time.Sleep(100 * time.Millisecond)
 
 	d := NewDetector()
@@ -686,5 +687,249 @@ func TestDetectAllWithMultiplePanes(t *testing.T) {
 			t.Errorf("Duplicate pane ID: %s", status.PaneID)
 		}
 		paneIDs[status.PaneID] = true
+	}
+}
+
+// TestLooksLikeIdle tests the heuristic idle detection function
+func TestLooksLikeIdle(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   string
+		expected bool
+	}{
+		// Short last lines (< 20 chars) are likely prompts
+		{
+			name:     "short prompt line",
+			output:   "Some output\n>",
+			expected: true,
+		},
+		{
+			name:     "short line with space",
+			output:   "Done processing\n> ",
+			expected: true,
+		},
+		{
+			name:     "very short line",
+			output:   "Task complete\n$",
+			expected: true,
+		},
+		// Prompt character endings
+		{
+			name:     "ends with >",
+			output:   "Some long output text here\nuser@host:~/project>",
+			expected: true,
+		},
+		{
+			name:     "ends with $",
+			output:   "Output\nuser@host:~/project$",
+			expected: true,
+		},
+		{
+			name:     "ends with %",
+			output:   "Output\nuser@host:~/project%",
+			expected: true,
+		},
+		{
+			name:     "ends with ❯",
+			output:   "Output\n~/project ❯",
+			expected: true,
+		},
+		// Done indicators
+		{
+			name:     "completed indicator",
+			output:   "Processing...\nTask completed successfully",
+			expected: true,
+		},
+		{
+			name:     "finished indicator",
+			output:   "Working...\nBuild finished with 0 errors",
+			expected: true,
+		},
+		{
+			name:     "done indicator",
+			output:   "Running tests...\nAll tests done",
+			expected: true,
+		},
+		{
+			name:     "ready indicator",
+			output:   "Starting server...\nServer ready on port 3000",
+			expected: true,
+		},
+		{
+			name:     "success indicator",
+			output:   "Deploying...\nDeployment success",
+			expected: true,
+		},
+		// Not idle cases
+		{
+			name:     "empty output",
+			output:   "",
+			expected: false,
+		},
+		{
+			name:     "only whitespace",
+			output:   "   \n\t\n  ",
+			expected: false,
+		},
+		{
+			name:     "long working line no prompt ending",
+			output:   "Still processing large dataset, please wait for completion...",
+			expected: false,
+		},
+		{
+			name:     "active work line",
+			output:   "Compiling module 15 of 100, estimated time remaining: 5 minutes",
+			expected: false,
+		},
+		// Edge cases
+		{
+			name:     "ansi codes in prompt",
+			output:   "Output\n\x1b[32m>\x1b[0m",
+			expected: true, // After ANSI strip, this is ">"
+		},
+		{
+			name:     "trailing newlines with prompt",
+			output:   "Done\nclaude>\n\n",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := looksLikeIdle(tt.output)
+			if result != tt.expected {
+				t.Errorf("looksLikeIdle(%q) = %v, want %v", tt.output, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestDetermineState tests the state determination logic
+func TestDetermineState(t *testing.T) {
+	d := NewDetector()
+
+	tests := []struct {
+		name         string
+		output       string
+		agentType    string
+		lastActivity time.Time
+		wantState    AgentState
+		wantError    ErrorType
+	}{
+		{
+			name:         "error detected takes priority",
+			output:       "Error: rate limit exceeded",
+			agentType:    "cc",
+			lastActivity: time.Now(),
+			wantState:    StateError,
+			wantError:    ErrorRateLimit,
+		},
+		{
+			name:         "idle at claude prompt",
+			output:       "Task done\nclaude>",
+			agentType:    "cc",
+			lastActivity: time.Now().Add(-10 * time.Second),
+			wantState:    StateIdle,
+			wantError:    ErrorNone,
+		},
+		{
+			name:         "idle at generic prompt",
+			output:       "Output\n>",
+			agentType:    "cc",
+			lastActivity: time.Now().Add(-10 * time.Second),
+			wantState:    StateIdle,
+			wantError:    ErrorNone,
+		},
+		{
+			name:         "working with recent activity",
+			output:       "Processing request...",
+			agentType:    "cc",
+			lastActivity: time.Now().Add(-1 * time.Second),
+			wantState:    StateWorking,
+			wantError:    ErrorNone,
+		},
+		{
+			name:         "user pane empty is idle",
+			output:       "",
+			agentType:    "user",
+			lastActivity: time.Now().Add(-10 * time.Second),
+			wantState:    StateIdle,
+			wantError:    ErrorNone,
+		},
+		{
+			name:         "heuristic idle from short line",
+			output:       "Some very long output here\n$",
+			agentType:    "cc",
+			lastActivity: time.Now().Add(-10 * time.Second),
+			wantState:    StateIdle, // Short line heuristic
+			wantError:    ErrorNone,
+		},
+		{
+			name:         "heuristic idle from done indicator",
+			output:       "Build completed successfully",
+			agentType:    "cc",
+			lastActivity: time.Now().Add(-10 * time.Second),
+			wantState:    StateIdle, // Done indicator heuristic
+			wantError:    ErrorNone,
+		},
+		{
+			name:         "known agent type defaults to idle when indeterminate",
+			output:       "Still processing the very long task that has been running for a while now",
+			agentType:    "cc",
+			lastActivity: time.Now().Add(-60 * time.Second),
+			wantState:    StateIdle, // Known agent types default to idle, not unknown
+			wantError:    ErrorNone,
+		},
+		{
+			name:         "user pane stays unknown when indeterminate",
+			output:       "Still processing the very long task that has been running for a while now",
+			agentType:    "user",
+			lastActivity: time.Now().Add(-60 * time.Second),
+			wantState:    StateUnknown, // User panes can still be unknown
+			wantError:    ErrorNone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state, errType := d.determineState(tt.output, tt.agentType, tt.lastActivity)
+			if state != tt.wantState {
+				t.Errorf("determineState() state = %v, want %v", state, tt.wantState)
+			}
+			if errType != tt.wantError {
+				t.Errorf("determineState() errType = %v, want %v", errType, tt.wantError)
+			}
+		})
+	}
+}
+
+// TestIsKnownAgentType tests the agent type classification
+func TestIsKnownAgentType(t *testing.T) {
+	tests := []struct {
+		agentType string
+		expected  bool
+	}{
+		// Known AI agent types
+		{"cc", true},
+		{"cod", true},
+		{"gmi", true},
+		{"cursor", true},
+		{"windsurf", true},
+		{"aider", true},
+		// Unknown/shell types
+		{"user", false},
+		{"", false},
+		{"bash", false},
+		{"zsh", false},
+		{"unknown", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.agentType, func(t *testing.T) {
+			result := isKnownAgentType(tt.agentType)
+			if result != tt.expected {
+				t.Errorf("isKnownAgentType(%q) = %v, want %v", tt.agentType, result, tt.expected)
+			}
+		})
 	}
 }

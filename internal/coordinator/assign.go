@@ -3,20 +3,53 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/Dicklesworthstone/ntm/internal/agentmail"
 	"github.com/Dicklesworthstone/ntm/internal/bv"
+	"github.com/Dicklesworthstone/ntm/internal/persona"
+	"github.com/Dicklesworthstone/ntm/internal/robot"
 )
+
+// AssignmentStrategy controls how tasks are distributed to agents.
+type AssignmentStrategy string
+
+const (
+	// StrategyBalanced spreads work evenly across agents.
+	StrategyBalanced AssignmentStrategy = "balanced"
+	// StrategySpeed assigns tasks to any available agent as fast as possible.
+	StrategySpeed AssignmentStrategy = "speed"
+	// StrategyQuality assigns tasks to the highest-scoring agent for quality.
+	StrategyQuality AssignmentStrategy = "quality"
+	// StrategyDependency prioritizes blockers and critical path items.
+	StrategyDependency AssignmentStrategy = "dependency"
+	// StrategyRoundRobin distributes tasks evenly in deterministic order.
+	// All assignments get score 1.0. First agents get +1 if counts are uneven.
+	StrategyRoundRobin AssignmentStrategy = "round-robin"
+)
+
+// Assignment represents an agent-task pairing with reasoning.
+type Assignment struct {
+	Bead       *bv.TriageRecommendation `json:"bead"`
+	Agent      *AgentState              `json:"agent"`
+	Score      float64                  `json:"score"`
+	Reason     string                   `json:"reason"`
+	Confidence float64                  `json:"confidence"` // 0-1 confidence in this assignment
+	Breakdown  AssignmentScoreBreakdown `json:"breakdown"`
+}
 
 // ScoreConfig controls how work assignments are scored.
 type ScoreConfig struct {
-	PreferCriticalPath  bool    // Weight critical path items higher
-	PenalizeFileOverlap bool    // Avoid assigning overlapping files
-	UseAgentProfiles    bool    // Match work to agent capabilities
-	BudgetAware         bool    // Consider token budgets
-	ContextThreshold    float64 // Max context usage before penalizing (percentage 0-100, default 80)
+	PreferCriticalPath      bool    // Weight critical path items higher
+	PenalizeFileOverlap     bool    // Avoid assigning overlapping files
+	UseAgentProfiles        bool    // Match work to agent capabilities
+	BudgetAware             bool    // Consider token budgets
+	ContextThreshold        float64 // Max context usage before penalizing (percentage 0-100, default 80)
+	ProfileTagBoostWeight   float64 // Weight for profile tag matches (default 0.15)
+	FocusPatternBoostWeight float64 // Weight for focus pattern matches (default 0.10)
 }
 
 // DefaultScoreConfig returns a reasonable default configuration.
@@ -46,6 +79,8 @@ type AssignmentScoreBreakdown struct {
 	CriticalPathBonus  float64 `json:"critical_path_bonus"`  // Bonus for critical path items
 	FileOverlapPenalty float64 `json:"file_overlap_penalty"` // Penalty for file conflicts
 	ContextPenalty     float64 `json:"context_penalty"`      // Penalty for high context usage
+	ProfileTagBonus    float64 `json:"profile_tag_bonus"`    // Bonus for profile tag matches
+	FocusPatternBonus  float64 `json:"focus_pattern_bonus"`  // Bonus for focus pattern matches
 }
 
 // WorkAssignment represents a work assignment to an agent.
@@ -381,6 +416,29 @@ func scoreAssignment(
 		breakdown.AgentTypeBonus = computeAgentTypeBonus(agent.AgentType, rec)
 	}
 
+	// Profile-based routing bonuses
+	if config.UseAgentProfiles && agent.Profile != nil {
+		// Extract task tags from title and any available description
+		taskTags := ExtractTaskTags(rec.Title, "")
+
+		// Compute profile tag bonus based on tag overlap
+		tagWeight := config.ProfileTagBoostWeight
+		if tagWeight == 0 {
+			tagWeight = 0.15 // Default 15% weight
+		}
+		breakdown.ProfileTagBonus = computeProfileTagBonus(agent.Profile, taskTags, tagWeight)
+
+		// Extract mentioned files from task title
+		mentionedFiles := ExtractMentionedFiles(rec.Title, "")
+
+		// Compute focus pattern bonus based on file pattern matching
+		patternWeight := config.FocusPatternBoostWeight
+		if patternWeight == 0 {
+			patternWeight = 0.10 // Default 10% weight
+		}
+		breakdown.FocusPatternBonus = computeFocusPatternBonus(agent.Profile, mentionedFiles, patternWeight)
+	}
+
 	// Critical path bonus
 	if config.PreferCriticalPath && rec.Breakdown != nil {
 		breakdown.CriticalPathBonus = computeCriticalPathBonus(rec.Breakdown)
@@ -404,7 +462,9 @@ func scoreAssignment(
 
 	totalScore := breakdown.BaseScore +
 		breakdown.AgentTypeBonus +
-		breakdown.CriticalPathBonus -
+		breakdown.CriticalPathBonus +
+		breakdown.ProfileTagBonus +
+		breakdown.FocusPatternBonus -
 		breakdown.FileOverlapPenalty -
 		breakdown.ContextPenalty
 
@@ -551,4 +611,681 @@ func computeContextPenalty(contextUsage float64, threshold float64) float64 {
 	// e.g., 10% over threshold → 0.05 penalty; 20% over → 0.10 penalty
 	excess := contextUsage - threshold
 	return (excess / 100) * 0.5
+}
+
+// taskTagKeywords maps keywords to profile tags for task routing.
+var taskTagKeywords = map[string]string{
+	// Testing keywords
+	"test":      "testing",
+	"tests":     "testing",
+	"testing":   "testing",
+	"unittest":  "testing",
+	"unit test": "testing",
+	"e2e":       "testing",
+	"qa":        "testing",
+	"coverage":  "testing",
+
+	// Architecture keywords
+	"refactor":     "architecture",
+	"restructure":  "architecture",
+	"redesign":     "architecture",
+	"architecture": "architecture",
+	"pattern":      "architecture",
+	"design":       "architecture",
+
+	// Documentation keywords
+	"document":      "documentation",
+	"documentation": "documentation",
+	"readme":        "documentation",
+	"docs":          "documentation",
+	"docstring":     "documentation",
+	"comment":       "documentation",
+
+	// Implementation keywords
+	"implement": "implementation",
+	"add":       "implementation",
+	"create":    "implementation",
+	"build":     "implementation",
+	"feature":   "implementation",
+	"develop":   "implementation",
+
+	// Review keywords
+	"review":  "review",
+	"audit":   "review",
+	"inspect": "review",
+	"check":   "review",
+
+	// Bug/fix keywords
+	"fix":   "bugs",
+	"bug":   "bugs",
+	"patch": "bugs",
+	"error": "bugs",
+	"crash": "bugs",
+}
+
+// ExtractTaskTags extracts relevant profile tags from task title and description.
+func ExtractTaskTags(title, description string) []string {
+	text := strings.ToLower(title + " " + description)
+	tagSet := make(map[string]bool)
+
+	for keyword, tag := range taskTagKeywords {
+		if strings.Contains(text, keyword) {
+			tagSet[tag] = true
+		}
+	}
+
+	tags := make([]string, 0, len(tagSet))
+	for tag := range tagSet {
+		tags = append(tags, tag)
+	}
+	return tags
+}
+
+// ExtractMentionedFiles extracts file paths mentioned in task text.
+func ExtractMentionedFiles(title, description string) []string {
+	text := title + " " + description
+	words := strings.Fields(text)
+	var files []string
+
+	for _, word := range words {
+		// Clean punctuation
+		word = strings.Trim(word, ",.;:()[]{}\"'`")
+		if isFilePath(word) {
+			files = append(files, word)
+		}
+	}
+	return files
+}
+
+// isFilePath checks if a string looks like a file path.
+func isFilePath(s string) bool {
+	if len(s) < 3 {
+		return false
+	}
+
+	// Contains path separator or file extension
+	if strings.Contains(s, "/") || strings.Contains(s, "\\") {
+		return true
+	}
+
+	// Has common file extensions
+	extensions := []string{".go", ".ts", ".js", ".py", ".rs", ".md", ".yaml", ".yml", ".json", ".toml"}
+	for _, ext := range extensions {
+		if strings.HasSuffix(s, ext) {
+			return true
+		}
+	}
+
+	// Contains glob patterns
+	if strings.Contains(s, "*") || strings.Contains(s, "**") {
+		return true
+	}
+
+	// Starts with dot (hidden file/directory)
+	if strings.HasPrefix(s, ".") && len(s) > 1 {
+		return true
+	}
+
+	return false
+}
+
+// computeProfileTagBonus computes bonus based on matching persona tags.
+func computeProfileTagBonus(profile *persona.Persona, taskTags []string, weight float64) float64 {
+	if profile == nil || len(profile.Tags) == 0 || len(taskTags) == 0 {
+		return 0
+	}
+
+	// Create a set of profile tags for quick lookup
+	profileTags := make(map[string]bool)
+	for _, tag := range profile.Tags {
+		profileTags[strings.ToLower(tag)] = true
+	}
+
+	// Count matching tags
+	matches := 0
+	for _, tag := range taskTags {
+		if profileTags[strings.ToLower(tag)] {
+			matches++
+		}
+	}
+
+	if matches == 0 {
+		return 0
+	}
+
+	// Score based on proportion of profile tags matched
+	matchRatio := float64(matches) / float64(len(profile.Tags))
+	return matchRatio * weight
+}
+
+// computeFocusPatternBonus computes bonus based on file pattern matches.
+func computeFocusPatternBonus(profile *persona.Persona, mentionedFiles []string, weight float64) float64 {
+	if profile == nil || len(profile.FocusPatterns) == 0 || len(mentionedFiles) == 0 {
+		return 0
+	}
+
+	// Count how many mentioned files match any focus pattern
+	matches := 0
+	for _, file := range mentionedFiles {
+		for _, pattern := range profile.FocusPatterns {
+			if matchFocusPattern(pattern, file) {
+				matches++
+				break // Count each file only once
+			}
+		}
+	}
+
+	if matches == 0 {
+		return 0
+	}
+
+	// Score based on proportion of files matched
+	matchRatio := float64(matches) / float64(len(mentionedFiles))
+	return matchRatio * weight
+}
+
+// matchFocusPattern checks if a file matches a focus pattern using glob-style matching.
+func matchFocusPattern(pattern, file string) bool {
+	// Handle ** (any path depth)
+	if strings.Contains(pattern, "**") {
+		// Convert ** to regex-style matching
+		parts := strings.Split(pattern, "**")
+		if len(parts) == 2 {
+			prefix := parts[0]
+			suffix := strings.TrimPrefix(parts[1], "/")
+
+			// File must start with prefix
+			if prefix != "" && !strings.HasPrefix(file, prefix) {
+				return false
+			}
+
+			// File must end with suffix (if any)
+			if suffix != "" {
+				// Remove leading * from suffix for extension matching
+				suffix = strings.TrimPrefix(suffix, "*")
+				return strings.HasSuffix(file, suffix)
+			}
+			return true
+		}
+	}
+
+	// Use filepath.Match for simple glob patterns
+	matched, err := filepath.Match(pattern, file)
+	if err != nil {
+		return false
+	}
+	return matched
+}
+
+// AssignTasks matches beads to agents using capability scores and availability.
+// It returns optimal assignments based on the specified strategy.
+//
+// The strategy parameter controls how tasks are distributed:
+//   - "balanced": spread work evenly across agents
+//   - "speed": assign tasks to any available agent quickly
+//   - "quality": assign tasks to the highest-scoring agent
+//   - "dependency": prioritize blockers and critical path items
+//
+// The function handles:
+//   - More beads than agents (some beads unassigned)
+//   - More agents than beads (some agents idle)
+//   - Agent availability filtering (idle, sufficient context)
+func AssignTasks(
+	beads []*bv.TriageRecommendation,
+	agents []*AgentState,
+	strategy AssignmentStrategy,
+	reservations map[string][]string,
+) []Assignment {
+	if len(beads) == 0 || len(agents) == 0 {
+		return nil
+	}
+
+	// Filter to available agents (idle with sufficient context)
+	availableAgents := filterAvailableAgents(agents)
+	if len(availableAgents) == 0 {
+		return nil
+	}
+
+	// Build score config based on strategy
+	config := buildStrategyConfig(strategy)
+
+	// Score all agent-task combinations
+	scoredPairs := scoreAllPairs(availableAgents, beads, config, reservations)
+	if len(scoredPairs) == 0 {
+		return nil
+	}
+
+	// Apply strategy-specific selection
+	selected := applyStrategySelection(scoredPairs, strategy, len(availableAgents), len(beads))
+
+	// Convert to Assignment results with reasoning
+	return buildAssignments(selected, strategy)
+}
+
+// filterAvailableAgents returns agents that are idle with sufficient context.
+func filterAvailableAgents(agents []*AgentState) []*AgentState {
+	var available []*AgentState
+	for _, agent := range agents {
+		if !isAgentAvailable(agent) {
+			continue
+		}
+		available = append(available, agent)
+	}
+	return available
+}
+
+// isAgentAvailable checks if an agent can accept new work.
+func isAgentAvailable(agent *AgentState) bool {
+	// Must be idle
+	if agent.Status != robot.StateWaiting {
+		return false
+	}
+
+	// Must have sufficient context remaining (less than 90% used)
+	if agent.ContextUsage > 90 {
+		return false
+	}
+
+	return true
+}
+
+// buildStrategyConfig creates a ScoreConfig tuned for the given strategy.
+func buildStrategyConfig(strategy AssignmentStrategy) ScoreConfig {
+	base := DefaultScoreConfig()
+
+	switch strategy {
+	case StrategyBalanced:
+		// Balanced: moderate penalties for overlap to spread work
+		base.PenalizeFileOverlap = true
+		base.PreferCriticalPath = true
+
+	case StrategySpeed:
+		// Speed: minimize scoring overhead, accept first available
+		base.PenalizeFileOverlap = false
+		base.UseAgentProfiles = false
+		base.PreferCriticalPath = false
+
+	case StrategyQuality:
+		// Quality: maximize agent-task matching
+		base.UseAgentProfiles = true
+		base.ProfileTagBoostWeight = 0.25 // Increase profile importance
+		base.FocusPatternBoostWeight = 0.15
+		base.PreferCriticalPath = true
+
+	case StrategyDependency:
+		// Dependency: heavily weight critical path and blockers
+		base.PreferCriticalPath = true
+		base.PenalizeFileOverlap = true
+	}
+
+	return base
+}
+
+// scoredPair holds a scored agent-task pairing for selection.
+type scoredPair struct {
+	agent     *AgentState
+	bead      *bv.TriageRecommendation
+	score     float64
+	breakdown AssignmentScoreBreakdown
+}
+
+// scoreAllPairs scores all valid agent-task combinations.
+func scoreAllPairs(
+	agents []*AgentState,
+	beads []*bv.TriageRecommendation,
+	config ScoreConfig,
+	reservations map[string][]string,
+) []scoredPair {
+	var pairs []scoredPair
+
+	for _, agent := range agents {
+		for _, bead := range beads {
+			// Skip blocked beads
+			if bead.Status == "blocked" {
+				continue
+			}
+
+			scored := scoreAssignment(agent, bead, config, reservations)
+			if scored.TotalScore > 0 {
+				pairs = append(pairs, scoredPair{
+					agent:     agent,
+					bead:      bead,
+					score:     scored.TotalScore,
+					breakdown: scored.ScoreBreakdown,
+				})
+			}
+		}
+	}
+
+	return pairs
+}
+
+// applyStrategySelection selects optimal assignments based on strategy.
+func applyStrategySelection(
+	pairs []scoredPair,
+	strategy AssignmentStrategy,
+	numAgents, numBeads int,
+) []scoredPair {
+	switch strategy {
+	case StrategySpeed:
+		return selectGreedy(pairs, numAgents, numBeads)
+
+	case StrategyBalanced:
+		return selectBalanced(pairs, numAgents, numBeads)
+
+	case StrategyQuality:
+		return selectQuality(pairs, numAgents, numBeads)
+
+	case StrategyDependency:
+		return selectDependency(pairs, numAgents, numBeads)
+
+	default:
+		return selectGreedy(pairs, numAgents, numBeads)
+	}
+}
+
+// selectGreedy picks assignments greedily by score (fastest).
+func selectGreedy(pairs []scoredPair, numAgents, numBeads int) []scoredPair {
+	// Sort by score descending
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].score > pairs[j].score
+	})
+
+	var selected []scoredPair
+	assignedAgents := make(map[string]bool)
+	assignedBeads := make(map[string]bool)
+
+	for _, p := range pairs {
+		if assignedAgents[p.agent.PaneID] || assignedBeads[p.bead.ID] {
+			continue
+		}
+
+		selected = append(selected, p)
+		assignedAgents[p.agent.PaneID] = true
+		assignedBeads[p.bead.ID] = true
+
+		// Stop when we've assigned all we can
+		if len(selected) >= numAgents || len(selected) >= numBeads {
+			break
+		}
+	}
+
+	return selected
+}
+
+// selectBalanced spreads work evenly, avoiding heavily loaded agents.
+// It uses live assignment tracking data from AgentState.Assignments when available
+// and applies tie-breakers: (1) fewer active assignments, (2) idle status,
+// (3) least-recent assignment timestamp, (4) best capability score.
+// Falls back to local tracking when assignment data is unavailable (Assignments == -1).
+func selectBalanced(pairs []scoredPair, numAgents, numBeads int) []scoredPair {
+	// Track workload per agent during this selection round.
+	// Initialize from live assignment counts if available.
+	agentLoad := make(map[string]int)
+	for _, p := range pairs {
+		if _, seen := agentLoad[p.agent.PaneID]; !seen {
+			if p.agent.Assignments >= 0 {
+				// Use live assignment count
+				agentLoad[p.agent.PaneID] = p.agent.Assignments
+			} else {
+				// Fallback: tracking unavailable, start at 0
+				agentLoad[p.agent.PaneID] = 0
+			}
+		}
+	}
+
+	// Sort using stable sort for deterministic ordering with multi-level tie-breakers:
+	// 1. Fewer active assignments (lower load first)
+	// 2. Idle agents first (Status == Idle)
+	// 3. Least-recent assignment timestamp (earlier LastAssignedAt first)
+	// 4. Higher capability score
+	// 5. PaneID as final deterministic tie-breaker
+	sort.SliceStable(pairs, func(i, j int) bool {
+		ai, aj := pairs[i].agent, pairs[j].agent
+		loadI := agentLoad[ai.PaneID]
+		loadJ := agentLoad[aj.PaneID]
+
+		// Tie-breaker 1: Fewer assignments first
+		if loadI != loadJ {
+			return loadI < loadJ
+		}
+
+		// Tie-breaker 2: Idle agents first (StateWaiting = idle/ready for input)
+		idleI := ai.Status == robot.StateWaiting
+		idleJ := aj.Status == robot.StateWaiting
+		if idleI != idleJ {
+			return idleI
+		}
+
+		// Tie-breaker 3: Least-recent assignment timestamp first
+		// (zero time means never assigned, treated as oldest)
+		if !ai.LastAssignedAt.Equal(aj.LastAssignedAt) {
+			return ai.LastAssignedAt.Before(aj.LastAssignedAt)
+		}
+
+		// Tie-breaker 4: Higher score first
+		if pairs[i].score != pairs[j].score {
+			return pairs[i].score > pairs[j].score
+		}
+
+		// Tie-breaker 5: Deterministic by PaneID for consistent ordering
+		return ai.PaneID < aj.PaneID
+	})
+
+	var selected []scoredPair
+	assignedAgents := make(map[string]bool)
+	assignedBeads := make(map[string]bool)
+
+	for _, p := range pairs {
+		if assignedAgents[p.agent.PaneID] || assignedBeads[p.bead.ID] {
+			continue
+		}
+
+		selected = append(selected, p)
+		assignedAgents[p.agent.PaneID] = true
+		assignedBeads[p.bead.ID] = true
+		agentLoad[p.agent.PaneID]++
+
+		if len(selected) >= numAgents || len(selected) >= numBeads {
+			break
+		}
+	}
+
+	return selected
+}
+
+// selectQuality picks the highest-scoring agent for each task.
+func selectQuality(pairs []scoredPair, numAgents, numBeads int) []scoredPair {
+	// Group by bead, find best agent for each
+	beadBestAgent := make(map[string]scoredPair)
+
+	for _, p := range pairs {
+		existing, exists := beadBestAgent[p.bead.ID]
+		if !exists || p.score > existing.score {
+			beadBestAgent[p.bead.ID] = p
+		}
+	}
+
+	// Collect all best matches
+	var bestMatches []scoredPair
+	for _, p := range beadBestAgent {
+		bestMatches = append(bestMatches, p)
+	}
+
+	// Sort by score descending
+	sort.Slice(bestMatches, func(i, j int) bool {
+		return bestMatches[i].score > bestMatches[j].score
+	})
+
+	// Select ensuring no agent duplication
+	var selected []scoredPair
+	assignedAgents := make(map[string]bool)
+
+	for _, p := range bestMatches {
+		if assignedAgents[p.agent.PaneID] {
+			// Find next best agent for this bead
+			continue
+		}
+
+		selected = append(selected, p)
+		assignedAgents[p.agent.PaneID] = true
+
+		if len(selected) >= numAgents {
+			break
+		}
+	}
+
+	return selected
+}
+
+// selectDependency prioritizes blockers and critical path items.
+func selectDependency(pairs []scoredPair, numAgents, numBeads int) []scoredPair {
+	// Sort by: number of items unblocked, then by score
+	sort.Slice(pairs, func(i, j int) bool {
+		blocksI := len(pairs[i].bead.UnblocksIDs)
+		blocksJ := len(pairs[j].bead.UnblocksIDs)
+
+		if blocksI != blocksJ {
+			return blocksI > blocksJ // More blockers first
+		}
+
+		// Priority (lower is higher priority)
+		if pairs[i].bead.Priority != pairs[j].bead.Priority {
+			return pairs[i].bead.Priority < pairs[j].bead.Priority
+		}
+
+		return pairs[i].score > pairs[j].score
+	})
+
+	// Greedy selection
+	var selected []scoredPair
+	assignedAgents := make(map[string]bool)
+	assignedBeads := make(map[string]bool)
+
+	for _, p := range pairs {
+		if assignedAgents[p.agent.PaneID] || assignedBeads[p.bead.ID] {
+			continue
+		}
+
+		selected = append(selected, p)
+		assignedAgents[p.agent.PaneID] = true
+		assignedBeads[p.bead.ID] = true
+
+		if len(selected) >= numAgents || len(selected) >= numBeads {
+			break
+		}
+	}
+
+	return selected
+}
+
+// buildAssignments converts selected pairs into Assignment results with reasoning.
+func buildAssignments(selected []scoredPair, strategy AssignmentStrategy) []Assignment {
+	assignments := make([]Assignment, len(selected))
+
+	for i, p := range selected {
+		reason := buildAssignmentReason(p, strategy)
+		confidence := computeConfidence(p)
+
+		assignments[i] = Assignment{
+			Bead:       p.bead,
+			Agent:      p.agent,
+			Score:      p.score,
+			Reason:     reason,
+			Confidence: confidence,
+			Breakdown:  p.breakdown,
+		}
+	}
+
+	return assignments
+}
+
+// buildAssignmentReason generates human-readable reasoning for an assignment.
+func buildAssignmentReason(p scoredPair, strategy AssignmentStrategy) string {
+	var reasons []string
+
+	// Strategy-specific lead reason
+	switch strategy {
+	case StrategyDependency:
+		if len(p.bead.UnblocksIDs) > 0 {
+			reasons = append(reasons, fmt.Sprintf("unblocks %d tasks", len(p.bead.UnblocksIDs)))
+		}
+	case StrategyQuality:
+		reasons = append(reasons, "best capability match")
+	case StrategyBalanced:
+		reasons = append(reasons, "even workload distribution")
+	case StrategySpeed:
+		reasons = append(reasons, "fastest available agent")
+	}
+
+	// Add breakdown insights
+	if p.breakdown.AgentTypeBonus > 0.05 {
+		reasons = append(reasons, fmt.Sprintf("agent type bonus +%.0f%%", p.breakdown.AgentTypeBonus*100))
+	}
+	if p.breakdown.ProfileTagBonus > 0.05 {
+		reasons = append(reasons, "matching profile tags")
+	}
+	if p.breakdown.CriticalPathBonus > 0.05 {
+		reasons = append(reasons, "on critical path")
+	}
+
+	if len(reasons) == 0 {
+		return "available and qualified"
+	}
+
+	return strings.Join(reasons, "; ")
+}
+
+// computeConfidence calculates confidence level for an assignment (0-1).
+func computeConfidence(p scoredPair) float64 {
+	// Base confidence from normalized score
+	// Most scores are in 0-2 range, normalize to 0-1
+	confidence := p.score / 2.0
+	if confidence > 1.0 {
+		confidence = 1.0
+	}
+
+	// Boost for positive factors
+	if p.breakdown.AgentTypeBonus > 0 {
+		confidence += 0.1
+	}
+	if p.breakdown.ProfileTagBonus > 0 {
+		confidence += 0.1
+	}
+
+	// Penalty for negative factors
+	if p.breakdown.ContextPenalty > 0 {
+		confidence -= p.breakdown.ContextPenalty
+	}
+	if p.breakdown.FileOverlapPenalty > 0 {
+		confidence -= p.breakdown.FileOverlapPenalty / 2
+	}
+
+	// Clamp to 0-1
+	if confidence < 0.1 {
+		confidence = 0.1
+	}
+	if confidence > 0.95 {
+		confidence = 0.95
+	}
+
+	return confidence
+}
+
+// ParseStrategy converts a string to an AssignmentStrategy.
+func ParseStrategy(s string) AssignmentStrategy {
+	switch strings.ToLower(s) {
+	case "balanced":
+		return StrategyBalanced
+	case "speed", "fast":
+		return StrategySpeed
+	case "quality", "best":
+		return StrategyQuality
+	case "dependency", "deps", "blockers":
+		return StrategyDependency
+	case "round-robin", "roundrobin", "rr":
+		return StrategyRoundRobin
+	default:
+		return StrategyBalanced // Default to balanced
+	}
 }

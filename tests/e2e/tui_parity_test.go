@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Dicklesworthstone/ntm/internal/tmux"
 	"github.com/Dicklesworthstone/ntm/tests/testutil"
 )
 
@@ -79,7 +80,7 @@ func TestRobotFilesWithTimeWindow(t *testing.T) {
 	for _, window := range windows {
 		t.Run(window, func(t *testing.T) {
 			// --robot-files requires a value; use "all" for all sessions
-			out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-files=all", "--files-window="+window)
+			out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-files=all", "--window="+window)
 
 			var payload struct {
 				TimeWindow string `json:"time_window"`
@@ -131,7 +132,7 @@ func TestRobotInspectPaneWithSyntheticSession(t *testing.T) {
 	logger := testutil.NewTestLogger(t, t.TempDir())
 	sessionName := createSyntheticAgentSession(t, logger)
 
-	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-inspect-pane="+sessionName, "--inspect-index=0")
+	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-inspect-pane="+sessionName, "--index=0")
 	logger.Log("FULL JSON OUTPUT:\n%s", string(out))
 
 	var payload struct {
@@ -237,7 +238,7 @@ func TestRobotMetricsPeriods(t *testing.T) {
 	periods := []string{"1h", "24h", "7d", "all"}
 	for _, period := range periods {
 		t.Run(period, func(t *testing.T) {
-			out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-metrics="+sessionName, "--metrics-period="+period)
+			out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-metrics="+sessionName, "--period="+period)
 
 			var payload struct {
 				Period  string `json:"period"`
@@ -595,10 +596,10 @@ func TestRobotBeadsListWithFilters(t *testing.T) {
 
 	// Test various filter flags
 	filterFlags := []string{
-		"--beads-status=open",
-		"--beads-status=in_progress",
-		"--beads-priority=P2",
-		"--beads-type=task",
+		"--status=open",
+		"--status=in_progress",
+		"--priority=P2",
+		"--type=task",
 	}
 
 	for _, flag := range filterFlags {
@@ -808,7 +809,7 @@ codex = "bash"
 	}
 
 	t.Cleanup(func() {
-		exec.Command("tmux", "kill-session", "-t", session).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", session).Run()
 	})
 
 	// Spawn session
@@ -838,7 +839,7 @@ codex = "bash"
 	// Test --robot-inspect-pane
 	logger.LogSection("robot-inspect-pane")
 	inspectOut := testutil.AssertCommandSuccess(t, logger, "ntm", "--config", configPath,
-		"--robot-inspect-pane="+session, "--inspect-index=0")
+		"--robot-inspect-pane="+session, "--index=0")
 
 	var inspectPayload struct {
 		Success   bool   `json:"success"`

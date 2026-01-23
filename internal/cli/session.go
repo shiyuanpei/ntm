@@ -5,20 +5,81 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"sort"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/Dicklesworthstone/ntm/internal/assignment"
+	"github.com/Dicklesworthstone/ntm/internal/cli/suggestions"
+	"github.com/Dicklesworthstone/ntm/internal/handoff"
 	"github.com/Dicklesworthstone/ntm/internal/output"
 	"github.com/Dicklesworthstone/ntm/internal/status"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
+	"github.com/Dicklesworthstone/ntm/internal/tokens"
 	"github.com/Dicklesworthstone/ntm/internal/tui/icons"
 	"github.com/Dicklesworthstone/ntm/internal/tui/layout"
 	"github.com/Dicklesworthstone/ntm/internal/tui/theme"
 )
+
+// statusOptions holds configuration for the status command
+type statusOptions struct {
+	tags            []string
+	showAssignments bool
+	filterStatus    string
+	filterAgent     string
+	filterPane      int
+	showSummary     bool
+	watchMode       bool
+	interval        time.Duration
+}
+
+type paneContextUsage struct {
+	Tokens  int
+	Limit   int
+	Percent float64
+	Model   string
+}
+
+type contextRow struct {
+	Label   string
+	Percent float64
+	Tokens  int
+	Limit   int
+	Model   string
+}
+
+// filterAssignments filters assignments by status, agent type, and pane number.
+// Empty filterStatus or filterAgent means no filtering on that field.
+// filterPane < 0 means no filtering on pane.
+func filterAssignments(assignments []*assignment.Assignment, filterStatus, filterAgent string, filterPane int) []*assignment.Assignment {
+	if filterStatus == "" && filterAgent == "" && filterPane < 0 {
+		return assignments // No filtering needed
+	}
+
+	result := make([]*assignment.Assignment, 0, len(assignments))
+	for _, a := range assignments {
+		// Filter by status
+		if filterStatus != "" && string(a.Status) != filterStatus {
+			continue
+		}
+		// Filter by agent type
+		if filterAgent != "" && a.AgentType != filterAgent {
+			continue
+		}
+		// Filter by pane
+		if filterPane >= 0 && a.Pane != filterPane {
+			continue
+		}
+		result = append(result, a)
+	}
+	return result
+}
 
 func newAttachCmd() *cobra.Command {
 	return &cobra.Command{
@@ -247,6 +308,13 @@ func runList(tags []string) error {
 }
 func newStatusCmd() *cobra.Command {
 	var tags []string
+	var showAssignments bool
+	var filterStatus string
+	var filterAgent string
+	var filterPane int
+	var showSummary bool
+	var watch bool
+	var interval int
 	cmd := &cobra.Command{
 		Use:   "status <session-name>",
 		Short: "Show detailed status of a session",
@@ -254,20 +322,57 @@ func newStatusCmd() *cobra.Command {
 - All panes with their titles and current commands
 - Agent type counts (Claude, Codex, Gemini)
 - Session directory
+- Bead assignments (with --assignments flag)
+
+Assignment Filtering (requires --assignments):
+  --status=<status>  Filter by: assigned, working, completed, failed, reassigned
+  --agent=<type>     Filter by: claude, codex, gemini
+  --pane=<n>         Filter by pane number
+  --summary          Show aggregated statistics only
 
 Examples:
   ntm status myproject
-  ntm status myproject --tag=frontend`,
+  ntm status myproject --tag=frontend
+  ntm status myproject --assignments
+  ntm status myproject --assignments --status=working
+  ntm status myproject --assignments --agent=claude
+  ntm status myproject --assignments --status=failed --agent=codex
+  ntm status myproject --assignments --summary
+  ntm status myproject --watch`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatus(cmd.OutOrStdout(), args[0], tags)
+			opts := statusOptions{
+				tags:            tags,
+				showAssignments: showAssignments,
+				filterStatus:    filterStatus,
+				filterAgent:     filterAgent,
+				filterPane:      filterPane,
+				showSummary:     showSummary,
+				watchMode:       watch,
+				interval:        time.Duration(interval) * time.Millisecond,
+			}
+			return runStatus(cmd.OutOrStdout(), args[0], opts)
 		},
 	}
 	cmd.Flags().StringSliceVar(&tags, "tag", nil, "filter panes by tag")
+	cmd.Flags().BoolVar(&showAssignments, "assignments", false, "show bead-to-agent assignments")
+	cmd.Flags().StringVar(&filterStatus, "status", "", "filter assignments by status (assigned, working, completed, failed, reassigned)")
+	cmd.Flags().StringVar(&filterAgent, "agent", "", "filter assignments by agent type (claude, codex, gemini)")
+	cmd.Flags().IntVar(&filterPane, "pane", -1, "filter assignments by pane number")
+	cmd.Flags().BoolVar(&showSummary, "summary", false, "show assignment summary statistics only")
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "auto-refresh display")
+	cmd.Flags().IntVar(&interval, "interval", 2000, "refresh interval in milliseconds (with --watch)")
 	return cmd
 }
 
-func runStatus(w io.Writer, session string, tags []string) error {
+func runStatus(w io.Writer, session string, opts statusOptions) error {
+	if opts.watchMode {
+		return runStatusWatch(w, session, opts)
+	}
+	return runStatusOnce(w, session, opts)
+}
+
+func runStatusOnce(w io.Writer, session string, opts statusOptions) error {
 	// Helper for JSON error output
 	outputError := func(err error) error {
 		if IsJSONOutput() {
@@ -298,10 +403,10 @@ func runStatus(w io.Writer, session string, tags []string) error {
 	}
 
 	// Filter panes by tag
-	if len(tags) > 0 {
+	if len(opts.tags) > 0 {
 		var filtered []tmux.Pane
 		for _, p := range panes {
-			if HasAnyTag(p.Tags, tags) {
+			if HasAnyTag(p.Tags, opts.tags) {
 				filtered = append(filtered, p)
 			}
 		}
@@ -309,6 +414,28 @@ func runStatus(w io.Writer, session string, tags []string) error {
 	}
 
 	dir := cfg.GetProjectDir(session)
+
+	// Load handoff info (best-effort)
+	var handoffGoal, handoffNow, handoffStatus, handoffPath string
+	var handoffAge time.Duration
+	{
+		reader := handoff.NewReader(dir)
+		if goal, now, err := reader.ExtractGoalNow(session); err == nil {
+			handoffGoal = goal
+			handoffNow = now
+		}
+		if h, path, err := reader.FindLatest(session); err == nil && h != nil {
+			if handoffGoal == "" {
+				handoffGoal = h.Goal
+			}
+			if handoffNow == "" {
+				handoffNow = h.Now
+			}
+			handoffStatus = h.Status
+			handoffPath = path
+			handoffAge = time.Since(h.CreatedAt)
+		}
+	}
 
 	// Calculate counts
 	var ccCount, codCount, gmiCount, otherCount int
@@ -323,6 +450,43 @@ func runStatus(w io.Writer, session string, tags []string) error {
 		default:
 			otherCount++
 		}
+	}
+
+	// Estimate context usage per pane (best-effort)
+	contextByIndex := make(map[int]paneContextUsage)
+	for _, p := range panes {
+		if p.Type == tmux.AgentUser {
+			continue
+		}
+		modelName := modelNameForPane(p)
+		if modelName == "" {
+			continue
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		out, err := tmux.CaptureForFullContextContext(ctx, p.ID)
+		cancel()
+		if err != nil || out == "" {
+			continue
+		}
+
+		usage := tokens.GetUsageInfo(out, modelName)
+		if usage == nil {
+			continue
+		}
+		contextByIndex[p.Index] = paneContextUsage{
+			Tokens:  usage.EstimatedTokens,
+			Limit:   usage.ContextLimit,
+			Percent: usage.UsagePercent,
+			Model:   usage.Model,
+		}
+	}
+
+	// Load assignments if requested (or if filtering/summary requires them)
+	var assignmentStore *assignment.AssignmentStore
+	needAssignments := opts.showAssignments || opts.filterStatus != "" || opts.filterAgent != "" || opts.filterPane >= 0 || opts.showSummary
+	if needAssignments {
+		assignmentStore, _ = assignment.LoadStore(session)
 	}
 
 	// JSON output mode - build structured response
@@ -352,9 +516,23 @@ func runStatus(w io.Writer, session string, tags []string) error {
 			},
 		}
 
+		if handoffGoal != "" || handoffNow != "" || handoffStatus != "" {
+			handoffInfo := &output.HandoffStatus{
+				Session: session,
+				Goal:    handoffGoal,
+				Now:     handoffNow,
+				Path:    handoffPath,
+				Status:  handoffStatus,
+			}
+			if handoffAge > 0 {
+				handoffInfo.AgeSeconds = int64(handoffAge.Seconds())
+			}
+			resp.Handoff = handoffInfo
+		}
+
 		// Add panes
 		for _, p := range panes {
-			resp.Panes = append(resp.Panes, output.PaneResponse{
+			paneResp := output.PaneResponse{
 				Index:   p.Index,
 				Title:   p.Title,
 				Type:    agentTypeToString(p.Type),
@@ -363,7 +541,58 @@ func runStatus(w io.Writer, session string, tags []string) error {
 				Width:   p.Width,
 				Height:  p.Height,
 				Command: p.Command,
-			})
+			}
+			if usage, ok := contextByIndex[p.Index]; ok {
+				paneResp.ContextTokens = usage.Tokens
+				paneResp.ContextLimit = usage.Limit
+				paneResp.ContextPercent = usage.Percent
+				paneResp.ContextModel = usage.Model
+			}
+			resp.Panes = append(resp.Panes, paneResp)
+		}
+
+		// Add assignments if requested (with optional filtering)
+		if (opts.showAssignments || opts.filterStatus != "" || opts.filterAgent != "" || opts.filterPane >= 0 || opts.showSummary) && assignmentStore != nil {
+			assignments := assignmentStore.List()
+			// Apply filters
+			assignments = filterAssignments(assignments, opts.filterStatus, opts.filterAgent, opts.filterPane)
+			// Include individual assignments unless --summary is used
+			if !opts.showSummary {
+				for _, a := range assignments {
+					assignResp := output.AssignmentResponse{
+						BeadID:     a.BeadID,
+						BeadTitle:  a.BeadTitle,
+						Pane:       a.Pane,
+						AgentType:  a.AgentType,
+						AgentName:  a.AgentName,
+						Status:     string(a.Status),
+						AssignedAt: a.AssignedAt.Format(time.RFC3339),
+						FailReason: a.FailReason,
+					}
+					if a.StartedAt != nil {
+						ts := a.StartedAt.Format(time.RFC3339)
+						assignResp.StartedAt = &ts
+					}
+					if a.CompletedAt != nil {
+						ts := a.CompletedAt.Format(time.RFC3339)
+						assignResp.CompletedAt = &ts
+					}
+					if a.FailedAt != nil {
+						ts := a.FailedAt.Format(time.RFC3339)
+						assignResp.FailedAt = &ts
+					}
+					resp.Assignments = append(resp.Assignments, assignResp)
+				}
+			}
+			stats := assignmentStore.Stats()
+			resp.AssignmentStats = &output.AssignmentStats{
+				Total:      stats.Total,
+				Assigned:   stats.Assigned,
+				Working:    stats.Working,
+				Completed:  stats.Completed,
+				Failed:     stats.Failed,
+				Reassigned: stats.Reassigned,
+			}
 		}
 
 		return output.PrintJSON(resp)
@@ -373,19 +602,30 @@ func runStatus(w io.Writer, session string, tags []string) error {
 	t := theme.Current()
 
 	// ANSI helpers
-	const reset = "\033[0m"
-	const bold = "\033[1m"
+	noColor := theme.NoColorEnabled()
+	reset := ""
+	bold := ""
+	if !noColor {
+		reset = "\033[0m"
+		bold = "\033[1m"
+	}
+	color := func(c interface{}) string {
+		if noColor {
+			return ""
+		}
+		return colorize(c)
+	}
 
 	// Colors
-	primary := colorize(t.Primary)
-	surface := colorize(t.Surface0)
-	text := colorize(t.Text)
-	subtext := colorize(t.Subtext)
-	overlay := colorize(t.Overlay)
-	success := colorize(t.Success)
-	claude := colorize(t.Claude)
-	codex := colorize(t.Codex)
-	gemini := colorize(t.Gemini)
+	primary := color(t.Primary)
+	surface := color(t.Surface0)
+	text := color(t.Text)
+	subtext := color(t.Subtext)
+	overlay := color(t.Overlay)
+	success := color(t.Success)
+	claude := color(t.Claude)
+	codex := color(t.Codex)
+	gemini := color(t.Gemini)
 
 	ic := icons.Current()
 
@@ -408,6 +648,28 @@ func runStatus(w io.Writer, session string, tags []string) error {
 	fmt.Fprintf(w, "  %s%s Panes:%s    %s%d%s\n", subtext, ic.Pane, reset, text, len(panes), reset)
 	fmt.Fprintln(w)
 
+	maxTextWidth := maxInt(width-12, 20)
+	if handoffGoal != "" || handoffNow != "" || handoffStatus != "" {
+		fmt.Fprintf(w, "  %sHandoff%s\n", bold, reset)
+		fmt.Fprintf(w, "  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
+
+		ageLabel := "unknown"
+		if handoffAge > 0 {
+			ageLabel = formatDuration(handoffAge) + " ago"
+		}
+		fmt.Fprintf(w, "    %sLatest:%s %s%s%s\n", subtext, reset, text, ageLabel, reset)
+		if handoffStatus != "" {
+			fmt.Fprintf(w, "    %sStatus:%s %s%s%s\n", subtext, reset, text, handoffStatus, reset)
+		}
+		if handoffGoal != "" {
+			fmt.Fprintf(w, "    %sGoal:%s %s%s%s\n", subtext, reset, text, layout.TruncateWidthDefault(handoffGoal, maxTextWidth), reset)
+		}
+		if handoffNow != "" {
+			fmt.Fprintf(w, "    %sNow:%s  %s%s%s\n", subtext, reset, text, layout.TruncateWidthDefault(handoffNow, maxTextWidth), reset)
+		}
+		fmt.Fprintln(w)
+	}
+
 	// Panes section
 	fmt.Fprintf(w, "  %sPanes%s\n", bold, reset)
 	fmt.Fprintf(w, "  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
@@ -416,7 +678,7 @@ func runStatus(w io.Writer, session string, tags []string) error {
 	detector := status.NewDetector()
 
 	// Get error color for status display
-	errorColor := colorize(t.Error)
+	errorColor := color(t.Error)
 
 	for i, p := range panes {
 		var typeColor, typeIcon string
@@ -491,13 +753,13 @@ func runStatus(w io.Writer, session string, tags []string) error {
 			cmdWidth = 10
 		}
 
-		title := layout.TruncateRunes(p.Title, titleWidth, "…")
+		title := layout.TruncateWidthDefault(p.Title, titleWidth)
 		titlePart := fmt.Sprintf("%-*s", titleWidth, title)
 
 		if variantWidth > 0 {
 			variant := ""
 			if p.Variant != "" {
-				variant = layout.TruncateRunes(p.Variant, variantWidth, "…")
+				variant = layout.TruncateWidthDefault(p.Variant, variantWidth)
 			}
 			variantPart = fmt.Sprintf(" %s%-*s%s", subtext, variantWidth, variant, reset)
 		}
@@ -505,7 +767,7 @@ func runStatus(w io.Writer, session string, tags []string) error {
 		if cmdWidth > 0 {
 			cmd := ""
 			if p.Command != "" {
-				cmd = layout.TruncateRunes(p.Command, cmdWidth, "…")
+				cmd = layout.TruncateWidthDefault(p.Command, cmdWidth)
 			}
 			cmdPart = fmt.Sprintf(" %s%-*s%s", subtext, cmdWidth, cmd, reset)
 		}
@@ -525,6 +787,66 @@ func runStatus(w io.Writer, session string, tags []string) error {
 
 	fmt.Fprintf(w, "  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
 	fmt.Fprintln(w)
+
+	var contextRows []contextRow
+	for _, p := range panes {
+		usage, ok := contextByIndex[p.Index]
+		if !ok {
+			continue
+		}
+		label := layout.TruncateWidthDefault(paneLabel(session, p), 12)
+		model := layout.TruncateWidthDefault(usage.Model, 28)
+		contextRows = append(contextRows, contextRow{
+			Label:   label,
+			Percent: usage.Percent,
+			Tokens:  usage.Tokens,
+			Limit:   usage.Limit,
+			Model:   model,
+		})
+	}
+
+	if len(contextRows) > 0 {
+		sort.Slice(contextRows, func(i, j int) bool {
+			return contextRows[i].Percent > contextRows[j].Percent
+		})
+
+		barWidth := 18
+		if width < 110 {
+			barWidth = 12
+		} else if width >= 160 {
+			barWidth = 24
+		}
+
+		warnColor := color(t.Warning)
+		fmt.Fprintf(w, "  %sContext Usage%s\n", bold, reset)
+		fmt.Fprintf(w, "  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
+
+		for _, row := range contextRows {
+			percentColor := text
+			if row.Percent >= 85 {
+				percentColor = errorColor
+			} else if row.Percent >= 70 {
+				percentColor = warnColor
+			}
+			percentText := fmt.Sprintf("%s%.0f%%%s", percentColor, row.Percent, reset)
+
+			tokenInfo := ""
+			if row.Limit > 0 {
+				tokenInfo = fmt.Sprintf(" (%s/%s)", formatTokenCount(row.Tokens), formatTokenCount(row.Limit))
+			}
+
+			warnMark := ""
+			if row.Percent >= 70 {
+				warnMark = fmt.Sprintf(" %s%s%s", percentColor, ic.Warning, reset)
+			}
+
+			bar := renderProgressBar(row.Percent, barWidth)
+			fmt.Fprintf(w, "    %s%-12s%s %s of %s context%s %s%s\n",
+				text, row.Label, reset,
+				percentText, row.Model, tokenInfo, bar, warnMark)
+		}
+		fmt.Fprintln(w)
+	}
 
 	// Agent summary with icons
 	fmt.Fprintf(w, "  %sAgents%s\n", bold, reset)
@@ -552,7 +874,7 @@ func runStatus(w io.Writer, session string, tags []string) error {
 	// Agent Mail section
 	agentMailStatus := fetchAgentMailStatus(dir)
 	if agentMailStatus != nil && agentMailStatus.Available {
-		mailColor := colorize(t.Lavender)
+		mailColor := color(t.Lavender)
 		lockIcon := "🔒"
 
 		fmt.Fprintf(w, "  %sAgent Mail%s\n", bold, reset)
@@ -582,6 +904,99 @@ func runStatus(w io.Writer, session string, tags []string) error {
 		fmt.Fprintln(w)
 	}
 
+	// Assignments section (only if requested)
+	needAssignmentsDisplay := opts.showAssignments || opts.filterStatus != "" || opts.filterAgent != "" || opts.filterPane >= 0 || opts.showSummary
+	if needAssignmentsDisplay && assignmentStore != nil {
+		assignColor := color(t.Peach)
+		beadIcon := "◆"
+
+		fmt.Fprintf(w, "  %sAssignments%s\n", bold, reset)
+		fmt.Fprintf(w, "  %s%s%s\n", surface, "─────────────────────────────────────────────────────────", reset)
+
+		assignments := filterAssignments(assignmentStore.List(), opts.filterStatus, opts.filterAgent, opts.filterPane)
+
+		// If --summary, skip individual listings
+		if !opts.showSummary {
+			if len(assignments) == 0 {
+				fmt.Fprintf(w, "    %sNo active assignments%s\n", overlay, reset)
+			} else {
+				// Sort by pane index for consistent display
+				sort.Slice(assignments, func(i, j int) bool {
+					return assignments[i].Pane < assignments[j].Pane
+				})
+
+				// Build a map of pane index -> assignments for grouped display
+				for _, a := range assignments {
+					// Status icon and color
+					var statusIcon, statusColor string
+					switch a.Status {
+					case assignment.StatusAssigned:
+						statusIcon = "○"
+						statusColor = overlay
+					case assignment.StatusWorking:
+						statusIcon = "▶"
+						statusColor = success
+					case assignment.StatusCompleted:
+						statusIcon = "✓"
+						statusColor = success
+					case assignment.StatusFailed:
+						statusIcon = "✗"
+						statusColor = errorColor
+					case assignment.StatusReassigned:
+						statusIcon = "→"
+						statusColor = subtext
+					default:
+						statusIcon = "?"
+						statusColor = overlay
+					}
+
+					// Agent type color
+					var agentColor string
+					switch a.AgentType {
+					case "claude":
+						agentColor = claude
+					case "codex":
+						agentColor = codex
+					case "gemini":
+						agentColor = gemini
+					default:
+						agentColor = text
+					}
+
+					// Duration since assigned
+					duration := time.Since(a.AssignedAt)
+					durationStr := formatDuration(duration)
+
+					// Truncate bead title
+					title := a.BeadTitle
+					if len(title) > 40 {
+						title = title[:37] + "..."
+					}
+
+					fmt.Fprintf(w, "    %s%s%s %s%-8s%s %s%s %s%s%s %s(%s)%s\n",
+						statusColor, statusIcon, reset,
+						assignColor, beadIcon+" "+a.BeadID, reset,
+						agentColor, a.AgentType, text, title, reset,
+						overlay, durationStr, reset)
+				}
+			}
+		}
+
+		// Show stats
+		stats := assignmentStore.Stats()
+		if stats.Total > 0 {
+			fmt.Fprintln(w)
+			fmt.Fprintf(w, "    %sStats:%s %sTotal:%s %d  %sWorking:%s %d  %sCompleted:%s %d  %sFailed:%s %d\n",
+				subtext, reset,
+				subtext, reset, stats.Total,
+				success, reset, stats.Working,
+				success, reset, stats.Completed,
+				errorColor, reset, stats.Failed)
+		}
+
+		fmt.Fprintln(w)
+	}
+
 	// Quick actions hint
 	fmt.Fprintf(w, "  %sQuick actions:%s\n", overlay, reset)
 	fmt.Fprintf(w, "    %sntm send %s --all \"prompt\"%s  %s# Broadcast to all agents%s\n",
@@ -592,7 +1007,96 @@ func runStatus(w io.Writer, session string, tags []string) error {
 		subtext, session, reset, overlay, reset)
 	fmt.Fprintln(w)
 
+	// Contextual suggestion
+	hasBeads := false
+	if assignmentStore != nil && len(assignmentStore.ListActive()) > 0 {
+		hasBeads = true
+	}
+
+	busyAgents := 0
+	idleAgents := 0
+	for _, p := range panes {
+		if p.Type == tmux.AgentUser {
+			continue
+		}
+		st, _ := detector.Detect(p.ID)
+		if st.State == status.StateWorking {
+			busyAgents++
+		} else if st.State == status.StateIdle {
+			idleAgents++
+		}
+	}
+
+	sugState := suggestions.State{
+		SessionCount:   1, // At least this one exists
+		CurrentSession: session,
+		BusyAgents:     busyAgents,
+		IdleAgents:     idleAgents,
+		HasBeads:       hasBeads,
+	}
+
+	if suggestion := suggestions.SuggestNextCommand(sugState); suggestion != nil {
+		output.SuccessFooter(output.Suggestion{
+			Command:     suggestion.Command,
+			Description: suggestion.Description,
+		})
+	}
+
 	return nil
+}
+
+func runStatusWatch(w io.Writer, session string, opts statusOptions) error {
+	if opts.interval <= 0 {
+		opts.interval = 2 * time.Second
+	}
+	opts.watchMode = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle Ctrl+C
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		fmt.Print("\033[?25h") // Show cursor
+		cancel()
+	}()
+
+	// Hide cursor for cleaner display
+	fmt.Print("\033[?25l")
+	defer fmt.Print("\033[?25h")
+
+	ticker := time.NewTicker(opts.interval)
+	defer ticker.Stop()
+
+	firstRun := true
+	for {
+		if !firstRun {
+			select {
+			case <-ctx.Done():
+				fmt.Fprintln(w, "\nWatch mode stopped.")
+				return nil
+			case <-ticker.C:
+			}
+		} else {
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+			}
+		}
+
+		if !firstRun {
+			fmt.Print("\033[H\033[J")
+		}
+
+		if err := runStatusOnce(w, session, opts); err != nil {
+			fmt.Fprintf(w, "Error: %v\n", err)
+		}
+
+		firstRun = false
+	}
 }
 
 // updateSessionActivity updates the Agent Mail activity for a session.
@@ -677,4 +1181,73 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm", int(d.Minutes()))
 	}
 	return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+}
+
+func modelNameForPane(p tmux.Pane) string {
+	if p.Variant != "" {
+		return p.Variant
+	}
+	if cfg != nil {
+		switch p.Type {
+		case tmux.AgentClaude:
+			if cfg.Models.DefaultClaude != "" {
+				return cfg.Models.DefaultClaude
+			}
+		case tmux.AgentCodex:
+			if cfg.Models.DefaultCodex != "" {
+				return cfg.Models.DefaultCodex
+			}
+		case tmux.AgentGemini:
+			if cfg.Models.DefaultGemini != "" {
+				return cfg.Models.DefaultGemini
+			}
+		}
+	}
+	switch p.Type {
+	case tmux.AgentClaude:
+		return "claude-sonnet-4-20250514"
+	case tmux.AgentCodex:
+		return "gpt-4"
+	case tmux.AgentGemini:
+		return "gemini-2.0-flash"
+	default:
+		return ""
+	}
+}
+
+func paneLabel(session string, pane tmux.Pane) string {
+	label := strings.TrimSpace(pane.Title)
+	prefix := session + "__"
+	if strings.HasPrefix(label, prefix) {
+		label = strings.TrimPrefix(label, prefix)
+	}
+	if label == "" {
+		label = fmt.Sprintf("pane %d", pane.Index)
+	}
+	return label
+}
+
+func renderProgressBar(percent float64, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	filled := int(percent / 100 * float64(width))
+	if filled > width {
+		filled = width
+	}
+	empty := width - filled
+	return "[" + strings.Repeat("=", filled) + strings.Repeat("-", empty) + "]"
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

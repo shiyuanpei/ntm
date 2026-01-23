@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Dicklesworthstone/ntm/internal/tmux"
 	"github.com/Dicklesworthstone/ntm/tests/testutil"
 )
 
@@ -713,7 +714,7 @@ func TestRobotMarkdownCompactFlag(t *testing.T) {
 	testutil.RequireTmux(t)
 
 	logger := testutil.NewTestLoggerStdout(t)
-	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-markdown", "--md-compact")
+	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-markdown", "--compact")
 
 	outputStr := string(out)
 	if outputStr == "" {
@@ -878,17 +879,17 @@ func TestRobotFilesTimeWindowFlag(t *testing.T) {
 		},
 		{
 			name:           "5m window",
-			args:           []string{"--robot-files=test", "--files-window=5m"},
+			args:           []string{"--robot-files=test", "--window=5m"},
 			expectedWindow: "5m",
 		},
 		{
 			name:           "1h window",
-			args:           []string{"--robot-files=test", "--files-window=1h"},
+			args:           []string{"--robot-files=test", "--window=1h"},
 			expectedWindow: "1h",
 		},
 		{
 			name:           "all window",
-			args:           []string{"--robot-files=test", "--files-window=all"},
+			args:           []string{"--robot-files=test", "--window=all"},
 			expectedWindow: "all",
 		},
 	}
@@ -1085,16 +1086,16 @@ func TestRobotInspectPanePaneNotFound(t *testing.T) {
 	// First we need a real session to test PANE_NOT_FOUND
 	// Create a temporary session for this test
 	sessionName := fmt.Sprintf("ntm-test-inspect-%d", time.Now().UnixNano())
-	createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	createCmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	if err := createCmd.Run(); err != nil {
 		t.Skipf("Could not create test session: %v", err)
 	}
 	defer func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	}()
 
 	// Try to inspect a pane that doesn't exist (e.g., index 99)
-	cmd := exec.Command("ntm", "--robot-inspect-pane="+sessionName, "--inspect-index=99")
+	cmd := exec.Command("ntm", "--robot-inspect-pane="+sessionName, "--index=99")
 	out, err := cmd.CombinedOutput()
 
 	if err == nil {
@@ -1134,12 +1135,12 @@ func TestRobotInspectPaneSuccessStructure(t *testing.T) {
 
 	// Create a test session with a single pane
 	sessionName := fmt.Sprintf("ntm-test-inspect-%d", time.Now().UnixNano())
-	createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	createCmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	if err := createCmd.Run(); err != nil {
 		t.Skipf("Could not create test session: %v", err)
 	}
 	defer func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	}()
 
 	logger := testutil.NewTestLoggerStdout(t)
@@ -1198,12 +1199,12 @@ func TestRobotInspectPaneInspectLinesFlag(t *testing.T) {
 	testutil.RequireTmux(t)
 
 	sessionName := fmt.Sprintf("ntm-test-inspect-%d", time.Now().UnixNano())
-	createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	createCmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	if err := createCmd.Run(); err != nil {
 		t.Skipf("Could not create test session: %v", err)
 	}
 	defer func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	}()
 
 	logger := testutil.NewTestLoggerStdout(t)
@@ -1233,12 +1234,12 @@ func TestRobotInspectPaneInspectCodeFlag(t *testing.T) {
 	testutil.RequireTmux(t)
 
 	sessionName := fmt.Sprintf("ntm-test-inspect-%d", time.Now().UnixNano())
-	createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	createCmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	if err := createCmd.Run(); err != nil {
 		t.Skipf("Could not create test session: %v", err)
 	}
 	defer func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	}()
 
 	logger := testutil.NewTestLoggerStdout(t)
@@ -1272,12 +1273,12 @@ func TestRobotInspectPaneAgentHints(t *testing.T) {
 	testutil.RequireTmux(t)
 
 	sessionName := fmt.Sprintf("ntm-test-inspect-%d", time.Now().UnixNano())
-	createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	createCmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	if err := createCmd.Run(); err != nil {
 		t.Skipf("Could not create test session: %v", err)
 	}
 	defer func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	}()
 
 	logger := testutil.NewTestLoggerStdout(t)
@@ -1318,12 +1319,12 @@ func TestRobotMetricsWithValidSession(t *testing.T) {
 
 	// Create a test session
 	sessionName := fmt.Sprintf("ntm-test-metrics-%d", time.Now().UnixNano())
-	createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	createCmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	if err := createCmd.Run(); err != nil {
 		t.Skipf("Could not create test session: %v", err)
 	}
 	defer func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	}()
 
 	logger := testutil.NewTestLoggerStdout(t)
@@ -1365,12 +1366,12 @@ func TestRobotMetricsPeriodFlag(t *testing.T) {
 	testutil.RequireTmux(t)
 
 	sessionName := fmt.Sprintf("ntm-test-metrics-%d", time.Now().UnixNano())
-	createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	createCmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	if err := createCmd.Run(); err != nil {
 		t.Skipf("Could not create test session: %v", err)
 	}
 	defer func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	}()
 
 	testCases := []struct {
@@ -1389,7 +1390,7 @@ func TestRobotMetricsPeriodFlag(t *testing.T) {
 			logger := testutil.NewTestLoggerStdout(t)
 			args := []string{"--robot-metrics=" + sessionName}
 			if tc.period != "" {
-				args = append(args, "--metrics-period="+tc.period)
+				args = append(args, "--period="+tc.period)
 			}
 			out := testutil.AssertCommandSuccess(t, logger, "ntm", args...)
 
@@ -1450,12 +1451,12 @@ func TestRobotMetricsAgentHints(t *testing.T) {
 	testutil.RequireTmux(t)
 
 	sessionName := fmt.Sprintf("ntm-test-metrics-%d", time.Now().UnixNano())
-	createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	createCmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	if err := createCmd.Run(); err != nil {
 		t.Skipf("Could not create test session: %v", err)
 	}
 	defer func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	}()
 
 	logger := testutil.NewTestLoggerStdout(t)
@@ -1488,12 +1489,12 @@ func TestRobotReplayMissingHistoryID(t *testing.T) {
 	testutil.RequireTmux(t)
 
 	sessionName := fmt.Sprintf("ntm-test-replay-%d", time.Now().UnixNano())
-	createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	createCmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	if err := createCmd.Run(); err != nil {
 		t.Skipf("Could not create test session: %v", err)
 	}
 	defer func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	}()
 
 	// Replay without --replay-id should fail or return error
@@ -1547,12 +1548,12 @@ func TestRobotReplayNonExistentHistoryID(t *testing.T) {
 	testutil.RequireTmux(t)
 
 	sessionName := fmt.Sprintf("ntm-test-replay-%d", time.Now().UnixNano())
-	createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	createCmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	if err := createCmd.Run(); err != nil {
 		t.Skipf("Could not create test session: %v", err)
 	}
 	defer func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	}()
 
 	// Replay with non-existent history ID should fail
@@ -1592,12 +1593,12 @@ func TestRobotReplayDryRunFlag(t *testing.T) {
 	testutil.RequireTmux(t)
 
 	sessionName := fmt.Sprintf("ntm-test-replay-%d", time.Now().UnixNano())
-	createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	createCmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	if err := createCmd.Run(); err != nil {
 		t.Skipf("Could not create test session: %v", err)
 	}
 	defer func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	}()
 
 	// Dry run with non-existent ID should still fail
@@ -1707,8 +1708,8 @@ func TestRobotPaletteCategoryFilter(t *testing.T) {
 	testutil.RequireNTMBinary(t)
 
 	logger := testutil.NewTestLoggerStdout(t)
-	// Test with a category filter - may or may not find commands
-	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-palette", "--palette-category=quick")
+	// Test with a category filter - may or may not find commands (using canonical --category flag)
+	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-palette", "--category=quick")
 
 	var payload struct {
 		Success  bool `json:"success"`
@@ -1736,8 +1737,8 @@ func TestRobotPaletteSearchFilter(t *testing.T) {
 	testutil.RequireNTMBinary(t)
 
 	logger := testutil.NewTestLoggerStdout(t)
-	// Test with a search filter
-	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-palette", "--palette-search=test")
+	// Test with a search filter (using canonical --search flag)
+	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-palette", "--search=test")
 
 	var payload struct {
 		Success  bool `json:"success"`
@@ -1769,16 +1770,17 @@ func TestRobotPaletteSessionFilter(t *testing.T) {
 	testutil.RequireTmux(t)
 
 	sessionName := fmt.Sprintf("ntm-test-palette-%d", time.Now().UnixNano())
-	createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName)
+	createCmd := exec.Command(tmux.BinaryPath(), "new-session", "-d", "-s", sessionName)
 	if err := createCmd.Run(); err != nil {
 		t.Skipf("Could not create test session: %v", err)
 	}
 	defer func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	}()
 
 	logger := testutil.NewTestLoggerStdout(t)
-	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-palette", "--palette-session="+sessionName)
+	// Use canonical --session flag (--palette-session is deprecated)
+	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-palette", "--session="+sessionName)
 
 	var payload struct {
 		Success bool   `json:"success"`
@@ -1825,8 +1827,8 @@ func TestRobotPaletteCombinedFilters(t *testing.T) {
 	testutil.RequireNTMBinary(t)
 
 	logger := testutil.NewTestLoggerStdout(t)
-	// Test with both category and search filters
-	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-palette", "--palette-category=quick", "--palette-search=fix")
+	// Test with both category and search filters (using canonical flags)
+	out := testutil.AssertCommandSuccess(t, logger, "ntm", "--robot-palette", "--category=quick", "--search=fix")
 
 	var payload struct {
 		Success  bool `json:"success"`

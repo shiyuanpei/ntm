@@ -3,12 +3,13 @@ package session
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/Dicklesworthstone/ntm/internal/util"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Dicklesworthstone/ntm/internal/util"
 )
 
 const (
@@ -17,20 +18,16 @@ const (
 )
 
 // StorageDir returns the path to the session storage directory.
-// Uses XDG_DATA_HOME if set, otherwise ~/.local/share/ntm/sessions/
+// Uses ~/.ntm/sessions by default.
 // Falls back to temp directory if home directory is unavailable.
 func StorageDir() string {
-	dataDir := os.Getenv("XDG_DATA_HOME")
-	if dataDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil || home == "" {
-			// Fallback to temp directory to ensure an absolute path
-			// (relative paths would fragment sessions across working directories)
-			return filepath.Join(os.TempDir(), "ntm", sessionDirName)
-		}
-		dataDir = filepath.Join(home, ".local", "share")
+	ntmDir, err := util.NTMDir()
+	if err != nil || ntmDir == "" {
+		// Fallback to temp directory to ensure an absolute path
+		// (relative paths would fragment sessions across working directories)
+		return filepath.Join(os.TempDir(), "ntm", sessionDirName)
 	}
-	return filepath.Join(dataDir, "ntm", sessionDirName)
+	return filepath.Join(ntmDir, sessionDirName)
 }
 
 // Save writes a session state to disk.
@@ -44,7 +41,7 @@ func Save(state *SessionState, opts SaveOptions) (string, error) {
 	dir := StorageDir()
 
 	// Ensure directory exists
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create sessions directory: %w", err)
 	}
 
@@ -73,7 +70,7 @@ func Save(state *SessionState, opts SaveOptions) (string, error) {
 	}
 
 	// Atomic write using utility function
-	if err := util.AtomicWriteFile(path, data, 0644); err != nil {
+	if err := util.AtomicWriteFile(path, data, 0600); err != nil {
 		return "", fmt.Errorf("writing session file: %w", err)
 	}
 

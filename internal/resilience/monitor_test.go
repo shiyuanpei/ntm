@@ -3,6 +3,7 @@ package resilience
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -522,6 +523,35 @@ func TestHandleCrashMaxRestartsExceeded(t *testing.T) {
 
 	if restartAttempted {
 		t.Error("should not restart when max restarts exceeded")
+	}
+}
+
+func TestHandleCrashSuggestsManualRespawnWhenAutoRestartDisabled(t *testing.T) {
+	restore := saveHooks()
+	defer restore()
+
+	var capturedSession, capturedMsg string
+	setHooksLocked(func() {
+		displayMessageFn = func(session, msg string, durationMs int) error {
+			capturedSession = session
+			capturedMsg = msg
+			return nil
+		}
+	})
+
+	cfg := config.Default()
+	cfg.Resilience.AutoRestart = false
+
+	m := NewMonitor("test-session", "/tmp/project", cfg, false)
+	m.RegisterAgent("pane-1", 1, "cc", "opus", "claude")
+
+	m.handleCrash(context.Background(), m.agents["pane-1"], "test crash")
+
+	if capturedSession != "test-session" {
+		t.Fatalf("expected session 'test-session', got %s", capturedSession)
+	}
+	if !strings.Contains(capturedMsg, "ntm respawn test-session --panes=1") {
+		t.Fatalf("expected respawn hint in message, got %q", capturedMsg)
 	}
 }
 

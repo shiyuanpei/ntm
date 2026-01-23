@@ -3,6 +3,7 @@
 package robot
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 
 // AckOutput is the structured output for --robot-ack
 type AckOutput struct {
+	RobotResponse
 	Session       string            `json:"session"`
 	SentAt        time.Time         `json:"sent_at"`
 	CompletedAt   time.Time         `json:"completed_at"`
@@ -68,6 +70,7 @@ func PrintAck(opts AckOptions) error {
 
 	sentAt := time.Now().UTC()
 	output := AckOutput{
+		RobotResponse: NewRobotResponse(true),
 		Session:       opts.Session,
 		SentAt:        sentAt,
 		Confirmations: []AckConfirmation{},
@@ -82,6 +85,11 @@ func PrintAck(opts AckOptions) error {
 			Pane:   "session",
 			Reason: fmt.Sprintf("session '%s' not found", opts.Session),
 		})
+		output.RobotResponse = NewErrorResponse(
+			fmt.Errorf("session '%s' not found", opts.Session),
+			ErrCodeSessionNotFound,
+			"Use --robot-status to list available sessions",
+		)
 		output.CompletedAt = time.Now().UTC()
 		return encodeJSON(output)
 	}
@@ -92,6 +100,11 @@ func PrintAck(opts AckOptions) error {
 			Pane:   "panes",
 			Reason: fmt.Sprintf("failed to get panes: %v", err),
 		})
+		output.RobotResponse = NewErrorResponse(
+			err,
+			ErrCodeInternalError,
+			"Check tmux session state",
+		)
 		output.CompletedAt = time.Now().UTC()
 		return encodeJSON(output)
 	}
@@ -137,7 +150,11 @@ func PrintAck(opts AckOptions) error {
 	initialStates := make(map[string]string)
 	for _, pane := range targetPanes {
 		paneKey := fmt.Sprintf("%d", pane.Index)
-		captured, err := tmux.CapturePaneOutput(pane.ID, 20)
+		captured, err := func() (string, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			return tmux.CapturePaneOutputContext(ctx, pane.ID, 20)
+		}()
 		if err == nil {
 			initialStates[paneKey] = status.StripANSI(captured)
 		}
@@ -170,7 +187,11 @@ func PrintAck(opts AckOptions) error {
 			}
 
 			// Capture current output
-			captured, err := tmux.CapturePaneOutput(targetPane.ID, 20)
+			captured, err := func() (string, error) {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				return tmux.CapturePaneOutputContext(ctx, targetPane.ID, 20)
+			}()
 			if err != nil {
 				stillPending = append(stillPending, paneKey)
 				continue
@@ -206,6 +227,11 @@ func PrintAck(opts AckOptions) error {
 	// Mark as timed out if we still have pending
 	if len(output.Pending) > 0 {
 		output.TimedOut = true
+		output.RobotResponse = NewErrorResponse(
+			fmt.Errorf("ack timeout"),
+			ErrCodeTimeout,
+			"Increase --ack-timeout or check agent health",
+		)
 	}
 
 	output.CompletedAt = time.Now().UTC()
@@ -474,7 +500,11 @@ func PrintSendAndAck(opts SendAndAckOptions) error {
 		targetKeys = append(targetKeys, paneKey)
 
 		// Capture initial state before sending
-		captured, err := tmux.CapturePaneOutput(pane.ID, 20)
+		captured, err := func() (string, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			return tmux.CapturePaneOutputContext(ctx, pane.ID, 20)
+		}()
 		if err == nil {
 			initialStates[paneKey] = status.StripANSI(captured)
 		}
@@ -550,7 +580,11 @@ func PrintSendAndAck(opts SendAndAckOptions) error {
 				continue
 			}
 
-			captured, err := tmux.CapturePaneOutput(targetPane.ID, 20)
+			captured, err := func() (string, error) {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				return tmux.CapturePaneOutputContext(ctx, targetPane.ID, 20)
+			}()
 			if err != nil {
 				stillPending = append(stillPending, paneKey)
 				continue

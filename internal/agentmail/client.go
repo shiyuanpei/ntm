@@ -97,6 +97,7 @@ func NewClient(opts ...Option) *Client {
 		httpClient: &http.Client{
 			Timeout: DefaultTimeout,
 			Transport: &http.Transport{
+				Proxy:               http.ProxyFromEnvironment,
 				MaxIdleConns:        10,
 				MaxIdleConnsPerHost: 10,
 				IdleConnTimeout:     90 * time.Second,
@@ -164,25 +165,53 @@ func (c *Client) InvalidateCache() {
 	c.availableCacheTime.Store(0)
 }
 
+// DefaultArchivePath is the default location for the Agent Mail archive.
+const DefaultArchivePath = ".mcp_agent_mail_git_mailbox_repo"
+
+// HasArchive checks if the Agent Mail archive directory exists.
+// This provides a fallback detection method when the HTTP endpoint isn't available
+// but Agent Mail is running via MCP stdio protocol.
+func HasArchive() bool {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	archivePath := filepath.Join(homeDir, DefaultArchivePath)
+	info, err := os.Stat(archivePath)
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
+}
+
+// HasArchiveForProject checks if the Agent Mail archive has data for a specific project.
+func HasArchiveForProject(projectKey string) bool {
+	if !HasArchive() {
+		return false
+	}
+	homeDir, _ := os.UserHomeDir()
+	slug := ProjectSlugFromPath(projectKey)
+	if slug == "" {
+		return false
+	}
+	projectPath := filepath.Join(homeDir, DefaultArchivePath, "projects", slug)
+	info, err := os.Stat(projectPath)
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
+}
+
 // HealthCheck performs a health check against the Agent Mail server.
+// This uses the MCP health_check tool via JSON-RPC.
 func (c *Client) HealthCheck(ctx context.Context) (*HealthStatus, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+HealthCheckPath, nil)
+	result, err := c.callTool(ctx, "health_check", nil)
 	if err != nil {
-		return nil, NewAPIError("health_check", 0, err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, NewAPIError("health_check", 0, ErrServerUnavailable)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, NewAPIError("health_check", resp.StatusCode, fmt.Errorf("unexpected status: %s", resp.Status))
+		return nil, err
 	}
 
 	var status HealthStatus
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+	if err := json.Unmarshal(result, &status); err != nil {
 		return nil, NewAPIError("health_check", 0, err)
 	}
 
@@ -299,23 +328,85 @@ func (c *Client) callToolWithTimeout(ctx context.Context, toolName string, args 
 	return c.callTool(ctx, toolName, args)
 }
 
+// ReadResource reads a resource from the Agent Mail server.
+func (c *Client) ReadResource(ctx context.Context, uri string) (json.RawMessage, error) {
+	reqID := c.requestID.Add(1)
+
+	rpcReq := JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      reqID,
+		Method:  "resources/read",
+		Params: map[string]string{
+			"uri": uri,
+		},
+	}
+
+	body, err := json.Marshal(rpcReq)
+	if err != nil {
+		return nil, NewAPIError("resources/read", 0, err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, NewAPIError("resources/read", 0, err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, NewAPIError("resources/read", 0, ErrTimeout)
+		}
+		return nil, NewAPIError("resources/read", 0, ErrServerUnavailable)
+	}
+	defer resp.Body.Close()
+
+	// Read response body (limit to 10MB to prevent DoS/OOM)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return nil, NewAPIError("resources/read", 0, err)
+	}
+
+	// Check HTTP status
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, NewAPIError("resources/read", resp.StatusCode, ErrUnauthorized)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, NewAPIError("resources/read", resp.StatusCode, fmt.Errorf("unexpected status: %s", resp.Status))
+	}
+
+	// Parse JSON-RPC response
+	var rpcResp JSONRPCResponse
+	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
+		return nil, NewAPIError("resources/read", 0, err)
+	}
+
+	// Check for JSON-RPC error
+	if rpcResp.Error != nil {
+		return nil, NewAPIError("resources/read", 0, mapJSONRPCError(rpcResp.Error))
+	}
+
+	return rpcResp.Result, nil
+}
+
 // httpBaseURL returns the HTTP REST API base URL derived from the MCP base URL.
 // The MCP endpoint is typically at /mcp/ while the HTTP endpoints are at the root.
 // Example: "http://127.0.0.1:8765/mcp/" -> "http://127.0.0.1:8765"
 func (c *Client) httpBaseURL() string {
 	base := c.baseURL
 	// Remove trailing /mcp/ or /mcp if present
-	if len(base) >= 5 && base[len(base)-5:] == "/mcp/" {
-		return base[:len(base)-5]
+	if strings.HasSuffix(base, "/mcp/") {
+		return strings.TrimSuffix(base, "/mcp/")
 	}
-	if len(base) >= 4 && base[len(base)-4:] == "/mcp" {
-		return base[:len(base)-4]
+	if strings.HasSuffix(base, "/mcp") {
+		return strings.TrimSuffix(base, "/mcp")
 	}
 	// Remove trailing slash
-	if base != "" && base[len(base)-1] == '/' {
-		return base[:len(base)-1]
-	}
-	return base
+	return strings.TrimSuffix(base, "/")
 }
 
 // ProjectSlugFromPath derives a project slug from an absolute path.

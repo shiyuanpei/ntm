@@ -17,6 +17,7 @@ import (
 
 // DashboardOutput provides a concise dashboard view for AI orchestrators.
 type DashboardOutput struct {
+	RobotResponse
 	GeneratedAt  time.Time          `json:"generated_at"`
 	Fleet        string             `json:"fleet"`
 	Agents       []SnapshotSession  `json:"agents"`
@@ -40,10 +41,11 @@ func PrintDashboard(jsonMode bool) error {
 	}
 
 	output := DashboardOutput{
-		GeneratedAt: time.Now().UTC(),
-		Fleet:       fleet,
-		Agents:      []SnapshotSession{},
-		Metrics:     map[string]any{},
+		RobotResponse: NewRobotResponse(true),
+		GeneratedAt:   time.Now().UTC(),
+		Fleet:         fleet,
+		Agents:        []SnapshotSession{},
+		Metrics:       map[string]any{},
 		System: SystemInfo{
 			OS:        runtime.GOOS,
 			Arch:      runtime.GOARCH,

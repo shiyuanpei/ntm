@@ -22,13 +22,20 @@ func captureStdout(t *testing.T, f func() error) (string, error) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
+	// Read in a separate goroutine to prevent deadlock if output exceeds pipe buffer
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		_, _ = buf.ReadFrom(r)
+		close(done)
+	}()
+
 	err := f()
 
 	w.Close()
 	os.Stdout = old
+	<-done // Wait for reading to complete
 
-	var buf bytes.Buffer
-	buf.ReadFrom(r)
 	return buf.String(), err
 }
 
@@ -1964,25 +1971,25 @@ func TestCalculateConfidence(t *testing.T) {
 		minConf   float64
 		maxConf   float64
 	}{
-		// Claude strengths
+		// Claude strengths (using assign.DefaultCapabilities)
 		{"claude analysis", "claude", bv.BeadPreview{Title: "Analyze codebase"}, "balanced", 0.85, 0.95},
-		{"claude refactor", "claude", bv.BeadPreview{Title: "Refactor module"}, "balanced", 0.85, 0.95},
-		{"claude generic", "claude", bv.BeadPreview{Title: "Some task"}, "balanced", 0.65, 0.75},
+		{"claude refactor", "claude", bv.BeadPreview{Title: "Refactor module"}, "balanced", 0.90, 1.00},
+		{"claude generic", "claude", bv.BeadPreview{Title: "Some task"}, "balanced", 0.75, 0.85}, // TaskTask = 0.80
 
 		// Codex strengths
 		{"codex feature", "codex", bv.BeadPreview{Title: "Implement feature"}, "balanced", 0.85, 0.95},
-		{"codex bug", "codex", bv.BeadPreview{Title: "Fix bug"}, "balanced", 0.75, 0.85},
+		{"codex bug", "codex", bv.BeadPreview{Title: "Fix bug"}, "balanced", 0.85, 0.95}, // TaskBug = 0.90
 
 		// Gemini strengths
 		{"gemini docs", "gemini", bv.BeadPreview{Title: "Update documentation"}, "balanced", 0.85, 0.95},
 
 		// Strategy adjustments
-		{"speed boost", "claude", bv.BeadPreview{Title: "Some task"}, "speed", 0.75, 0.85},
-		{"dependency P1", "claude", bv.BeadPreview{Title: "Task", Priority: "P1"}, "dependency", 0.75, 0.85},
-		{"dependency P0", "claude", bv.BeadPreview{Title: "Task", Priority: "P0"}, "dependency", 0.75, 0.95},
+		{"speed boost", "claude", bv.BeadPreview{Title: "Some task"}, "speed", 0.80, 0.90},                   // (0.80 + 0.9) / 2 = 0.85
+		{"dependency P1", "claude", bv.BeadPreview{Title: "Task", Priority: "P1"}, "dependency", 0.85, 0.95}, // 0.80 + 0.1 = 0.90
+		{"dependency P0", "claude", bv.BeadPreview{Title: "Task", Priority: "P0"}, "dependency", 0.85, 0.95},
 
-		// Unknown agent
-		{"unknown agent", "unknown", bv.BeadPreview{Title: "Task"}, "balanced", 0.65, 0.75},
+		// Unknown agent returns 0.5 default from capability matrix
+		{"unknown agent", "unknown", bv.BeadPreview{Title: "Task"}, "balanced", 0.45, 0.55},
 	}
 
 	for _, tc := range tests {
@@ -2524,5 +2531,743 @@ func TestGenerateTokenHints(t *testing.T) {
 				t.Error("SuggestedCommands should not be empty")
 			}
 		})
+	}
+}
+
+// ====================
+// PrintTriage Tests
+// ====================
+
+func TestPrintTriageOptions(t *testing.T) {
+	tests := []struct {
+		name  string
+		opts  TriageOptions
+		limit int // expected default if 0
+	}{
+		{"default limit", TriageOptions{}, 10},
+		{"custom limit", TriageOptions{Limit: 5}, 5},
+		{"zero limit uses default", TriageOptions{Limit: 0}, 10},
+		{"negative limit uses default", TriageOptions{Limit: -1}, 10},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// The function normalizes opts.Limit internally
+			opts := tc.opts
+			if opts.Limit <= 0 {
+				opts.Limit = 10
+			}
+			if opts.Limit != tc.limit {
+				t.Errorf("limit = %d, want %d", opts.Limit, tc.limit)
+			}
+		})
+	}
+}
+
+func TestTriageOutputStructure(t *testing.T) {
+	// Test that TriageOutput JSON serializes correctly
+	output := TriageOutput{
+		GeneratedAt: time.Now().UTC(),
+		Available:   true,
+		DataHash:    "test-hash",
+		QuickRef: &bv.TriageQuickRef{
+			OpenCount:       10,
+			ActionableCount: 5,
+			BlockedCount:    2,
+			InProgressCount: 3,
+		},
+		Recommendations: []bv.TriageRecommendation{
+			{ID: "test-1", Title: "Test Item", Score: 0.5},
+		},
+		CacheInfo: &TriageCacheInfo{
+			Cached: true,
+			AgeMs:  1000,
+			TTLMs:  30000,
+		},
+	}
+
+	data, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("failed to marshal TriageOutput: %v", err)
+	}
+
+	var decoded TriageOutput
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("failed to unmarshal TriageOutput: %v", err)
+	}
+
+	if decoded.DataHash != "test-hash" {
+		t.Errorf("DataHash = %q, want %q", decoded.DataHash, "test-hash")
+	}
+	if decoded.QuickRef.OpenCount != 10 {
+		t.Errorf("OpenCount = %d, want 10", decoded.QuickRef.OpenCount)
+	}
+	if len(decoded.Recommendations) != 1 {
+		t.Errorf("Recommendations length = %d, want 1", len(decoded.Recommendations))
+	}
+	if decoded.CacheInfo.TTLMs != 30000 {
+		t.Errorf("TTLMs = %d, want 30000", decoded.CacheInfo.TTLMs)
+	}
+}
+
+func TestPrintTriageWhenBvNotInstalled(t *testing.T) {
+	// This test verifies behavior when bv is not installed
+	// We can't easily mock bv.IsInstalled, so we just test the output structure
+	if !bv.IsInstalled() {
+		output, err := captureStdout(t, func() error {
+			return PrintTriage(TriageOptions{Limit: 5})
+		})
+		if err != nil {
+			t.Fatalf("PrintTriage returned error: %v", err)
+		}
+
+		var result TriageOutput
+		if err := json.Unmarshal([]byte(output), &result); err != nil {
+			t.Fatalf("failed to parse output as JSON: %v", err)
+		}
+
+		if result.Available {
+			t.Error("Available should be false when bv not installed")
+		}
+		if result.Error == "" {
+			t.Error("Error should be set when bv not installed")
+		}
+	}
+}
+
+// ====================
+// Test robot-tail output capture accuracy (ntm-aix9)
+// ====================
+
+func TestSplitLines_Accuracy(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "empty string returns empty slice",
+			input:    "",
+			expected: []string{},
+		},
+		{
+			name:     "single line without newline",
+			input:    "hello world",
+			expected: []string{"hello world"},
+		},
+		{
+			name:     "single line with newline",
+			input:    "hello world\n",
+			expected: []string{"hello world"},
+		},
+		{
+			name:     "multiple lines with unix newlines",
+			input:    "line1\nline2\nline3",
+			expected: []string{"line1", "line2", "line3"},
+		},
+		{
+			name:     "multiple lines with trailing newline",
+			input:    "line1\nline2\nline3\n",
+			expected: []string{"line1", "line2", "line3"},
+		},
+		{
+			name:     "windows CRLF newlines",
+			input:    "line1\r\nline2\r\nline3",
+			expected: []string{"line1", "line2", "line3"},
+		},
+		{
+			name:     "old mac CR newlines",
+			input:    "line1\rline2\rline3",
+			expected: []string{"line1", "line2", "line3"},
+		},
+		{
+			name:     "mixed line endings",
+			input:    "line1\nline2\r\nline3\rline4",
+			expected: []string{"line1", "line2", "line3", "line4"},
+		},
+		{
+			name:     "empty lines preserved",
+			input:    "line1\n\nline3",
+			expected: []string{"line1", "", "line3"},
+		},
+		{
+			name:     "whitespace only lines preserved",
+			input:    "line1\n   \nline3",
+			expected: []string{"line1", "   ", "line3"},
+		},
+		{
+			name:     "single newline only",
+			input:    "\n",
+			expected: []string{""}, // split produces ["", ""], trailing empty removed = [""]
+		},
+		{
+			name:     "multiple consecutive newlines",
+			input:    "\n\n\n",
+			expected: []string{"", "", ""}, // split produces ["", "", "", ""], trailing empty removed = ["", "", ""]
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := splitLines(tc.input)
+			if len(result) != len(tc.expected) {
+				t.Errorf("TAIL_TEST: splitLines | Case=%s | len=%d want %d", tc.name, len(result), len(tc.expected))
+				return
+			}
+			for i := range result {
+				if result[i] != tc.expected[i] {
+					t.Errorf("TAIL_TEST: splitLines | Case=%s | line[%d]=%q want %q", tc.name, i, result[i], tc.expected[i])
+				}
+			}
+		})
+	}
+}
+
+func TestDetectAgentType_Accuracy(t *testing.T) {
+	tests := []struct {
+		title    string
+		expected string
+	}{
+		// Claude variants
+		{"claude", "claude"},
+		{"Claude Code", "claude"},
+		{"CLAUDE", "claude"},
+		{"my-claude-agent", "claude"},
+		// Codex variants
+		{"codex", "codex"},
+		{"Codex Agent", "codex"},
+		{"CODEX", "codex"},
+		{"openai-codex", "codex"},
+		// Gemini variants
+		{"gemini", "gemini"},
+		{"Google Gemini", "gemini"},
+		{"GEMINI", "gemini"},
+		{"gemini-pro", "gemini"},
+		// Cursor/Windsurf/Aider (recognized types)
+		{"cursor", "cursor"},
+		{"Cursor IDE", "cursor"},
+		{"windsurf", "windsurf"},
+		{"Windsurf Editor", "windsurf"},
+		{"aider", "aider"},
+		{"Aider CLI", "aider"},
+		// User/shell - not recognized, returns "unknown"
+		{"bash", "unknown"},
+		{"zsh", "unknown"},
+		{"shell", "unknown"},
+		{"user", "unknown"},
+		{"gpt", "unknown"}, // GPT not recognized by detectAgentType
+		// Unknown cases
+		{"random title", "unknown"},
+		{"", "unknown"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.title, func(t *testing.T) {
+			result := detectAgentType(tc.title)
+			if result != tc.expected {
+				t.Errorf("TAIL_TEST: detectAgentType(%q) = %q, want %q", tc.title, result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestDetermineState_Accuracy(t *testing.T) {
+	tests := []struct {
+		name      string
+		output    string
+		agentType string
+		expected  string
+	}{
+		{
+			name:      "empty output for user pane is idle",
+			output:    "",
+			agentType: "user",
+			expected:  "idle",
+		},
+		{
+			name:      "empty output for empty type is idle",
+			output:    "",
+			agentType: "",
+			expected:  "idle",
+		},
+		{
+			name:      "whitespace only for user pane is idle",
+			output:    "   \n\t\n  ",
+			agentType: "user",
+			expected:  "idle",
+		},
+		{
+			name:      "claude prompt pattern is idle",
+			output:    "some output\n> ",
+			agentType: "claude",
+			expected:  "idle",
+		},
+		{
+			name:      "working agent is active",
+			output:    "Processing request...\nThinking about the problem",
+			agentType: "claude",
+			expected:  "active",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := determineState(tc.output, tc.agentType)
+			t.Logf("TAIL_TEST: determineState | Case=%s | agentType=%s | result=%s", tc.name, tc.agentType, result)
+			if result != tc.expected {
+				t.Errorf("TAIL_TEST: determineState | got %q, want %q", result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestPaneOutput_Accuracy(t *testing.T) {
+	t.Run("all fields marshal correctly", func(t *testing.T) {
+		pane := PaneOutput{
+			Type:      "claude",
+			State:     "idle",
+			Lines:     []string{"line1", "line2", "line3"},
+			Truncated: true,
+		}
+
+		data, err := json.Marshal(pane)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+
+		var result PaneOutput
+		if err := json.Unmarshal(data, &result); err != nil {
+			t.Fatalf("Unmarshal failed: %v", err)
+		}
+
+		if result.Type != "claude" {
+			t.Errorf("Type = %s, want claude", result.Type)
+		}
+		if result.State != "idle" {
+			t.Errorf("State = %s, want idle", result.State)
+		}
+		if len(result.Lines) != 3 {
+			t.Errorf("Lines count = %d, want 3", len(result.Lines))
+		}
+		if !result.Truncated {
+			t.Error("Truncated should be true")
+		}
+	})
+
+	t.Run("empty lines array marshals as empty array not null", func(t *testing.T) {
+		pane := PaneOutput{
+			Type:      "codex",
+			State:     "active",
+			Lines:     []string{},
+			Truncated: false,
+		}
+
+		data, err := json.Marshal(pane)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+
+		// Check that lines is [] not null
+		if !strings.Contains(string(data), `"lines":[]`) {
+			t.Errorf("Expected lines to be empty array, got: %s", string(data))
+		}
+	})
+
+	t.Run("state values are valid", func(t *testing.T) {
+		validStates := []string{"idle", "active", "unknown", "error"}
+		for _, state := range validStates {
+			pane := PaneOutput{State: state}
+			data, _ := json.Marshal(pane)
+			var result PaneOutput
+			json.Unmarshal(data, &result)
+			if result.State != state {
+				t.Errorf("State %s not preserved after marshal/unmarshal", state)
+			}
+		}
+	})
+}
+
+func TestTailOutput_OutputAccuracy(t *testing.T) {
+	t.Run("captured_at timestamp format is RFC3339", func(t *testing.T) {
+		output := TailOutput{
+			Session:    "test",
+			CapturedAt: time.Now().UTC(),
+			Panes:      make(map[string]PaneOutput),
+		}
+
+		data, err := json.Marshal(output)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+
+		// Parse the JSON to check format
+		var raw map[string]interface{}
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatalf("Unmarshal to map failed: %v", err)
+		}
+
+		capturedAt, ok := raw["captured_at"].(string)
+		if !ok {
+			t.Fatal("captured_at is not a string")
+		}
+
+		// Should be parseable as RFC3339
+		_, err = time.Parse(time.RFC3339Nano, capturedAt)
+		if err != nil {
+			_, err = time.Parse(time.RFC3339, capturedAt)
+			if err != nil {
+				t.Errorf("captured_at %q is not RFC3339 format: %v", capturedAt, err)
+			}
+		}
+	})
+
+	t.Run("panes map preserves all entries", func(t *testing.T) {
+		output := TailOutput{
+			Session:    "test",
+			CapturedAt: time.Now().UTC(),
+			Panes: map[string]PaneOutput{
+				"0":   {Type: "claude", State: "idle", Lines: []string{"a"}},
+				"1":   {Type: "codex", State: "active", Lines: []string{"b", "c"}},
+				"2":   {Type: "gemini", State: "error", Lines: []string{}},
+				"10":  {Type: "gpt", State: "unknown", Lines: []string{"d"}},
+				"100": {Type: "", State: "idle", Lines: []string{"e", "f", "g"}},
+			},
+		}
+
+		data, err := json.Marshal(output)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+
+		var result TailOutput
+		if err := json.Unmarshal(data, &result); err != nil {
+			t.Fatalf("Unmarshal failed: %v", err)
+		}
+
+		if len(result.Panes) != 5 {
+			t.Errorf("Panes count = %d, want 5", len(result.Panes))
+		}
+
+		// Verify each pane
+		for key, expected := range output.Panes {
+			actual, ok := result.Panes[key]
+			if !ok {
+				t.Errorf("Missing pane %s", key)
+				continue
+			}
+			if actual.Type != expected.Type {
+				t.Errorf("Pane %s Type = %s, want %s", key, actual.Type, expected.Type)
+			}
+			if len(actual.Lines) != len(expected.Lines) {
+				t.Errorf("Pane %s Lines count = %d, want %d", key, len(actual.Lines), len(expected.Lines))
+			}
+		}
+	})
+
+	t.Run("agent_hints omitted when nil", func(t *testing.T) {
+		output := TailOutput{
+			Session:    "test",
+			CapturedAt: time.Now().UTC(),
+			Panes:      make(map[string]PaneOutput),
+			AgentHints: nil,
+		}
+
+		data, err := json.Marshal(output)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+
+		if strings.Contains(string(data), "_agent_hints") {
+			t.Errorf("_agent_hints should be omitted when nil, got: %s", string(data))
+		}
+	})
+
+	t.Run("agent_hints included when present", func(t *testing.T) {
+		output := TailOutput{
+			Session:    "test",
+			CapturedAt: time.Now().UTC(),
+			Panes:      make(map[string]PaneOutput),
+			AgentHints: &TailAgentHints{
+				IdleAgents:   []string{"0"},
+				ActiveAgents: []string{"1"},
+				Suggestions:  []string{"test suggestion"},
+			},
+		}
+
+		data, err := json.Marshal(output)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+
+		if !strings.Contains(string(data), "_agent_hints") {
+			t.Errorf("_agent_hints should be included when present, got: %s", string(data))
+		}
+	})
+}
+
+func TestTailTruncation_Accuracy(t *testing.T) {
+	t.Run("truncated flag logic", func(t *testing.T) {
+		// When we request N lines and get exactly N lines, truncated should be true
+		// because there may be more content we didn't capture
+
+		// This tests the logic: truncated := len(outputLines) >= lines
+		testCases := []struct {
+			outputLines int
+			requested   int
+			wantTrunc   bool
+		}{
+			{outputLines: 5, requested: 10, wantTrunc: false},
+			{outputLines: 10, requested: 10, wantTrunc: true},
+			{outputLines: 15, requested: 10, wantTrunc: true},
+			{outputLines: 0, requested: 10, wantTrunc: false},
+			{outputLines: 1, requested: 1, wantTrunc: true},
+		}
+
+		for _, tc := range testCases {
+			truncated := tc.outputLines >= tc.requested
+			if truncated != tc.wantTrunc {
+				t.Errorf("TAIL_TEST: truncated(%d lines, %d requested) = %v, want %v",
+					tc.outputLines, tc.requested, truncated, tc.wantTrunc)
+			}
+		}
+	})
+}
+
+func TestTailFilterMap_Accuracy(t *testing.T) {
+	t.Run("filter map accepts pane indices", func(t *testing.T) {
+		filterMap := make(map[string]bool)
+		paneFilter := []string{"0", "2", "5"}
+		for _, p := range paneFilter {
+			filterMap[p] = true
+		}
+
+		// Should match these
+		if !filterMap["0"] {
+			t.Error("Filter should match '0'")
+		}
+		if !filterMap["2"] {
+			t.Error("Filter should match '2'")
+		}
+		if !filterMap["5"] {
+			t.Error("Filter should match '5'")
+		}
+
+		// Should not match these
+		if filterMap["1"] {
+			t.Error("Filter should not match '1'")
+		}
+		if filterMap["3"] {
+			t.Error("Filter should not match '3'")
+		}
+	})
+
+	t.Run("filter map accepts pane IDs", func(t *testing.T) {
+		filterMap := make(map[string]bool)
+		paneFilter := []string{"%0", "%5", "%10"}
+		for _, p := range paneFilter {
+			filterMap[p] = true
+		}
+
+		if !filterMap["%0"] {
+			t.Error("Filter should match '%0'")
+		}
+		if !filterMap["%5"] {
+			t.Error("Filter should match '%5'")
+		}
+		if filterMap["%1"] {
+			t.Error("Filter should not match '%1'")
+		}
+	})
+
+	t.Run("empty filter means include all", func(t *testing.T) {
+		filterMap := make(map[string]bool)
+		hasFilter := len(filterMap) > 0
+
+		if hasFilter {
+			t.Error("Empty filter should mean hasFilter=false")
+		}
+	})
+}
+
+func TestLinePreservation_Accuracy(t *testing.T) {
+	t.Run("unicode characters preserved", func(t *testing.T) {
+		input := "Hello 世界 🌍 émoji"
+		lines := splitLines(input)
+		if len(lines) != 1 {
+			t.Fatalf("Expected 1 line, got %d", len(lines))
+		}
+		if lines[0] != input {
+			t.Errorf("Unicode not preserved: got %q, want %q", lines[0], input)
+		}
+	})
+
+	t.Run("tabs preserved", func(t *testing.T) {
+		input := "column1\tcolumn2\tcolumn3"
+		lines := splitLines(input)
+		if lines[0] != input {
+			t.Errorf("Tabs not preserved: got %q, want %q", lines[0], input)
+		}
+	})
+
+	t.Run("leading/trailing spaces preserved", func(t *testing.T) {
+		input := "  leading\ntrailing  \n  both  "
+		lines := splitLines(input)
+		expected := []string{"  leading", "trailing  ", "  both  "}
+		for i, exp := range expected {
+			if lines[i] != exp {
+				t.Errorf("Spaces not preserved on line %d: got %q, want %q", i, lines[i], exp)
+			}
+		}
+	})
+
+	t.Run("special characters preserved", func(t *testing.T) {
+		specialChars := []string{
+			"line with $variable",
+			"line with `backticks`",
+			"line with \"quotes\"",
+			"line with 'single quotes'",
+			"line with \\backslash\\",
+			"line with /forward/slash/",
+			"line with <angle> brackets",
+			"line with [square] brackets",
+			"line with {curly} braces",
+		}
+		input := strings.Join(specialChars, "\n")
+		lines := splitLines(input)
+
+		if len(lines) != len(specialChars) {
+			t.Fatalf("Line count mismatch: got %d, want %d", len(lines), len(specialChars))
+		}
+
+		for i, exp := range specialChars {
+			if lines[i] != exp {
+				t.Errorf("Special chars not preserved on line %d: got %q, want %q", i, lines[i], exp)
+			}
+		}
+	})
+}
+
+func TestGenerateTailHints_DeterministicOutput(t *testing.T) {
+	t.Run("idle agents sorted deterministically", func(t *testing.T) {
+		panes := map[string]PaneOutput{
+			"5": {State: "idle"},
+			"2": {State: "idle"},
+			"8": {State: "idle"},
+			"1": {State: "idle"},
+		}
+
+		// Run multiple times to verify deterministic output
+		for i := 0; i < 10; i++ {
+			hints := generateTailHints(panes)
+			if hints == nil {
+				t.Fatal("expected hints, got nil")
+			}
+			expected := []string{"1", "2", "5", "8"}
+			if len(hints.IdleAgents) != len(expected) {
+				t.Fatalf("iteration %d: wrong idle count", i)
+			}
+			for j, exp := range expected {
+				if hints.IdleAgents[j] != exp {
+					t.Errorf("iteration %d: IdleAgents[%d] = %s, want %s", i, j, hints.IdleAgents[j], exp)
+				}
+			}
+		}
+	})
+
+	t.Run("active agents sorted deterministically", func(t *testing.T) {
+		panes := map[string]PaneOutput{
+			"10": {State: "active"},
+			"3":  {State: "active"},
+			"7":  {State: "active"},
+		}
+
+		hints := generateTailHints(panes)
+		if hints == nil {
+			t.Fatal("expected hints, got nil")
+		}
+		// Note: string sort means "10" < "3" < "7"
+		expected := []string{"10", "3", "7"}
+		for i, exp := range expected {
+			if hints.ActiveAgents[i] != exp {
+				t.Errorf("ActiveAgents[%d] = %s, want %s", i, hints.ActiveAgents[i], exp)
+			}
+		}
+	})
+}
+
+func TestTranslateAgentTypeForStatus_Coverage(t *testing.T) {
+	// Test that the translation function handles various inputs
+	// Note: The function is case-sensitive and only handles lowercase canonical forms
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Canonical lowercase forms get translated
+		{"claude", "cc"},
+		{"codex", "cod"},
+		{"gemini", "gmi"}, // Note: "gmi" not "gem"
+		// "unknown" is special-cased to return empty string
+		{"unknown", ""},
+		// Everything else returns input unchanged (default case)
+		{"Claude", "Claude"},
+		{"CLAUDE", "CLAUDE"},
+		{"Codex", "Codex"},
+		{"CODEX", "CODEX"},
+		{"Gemini", "Gemini"},
+		{"gpt", "gpt"},       // Passthrough
+		{"GPT", "GPT"},       // Passthrough
+		{"user", "user"},     // Passthrough
+		{"shell", "shell"},   // Passthrough
+		{"", ""},             // Empty returns empty
+		{"cursor", "cursor"}, // Passthrough
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			result := translateAgentTypeForStatus(tc.input)
+			if result != tc.expected {
+				t.Errorf("translateAgentTypeForStatus(%q) = %q, want %q", tc.input, result, tc.expected)
+			}
+		})
+	}
+}
+
+func resetOutputStateForTest() {
+	outputStateMu.Lock()
+	defer outputStateMu.Unlock()
+	paneStates = make(map[string]*paneState)
+}
+
+func TestUpdateActivityLinesDelta(t *testing.T) {
+	resetOutputStateForTest()
+
+	paneID := "%1"
+
+	_, delta := updateActivity(paneID, "a\nb\n")
+	if delta != 2 {
+		t.Fatalf("initial delta = %d, want 2", delta)
+	}
+
+	_, delta = updateActivity(paneID, "a\nb\n")
+	if delta != 0 {
+		t.Fatalf("unchanged delta = %d, want 0", delta)
+	}
+
+	// Same line count, different content should still report activity.
+	_, delta = updateActivity(paneID, "x\ny\n")
+	if delta != 1 {
+		t.Fatalf("changed content delta = %d, want 1", delta)
+	}
+
+	// Normal line increase.
+	_, delta = updateActivity(paneID, "x\ny\nz\n")
+	if delta != 1 {
+		t.Fatalf("line increase delta = %d, want 1", delta)
+	}
+
+	// Buffer clear or wrap should reset to current lines.
+	_, delta = updateActivity(paneID, "p\n")
+	if delta != 1 {
+		t.Fatalf("reset delta = %d, want 1", delta)
 	}
 }

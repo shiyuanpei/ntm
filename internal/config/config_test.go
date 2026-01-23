@@ -482,7 +482,7 @@ func TestPrint(t *testing.T) {
 		t.Fatalf("Print failed: %v", err)
 	}
 	output := buf.String()
-	for _, section := range []string{"[agents]", "[tmux]", "[agent_mail]", "[models]", "[[palette]]"} {
+	for _, section := range []string{"[agents]", "[tmux]", "[agent_mail]", "[integrations.dcg]", "[models]", "[[palette]]"} {
 		if !strings.Contains(output, section) {
 			t.Errorf("Expected output to contain %s", section)
 		}
@@ -957,12 +957,13 @@ func TestWatchProjectConfig(t *testing.T) {
 claude = "global-claude"
 `), 0644)
 
-	// Project config
+	// Project config - NOTE: agent commands in project config are ignored
+	// for security (RCE prevention). Test with defaults.agents instead.
 	os.Mkdir(".ntm", 0755)
 	projPath := filepath.Join(cwd, ".ntm", "config.toml")
 	os.WriteFile(projPath, []byte(`
-[agents]
-claude = "project-claude"
+[defaults]
+agents = { cc = 2 }
 `), 0644)
 
 	// Setup watcher
@@ -978,18 +979,23 @@ claude = "project-claude"
 	}
 	defer closeWatcher()
 
-	// Modify project config
+	// Modify project config - change the defaults.agents which IS merged
 	time.Sleep(600 * time.Millisecond) // Wait for debounce/start
 	os.WriteFile(projPath, []byte(`
-[agents]
-claude = "updated-project-claude"
+[defaults]
+agents = { cc = 5 }
 `), 0644)
 
 	// Wait for update
 	select {
 	case cfg := <-updated:
-		if cfg.Agents.Claude != "updated-project-claude" {
-			t.Errorf("Expected 'updated-project-claude', got %q", cfg.Agents.Claude)
+		// Agent commands should still be from global config (security feature)
+		if cfg.Agents.Claude != "global-claude" {
+			t.Errorf("Expected 'global-claude' (agent override disabled), got %q", cfg.Agents.Claude)
+		}
+		// Project defaults SHOULD be updated
+		if cfg.ProjectDefaults["cc"] != 5 {
+			t.Errorf("Expected project defaults cc=5, got %d", cfg.ProjectDefaults["cc"])
 		}
 	case <-time.After(3 * time.Second):
 		t.Error("Timed out waiting for config update")
@@ -1376,6 +1382,32 @@ func TestHealthConfigGetValue(t *testing.T) {
 		{"health.max_restarts", 3},
 		{"health.restart_backoff_base", 30},
 		{"health.restart_backoff_max", 300},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got, err := GetValue(cfg, tt.path)
+			if err != nil {
+				t.Fatalf("GetValue(%q) error = %v", tt.path, err)
+			}
+			if got != tt.want {
+				t.Errorf("GetValue(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDCGConfigGetValue(t *testing.T) {
+	cfg := Default()
+
+	tests := []struct {
+		path string
+		want interface{}
+	}{
+		{"integrations.dcg.enabled", false},
+		{"integrations.dcg.binary_path", ""},
+		{"integrations.dcg.audit_log", ""},
+		{"integrations.dcg.allow_override", true},
 	}
 
 	for _, tt := range tests {
@@ -1784,6 +1816,34 @@ func TestCASSContextValidation(t *testing.T) {
 	}
 }
 
+func TestDCGConfigValidation(t *testing.T) {
+	cfg := Config{
+		Integrations: IntegrationsConfig{
+			DCG: DCGConfig{
+				BinaryPath: "/no/such/dcg",
+			},
+		},
+		Tmux:            TmuxConfig{DefaultPanes: 1},
+		ContextRotation: DefaultContextRotationConfig(),
+		Health:          DefaultHealthConfig(),
+	}
+
+	errs := Validate(&cfg)
+	if len(errs) == 0 {
+		t.Fatal("expected validation error for invalid dcg binary_path")
+	}
+	found := false
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "integrations.dcg") && strings.Contains(err.Error(), "binary_path") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected error mentioning integrations.dcg binary_path, got %v", errs)
+	}
+}
+
 func TestCASSContextGetValue(t *testing.T) {
 	cfg := Default()
 
@@ -1834,5 +1894,764 @@ func TestCASSContextPrintOutput(t *testing.T) {
 	}
 	if !strings.Contains(output, "prefer_same_project") {
 		t.Error("Expected output to contain prefer_same_project")
+	}
+}
+
+func TestSessionRecoveryDefaults(t *testing.T) {
+	cfg := Default()
+
+	if !cfg.SessionRecovery.Enabled {
+		t.Error("SessionRecovery should be enabled by default")
+	}
+	if !cfg.SessionRecovery.IncludeCMMemories {
+		t.Error("SessionRecovery.IncludeCMMemories should be true by default")
+	}
+	if !cfg.SessionRecovery.IncludeAgentMail {
+		t.Error("SessionRecovery.IncludeAgentMail should be true by default")
+	}
+	if !cfg.SessionRecovery.IncludeBeadsContext {
+		t.Error("SessionRecovery.IncludeBeadsContext should be true by default")
+	}
+	if cfg.SessionRecovery.MaxRecoveryTokens != 2000 {
+		t.Errorf("Expected MaxRecoveryTokens 2000, got %d", cfg.SessionRecovery.MaxRecoveryTokens)
+	}
+	if !cfg.SessionRecovery.AutoInjectOnSpawn {
+		t.Error("SessionRecovery.AutoInjectOnSpawn should be true by default")
+	}
+	if cfg.SessionRecovery.StaleThresholdHours != 24 {
+		t.Errorf("Expected StaleThresholdHours 24, got %d", cfg.SessionRecovery.StaleThresholdHours)
+	}
+}
+
+func TestSessionRecoveryFromTOML(t *testing.T) {
+	configContent := `
+[recovery]
+enabled = false
+include_cm_memories = false
+include_agent_mail = false
+include_beads_context = false
+max_recovery_tokens = 5000
+auto_inject_on_spawn = false
+stale_threshold_hours = 48
+`
+	configPath := createTempConfig(t, configContent)
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	if cfg.SessionRecovery.Enabled {
+		t.Error("Expected enabled = false")
+	}
+	if cfg.SessionRecovery.IncludeCMMemories {
+		t.Error("Expected include_cm_memories = false")
+	}
+	if cfg.SessionRecovery.IncludeAgentMail {
+		t.Error("Expected include_agent_mail = false")
+	}
+	if cfg.SessionRecovery.IncludeBeadsContext {
+		t.Error("Expected include_beads_context = false")
+	}
+	if cfg.SessionRecovery.MaxRecoveryTokens != 5000 {
+		t.Errorf("Expected MaxRecoveryTokens 5000, got %d", cfg.SessionRecovery.MaxRecoveryTokens)
+	}
+	if cfg.SessionRecovery.AutoInjectOnSpawn {
+		t.Error("Expected auto_inject_on_spawn = false")
+	}
+	if cfg.SessionRecovery.StaleThresholdHours != 48 {
+		t.Errorf("Expected StaleThresholdHours 48, got %d", cfg.SessionRecovery.StaleThresholdHours)
+	}
+}
+
+func TestSessionRecoveryEnvOverrides(t *testing.T) {
+	// Save original values
+	origEnabled := os.Getenv("NTM_RECOVERY_ENABLED")
+	origIncludeCM := os.Getenv("NTM_RECOVERY_INCLUDE_CM")
+	origIncludeAgentMail := os.Getenv("NTM_RECOVERY_INCLUDE_AGENT_MAIL")
+	origIncludeBeads := os.Getenv("NTM_RECOVERY_INCLUDE_BEADS")
+	origMaxTokens := os.Getenv("NTM_RECOVERY_MAX_TOKENS")
+	origAutoInject := os.Getenv("NTM_RECOVERY_AUTO_INJECT")
+	origStaleHours := os.Getenv("NTM_RECOVERY_STALE_HOURS")
+
+	// Clear env vars before test
+	os.Unsetenv("NTM_RECOVERY_ENABLED")
+	os.Unsetenv("NTM_RECOVERY_INCLUDE_CM")
+	os.Unsetenv("NTM_RECOVERY_INCLUDE_AGENT_MAIL")
+	os.Unsetenv("NTM_RECOVERY_INCLUDE_BEADS")
+	os.Unsetenv("NTM_RECOVERY_MAX_TOKENS")
+	os.Unsetenv("NTM_RECOVERY_AUTO_INJECT")
+	os.Unsetenv("NTM_RECOVERY_STALE_HOURS")
+
+	defer func() {
+		os.Setenv("NTM_RECOVERY_ENABLED", origEnabled)
+		os.Setenv("NTM_RECOVERY_INCLUDE_CM", origIncludeCM)
+		os.Setenv("NTM_RECOVERY_INCLUDE_AGENT_MAIL", origIncludeAgentMail)
+		os.Setenv("NTM_RECOVERY_INCLUDE_BEADS", origIncludeBeads)
+		os.Setenv("NTM_RECOVERY_MAX_TOKENS", origMaxTokens)
+		os.Setenv("NTM_RECOVERY_AUTO_INJECT", origAutoInject)
+		os.Setenv("NTM_RECOVERY_STALE_HOURS", origStaleHours)
+	}()
+
+	// Create a config file with defaults (enabled = true)
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(`
+[recovery]
+enabled = true
+include_cm_memories = true
+include_agent_mail = true
+include_beads_context = true
+max_recovery_tokens = 2000
+auto_inject_on_spawn = true
+stale_threshold_hours = 24
+`), 0644); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	// Test NTM_RECOVERY_ENABLED=false
+	os.Setenv("NTM_RECOVERY_ENABLED", "false")
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.SessionRecovery.Enabled {
+		t.Error("SessionRecovery should be disabled via NTM_RECOVERY_ENABLED=false")
+	}
+
+	// Test NTM_RECOVERY_ENABLED=0 (also means false)
+	os.Setenv("NTM_RECOVERY_ENABLED", "0")
+	cfg, err = Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.SessionRecovery.Enabled {
+		t.Error("SessionRecovery should be disabled via NTM_RECOVERY_ENABLED=0")
+	}
+
+	// Test NTM_RECOVERY_INCLUDE_CM=false
+	os.Setenv("NTM_RECOVERY_ENABLED", "true")
+	os.Setenv("NTM_RECOVERY_INCLUDE_CM", "false")
+	cfg, err = Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.SessionRecovery.IncludeCMMemories {
+		t.Error("IncludeCMMemories should be false via NTM_RECOVERY_INCLUDE_CM=false")
+	}
+
+	// Test NTM_RECOVERY_INCLUDE_AGENT_MAIL=false
+	os.Setenv("NTM_RECOVERY_INCLUDE_AGENT_MAIL", "false")
+	cfg, err = Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.SessionRecovery.IncludeAgentMail {
+		t.Error("IncludeAgentMail should be false via NTM_RECOVERY_INCLUDE_AGENT_MAIL=false")
+	}
+
+	// Test NTM_RECOVERY_INCLUDE_BEADS=false
+	os.Setenv("NTM_RECOVERY_INCLUDE_BEADS", "false")
+	cfg, err = Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.SessionRecovery.IncludeBeadsContext {
+		t.Error("IncludeBeadsContext should be false via NTM_RECOVERY_INCLUDE_BEADS=false")
+	}
+
+	// Test NTM_RECOVERY_MAX_TOKENS
+	os.Setenv("NTM_RECOVERY_MAX_TOKENS", "5000")
+	cfg, err = Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.SessionRecovery.MaxRecoveryTokens != 5000 {
+		t.Errorf("Expected MaxRecoveryTokens 5000 from env, got %d", cfg.SessionRecovery.MaxRecoveryTokens)
+	}
+
+	// Test invalid/negative MaxTokens is rejected
+	os.Setenv("NTM_RECOVERY_MAX_TOKENS", "-100")
+	cfg, err = Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.SessionRecovery.MaxRecoveryTokens != 2000 { // Should keep config value, not env
+		t.Errorf("Negative MaxTokens should be rejected, got %d", cfg.SessionRecovery.MaxRecoveryTokens)
+	}
+
+	// Test NTM_RECOVERY_AUTO_INJECT=false
+	os.Setenv("NTM_RECOVERY_MAX_TOKENS", "2000") // Reset to valid
+	os.Setenv("NTM_RECOVERY_AUTO_INJECT", "false")
+	cfg, err = Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.SessionRecovery.AutoInjectOnSpawn {
+		t.Error("AutoInjectOnSpawn should be false via NTM_RECOVERY_AUTO_INJECT=false")
+	}
+
+	// Test NTM_RECOVERY_AUTO_INJECT=1 (means true)
+	os.Setenv("NTM_RECOVERY_AUTO_INJECT", "1")
+	cfg, err = Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !cfg.SessionRecovery.AutoInjectOnSpawn {
+		t.Error("AutoInjectOnSpawn should be true via NTM_RECOVERY_AUTO_INJECT=1")
+	}
+
+	// Test NTM_RECOVERY_STALE_HOURS
+	os.Setenv("NTM_RECOVERY_STALE_HOURS", "48")
+	cfg, err = Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.SessionRecovery.StaleThresholdHours != 48 {
+		t.Errorf("Expected StaleThresholdHours 48 from env, got %d", cfg.SessionRecovery.StaleThresholdHours)
+	}
+
+	// Test invalid/negative StaleHours is rejected
+	os.Setenv("NTM_RECOVERY_STALE_HOURS", "-10")
+	cfg, err = Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.SessionRecovery.StaleThresholdHours != 24 { // Should keep config value, not env
+		t.Errorf("Negative StaleHours should be rejected, got %d", cfg.SessionRecovery.StaleThresholdHours)
+	}
+}
+
+func TestDefaultAssignConfig(t *testing.T) {
+	cfg := DefaultAssignConfig()
+
+	if cfg.Strategy != "balanced" {
+		t.Errorf("Expected default strategy 'balanced', got %q", cfg.Strategy)
+	}
+}
+
+func TestIsValidStrategy(t *testing.T) {
+	tests := []struct {
+		strategy string
+		valid    bool
+	}{
+		{"balanced", true},
+		{"speed", true},
+		{"quality", true},
+		{"dependency", true},
+		{"round-robin", true},
+		{"invalid", false},
+		{"", false},
+		{"BALANCED", false}, // Case-sensitive
+		{"bv", false},       // Non-existent strategy mentioned in spec
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.strategy, func(t *testing.T) {
+			got := IsValidStrategy(tt.strategy)
+			if got != tt.valid {
+				t.Errorf("IsValidStrategy(%q) = %v, want %v", tt.strategy, got, tt.valid)
+			}
+		})
+	}
+}
+
+func TestValidAssignStrategies(t *testing.T) {
+	// Verify all expected strategies are present
+	expected := []string{"balanced", "speed", "quality", "dependency", "round-robin"}
+	if len(ValidAssignStrategies) != len(expected) {
+		t.Errorf("Expected %d strategies, got %d", len(expected), len(ValidAssignStrategies))
+	}
+
+	for _, s := range expected {
+		found := false
+		for _, v := range ValidAssignStrategies {
+			if v == s {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected strategy %q not found in ValidAssignStrategies", s)
+		}
+	}
+}
+
+func TestAssignConfigFromTOML(t *testing.T) {
+	configContent := `
+[assign]
+strategy = "quality"
+`
+	configPath := createTempConfig(t, configContent)
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	if cfg.Assign.Strategy != "quality" {
+		t.Errorf("Expected strategy 'quality', got %q", cfg.Assign.Strategy)
+	}
+}
+
+func TestAssignConfigDefaultInFullConfig(t *testing.T) {
+	cfg := Default()
+
+	if cfg.Assign.Strategy != "balanced" {
+		t.Errorf("Expected default strategy 'balanced' in full config, got %q", cfg.Assign.Strategy)
+	}
+}
+
+func TestDefaultCAAMConfig(t *testing.T) {
+	cfg := DefaultCAAMConfig()
+
+	if !cfg.Enabled {
+		t.Error("Expected CAAM to be enabled by default")
+	}
+	if cfg.BinaryPath != "" {
+		t.Errorf("Expected empty binary path (PATH lookup), got %q", cfg.BinaryPath)
+	}
+	if !cfg.AutoRotate {
+		t.Error("Expected AutoRotate to be enabled by default")
+	}
+	if len(cfg.Providers) != 3 {
+		t.Errorf("Expected 3 default providers, got %d", len(cfg.Providers))
+	}
+	if cfg.AccountCooldown != 300 {
+		t.Errorf("Expected 300s account cooldown, got %d", cfg.AccountCooldown)
+	}
+	if cfg.AlertThreshold != 80 {
+		t.Errorf("Expected 80%% alert threshold, got %d", cfg.AlertThreshold)
+	}
+}
+
+func TestDefaultIntegrationsConfig(t *testing.T) {
+	cfg := DefaultIntegrationsConfig()
+
+	// Verify CAAM config is properly nested
+	if !cfg.CAAM.Enabled {
+		t.Error("Expected CAAM integration to be enabled by default")
+	}
+	if !cfg.CAAM.AutoRotate {
+		t.Error("Expected CAAM AutoRotate to be enabled by default")
+	}
+}
+
+func TestIntegrationsConfigInFullConfig(t *testing.T) {
+	cfg := Default()
+
+	// Verify integrations config is present and properly initialized
+	if !cfg.Integrations.CAAM.Enabled {
+		t.Error("Expected CAAM to be enabled in full config default")
+	}
+	if cfg.Integrations.CAAM.AccountCooldown != 300 {
+		t.Errorf("Expected 300s cooldown in full config, got %d", cfg.Integrations.CAAM.AccountCooldown)
+	}
+}
+
+func TestCAAMConfigFromTOML(t *testing.T) {
+	configContent := `
+[integrations.caam]
+enabled = false
+binary_path = "/usr/local/bin/caam"
+auto_rotate = false
+providers = ["claude"]
+account_cooldown = 600
+alert_threshold = 90
+`
+	configPath := createTempConfig(t, configContent)
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	if cfg.Integrations.CAAM.Enabled {
+		t.Error("Expected CAAM to be disabled")
+	}
+	if cfg.Integrations.CAAM.BinaryPath != "/usr/local/bin/caam" {
+		t.Errorf("Expected binary path '/usr/local/bin/caam', got %q", cfg.Integrations.CAAM.BinaryPath)
+	}
+	if cfg.Integrations.CAAM.AutoRotate {
+		t.Error("Expected AutoRotate to be disabled")
+	}
+	if len(cfg.Integrations.CAAM.Providers) != 1 || cfg.Integrations.CAAM.Providers[0] != "claude" {
+		t.Errorf("Expected single 'claude' provider, got %v", cfg.Integrations.CAAM.Providers)
+	}
+	if cfg.Integrations.CAAM.AccountCooldown != 600 {
+		t.Errorf("Expected 600s cooldown, got %d", cfg.Integrations.CAAM.AccountCooldown)
+	}
+	if cfg.Integrations.CAAM.AlertThreshold != 90 {
+		t.Errorf("Expected 90%% threshold, got %d", cfg.Integrations.CAAM.AlertThreshold)
+	}
+}
+
+func TestDefaultProcessTriageConfig(t *testing.T) {
+	cfg := DefaultProcessTriageConfig()
+
+	if !cfg.Enabled {
+		t.Error("Expected ProcessTriage to be enabled by default")
+	}
+	if cfg.BinaryPath != "" {
+		t.Errorf("Expected empty binary path (PATH lookup), got %q", cfg.BinaryPath)
+	}
+	if cfg.CheckInterval != 30 {
+		t.Errorf("Expected 30s check interval, got %d", cfg.CheckInterval)
+	}
+	if cfg.IdleThreshold != 300 {
+		t.Errorf("Expected 300s idle threshold, got %d", cfg.IdleThreshold)
+	}
+	if cfg.StuckThreshold != 600 {
+		t.Errorf("Expected 600s stuck threshold, got %d", cfg.StuckThreshold)
+	}
+	if cfg.OnStuck != "alert" {
+		t.Errorf("Expected 'alert' on_stuck action, got %q", cfg.OnStuck)
+	}
+	if !cfg.UseRanoData {
+		t.Error("Expected UseRanoData to be enabled by default")
+	}
+}
+
+func TestProcessTriageInIntegrationsConfig(t *testing.T) {
+	cfg := DefaultIntegrationsConfig()
+
+	// Verify ProcessTriage config is properly nested
+	if !cfg.ProcessTriage.Enabled {
+		t.Error("Expected ProcessTriage integration to be enabled by default")
+	}
+	if cfg.ProcessTriage.CheckInterval != 30 {
+		t.Errorf("Expected 30s check interval, got %d", cfg.ProcessTriage.CheckInterval)
+	}
+	if cfg.ProcessTriage.OnStuck != "alert" {
+		t.Errorf("Expected 'alert' on_stuck, got %q", cfg.ProcessTriage.OnStuck)
+	}
+}
+
+func TestProcessTriageInFullConfig(t *testing.T) {
+	cfg := Default()
+
+	// Verify ProcessTriage config is present and properly initialized
+	if !cfg.Integrations.ProcessTriage.Enabled {
+		t.Error("Expected ProcessTriage to be enabled in full config default")
+	}
+	if cfg.Integrations.ProcessTriage.StuckThreshold != 600 {
+		t.Errorf("Expected 600s stuck threshold in full config, got %d", cfg.Integrations.ProcessTriage.StuckThreshold)
+	}
+}
+
+func TestProcessTriageConfigFromTOML(t *testing.T) {
+	configContent := `
+[integrations.process_triage]
+enabled = false
+binary_path = "/usr/local/bin/pt"
+check_interval = 60
+idle_threshold = 600
+stuck_threshold = 1200
+on_stuck = "kill"
+use_rano_data = false
+`
+	configPath := createTempConfig(t, configContent)
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	if cfg.Integrations.ProcessTriage.Enabled {
+		t.Error("Expected ProcessTriage to be disabled")
+	}
+	if cfg.Integrations.ProcessTriage.BinaryPath != "/usr/local/bin/pt" {
+		t.Errorf("Expected binary path '/usr/local/bin/pt', got %q", cfg.Integrations.ProcessTriage.BinaryPath)
+	}
+	if cfg.Integrations.ProcessTriage.CheckInterval != 60 {
+		t.Errorf("Expected 60s check interval, got %d", cfg.Integrations.ProcessTriage.CheckInterval)
+	}
+	if cfg.Integrations.ProcessTriage.IdleThreshold != 600 {
+		t.Errorf("Expected 600s idle threshold, got %d", cfg.Integrations.ProcessTriage.IdleThreshold)
+	}
+	if cfg.Integrations.ProcessTriage.StuckThreshold != 1200 {
+		t.Errorf("Expected 1200s stuck threshold, got %d", cfg.Integrations.ProcessTriage.StuckThreshold)
+	}
+	if cfg.Integrations.ProcessTriage.OnStuck != "kill" {
+		t.Errorf("Expected 'kill' on_stuck, got %q", cfg.Integrations.ProcessTriage.OnStuck)
+	}
+	if cfg.Integrations.ProcessTriage.UseRanoData {
+		t.Error("Expected UseRanoData to be disabled")
+	}
+}
+
+func TestValidateProcessTriageConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     ProcessTriageConfig
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid default config",
+			cfg:     DefaultProcessTriageConfig(),
+			wantErr: false,
+		},
+		{
+			name: "valid custom config",
+			cfg: ProcessTriageConfig{
+				Enabled:        true,
+				BinaryPath:     "",
+				CheckInterval:  60,
+				IdleThreshold:  300,
+				StuckThreshold: 600,
+				OnStuck:        "kill",
+				UseRanoData:    false,
+			},
+			wantErr: false,
+		},
+		{
+			name: "check_interval too low",
+			cfg: ProcessTriageConfig{
+				Enabled:        true,
+				CheckInterval:  3,
+				IdleThreshold:  300,
+				StuckThreshold: 600,
+				OnStuck:        "alert",
+			},
+			wantErr: true,
+			errMsg:  "check_interval must be at least 5 seconds",
+		},
+		{
+			name: "idle_threshold too low",
+			cfg: ProcessTriageConfig{
+				Enabled:        true,
+				CheckInterval:  30,
+				IdleThreshold:  20,
+				StuckThreshold: 600,
+				OnStuck:        "alert",
+			},
+			wantErr: true,
+			errMsg:  "idle_threshold must be at least 30 seconds",
+		},
+		{
+			name: "stuck_threshold less than idle_threshold",
+			cfg: ProcessTriageConfig{
+				Enabled:        true,
+				CheckInterval:  30,
+				IdleThreshold:  600,
+				StuckThreshold: 300,
+				OnStuck:        "alert",
+			},
+			wantErr: true,
+			errMsg:  "stuck_threshold (300) must be >= idle_threshold (600)",
+		},
+		{
+			name: "invalid on_stuck action",
+			cfg: ProcessTriageConfig{
+				Enabled:        true,
+				CheckInterval:  30,
+				IdleThreshold:  300,
+				StuckThreshold: 600,
+				OnStuck:        "invalid",
+			},
+			wantErr: true,
+			errMsg:  "on_stuck must be 'alert', 'kill', or 'ignore'",
+		},
+		{
+			name: "on_stuck ignore is valid",
+			cfg: ProcessTriageConfig{
+				Enabled:        true,
+				CheckInterval:  30,
+				IdleThreshold:  300,
+				StuckThreshold: 600,
+				OnStuck:        "ignore",
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateProcessTriageConfig(&tt.cfg)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Expected error but got nil")
+				} else if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("Expected error containing %q, got %q", tt.errMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateProcessTriageConfigNil(t *testing.T) {
+	err := ValidateProcessTriageConfig(nil)
+	if err != nil {
+		t.Errorf("Expected nil error for nil config, got %v", err)
+	}
+}
+
+// TestDefaultRobotOutputConfig verifies the default robot output configuration
+func TestDefaultRobotOutputConfig(t *testing.T) {
+	cfg := DefaultRobotOutputConfig()
+
+	if cfg.Format != "json" {
+		t.Errorf("Expected default format 'json', got %q", cfg.Format)
+	}
+	if cfg.Pretty {
+		t.Error("Expected default pretty to be false")
+	}
+	if !cfg.Timestamps {
+		t.Error("Expected default timestamps to be true")
+	}
+	if cfg.Compress {
+		t.Error("Expected default compress to be false")
+	}
+}
+
+// TestValidateRobotOutputConfig tests validation of robot output configuration
+func TestValidateRobotOutputConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     RobotOutputConfig
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid json format",
+			cfg: RobotOutputConfig{
+				Format:     "json",
+				Pretty:     false,
+				Timestamps: true,
+				Compress:   false,
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid toon format",
+			cfg: RobotOutputConfig{
+				Format:     "toon",
+				Pretty:     true,
+				Timestamps: true,
+				Compress:   false,
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid format",
+			cfg: RobotOutputConfig{
+				Format: "xml",
+			},
+			wantErr: true,
+			errMsg:  "invalid robot output format",
+		},
+		{
+			name: "empty format defaults to json (valid)",
+			cfg: RobotOutputConfig{
+				Format: "",
+			},
+			wantErr: false,
+		},
+		{
+			name:    "default config is valid",
+			cfg:     DefaultRobotOutputConfig(),
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRobotOutputConfig(&tt.cfg)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Expected error, got nil")
+				} else if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("Expected error containing %q, got %q", tt.errMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestRobotOutputConfigFromTOML tests parsing robot.output from TOML
+func TestRobotOutputConfigFromTOML(t *testing.T) {
+	content := `
+[robot]
+verbosity = "debug"
+
+[robot.output]
+format = "toon"
+pretty = true
+timestamps = false
+compress = true
+`
+	path := createTempConfig(t, content)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.Robot.Verbosity != "debug" {
+		t.Errorf("Expected verbosity 'debug', got %q", cfg.Robot.Verbosity)
+	}
+	if cfg.Robot.Output.Format != "toon" {
+		t.Errorf("Expected format 'toon', got %q", cfg.Robot.Output.Format)
+	}
+	if !cfg.Robot.Output.Pretty {
+		t.Error("Expected pretty to be true")
+	}
+	if cfg.Robot.Output.Timestamps {
+		t.Error("Expected timestamps to be false")
+	}
+	if !cfg.Robot.Output.Compress {
+		t.Error("Expected compress to be true")
+	}
+}
+
+// TestRobotOutputConfigDefaults tests that defaults are applied for missing robot.output
+func TestRobotOutputConfigDefaults(t *testing.T) {
+	content := `
+[robot]
+verbosity = "terse"
+`
+	path := createTempConfig(t, content)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Robot verbosity should be overridden
+	if cfg.Robot.Verbosity != "terse" {
+		t.Errorf("Expected verbosity 'terse', got %q", cfg.Robot.Verbosity)
+	}
+
+	// Robot.Output should use defaults since not specified
+	defaults := DefaultRobotOutputConfig()
+	if cfg.Robot.Output.Format != defaults.Format {
+		t.Errorf("Expected default format %q, got %q", defaults.Format, cfg.Robot.Output.Format)
+	}
+	if cfg.Robot.Output.Pretty != defaults.Pretty {
+		t.Errorf("Expected default pretty %v, got %v", defaults.Pretty, cfg.Robot.Output.Pretty)
+	}
+	if cfg.Robot.Output.Timestamps != defaults.Timestamps {
+		t.Errorf("Expected default timestamps %v, got %v", defaults.Timestamps, cfg.Robot.Output.Timestamps)
+	}
+}
+
+// TestValidateRejectsInvalidRobotOutputFormat tests that Validate() catches invalid robot.output.format
+func TestValidateRejectsInvalidRobotOutputFormat(t *testing.T) {
+	cfg := Default()
+	cfg.Robot.Output.Format = "invalid"
+
+	errs := Validate(cfg)
+	found := false
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "robot.output") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected Validate to return error for invalid robot.output.format")
 	}
 }

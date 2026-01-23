@@ -1,10 +1,18 @@
 # NTM - Named Tmux Manager
 
+<div align="center">
+  <img src="ntm_dashboard.webp" alt="NTM - Multi-agent tmux orchestration dashboard">
+</div>
+
+<div align="center">
+
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-blue.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-00ADD8.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![CI](https://img.shields.io/github/actions/workflow/status/Dicklesworthstone/ntm/ci.yml?label=CI)
 ![Release](https://img.shields.io/github/v/release/Dicklesworthstone/ntm?include_prereleases)
+
+</div>
 
 **A powerful tmux session management tool for orchestrating multiple AI coding agents in parallel.**
 
@@ -13,7 +21,6 @@ Spawn, manage, and coordinate Claude Code, OpenAI Codex, and Google Gemini CLI a
 <div align="center">
 
 ```bash
-# One-line install
 curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/ntm/main/install.sh?$(date +%s)" | bash -s -- --easy-mode
 ```
 
@@ -24,11 +31,14 @@ curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/ntm/main/install
 ## Quick Start
 
 ```bash
-# Install NTM
 curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/ntm/main/install.sh?$(date +%s)" | bash -s -- --easy-mode
+```
 
+Add shell integration:
+
+```bash
 # Add shell integration
-echo 'eval "$(ntm init zsh)"' >> ~/.zshrc && source ~/.zshrc
+echo 'eval "$(ntm shell zsh)"' >> ~/.zshrc && source ~/.zshrc
 
 # Run the interactive tutorial
 ntm tutorial
@@ -248,16 +258,23 @@ ntm deps -v        # Verbose output with versions
 
 ## Installation
 
-### One-Line Install (Recommended)
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/ntm/main/install.sh?$(date +%s)" | bash -s -- --easy-mode
-```
-
-### Homebrew (macOS/Linux)
+### Recommended: Homebrew (macOS/Linux)
 
 ```bash
 brew install dicklesworthstone/tap/ntm
+```
+
+### Windows: Scoop
+
+```powershell
+scoop bucket add dicklesworthstone https://github.com/Dicklesworthstone/scoop-bucket
+scoop install dicklesworthstone/ntm
+```
+
+### Alternative: One-Line Install
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/ntm/main/install.sh?$(date +%s)" | bash -s -- --easy-mode
 ```
 
 ### Go Install
@@ -296,13 +313,13 @@ After installing, add to your shell rc file:
 
 ```bash
 # zsh (~/.zshrc)
-eval "$(ntm init zsh)"
+eval "$(ntm shell zsh)"
 
 # bash (~/.bashrc)
-eval "$(ntm init bash)"
+eval "$(ntm shell bash)"
 
 # fish (~/.config/fish/config.fish)
-ntm init fish | source
+ntm shell fish | source
 ```
 
 Then reload your shell:
@@ -572,6 +589,33 @@ ntm spawn myproject --profile-set=backend-team
 
 NTM provides machine-readable output for integration with AI coding agents and automation pipelines. All robot commands output JSON by default and follow consistent exit codes (0=success, 1=error, 2=unavailable).
 
+**Robot Output Formats + Verbosity:**
+
+- `--robot-format=json|toon|auto` (Env: `NTM_ROBOT_FORMAT`). `auto` currently resolves to JSON.
+- `--robot-verbosity=terse|default|debug` (Env: `NTM_ROBOT_VERBOSITY`). Applies to JSON/TOON only.
+- Config default for verbosity: `~/.config/ntm/config.toml` → `[robot] verbosity = "default"`.
+- `--robot-terse` is a **separate single-line format** and ignores `--robot-format` / `--robot-verbosity`.
+- TOON is token-efficient but only supports uniform arrays and simple objects; unsupported shapes return an error. Use `--robot-format=json` or `auto` to avoid TOON failures.
+
+**Example output (JSON vs TOON):**
+
+```json
+{
+  "success": true,
+  "timestamp": "2026-01-22T01:23:00Z",
+  "sessions": [
+    {"name": "myproject", "attached": true, "windows": 1}
+  ]
+}
+```
+
+```text
+success: true
+timestamp: 2026-01-22T01:23:00Z
+sessions[1]{attached,name,windows}:
+  true	myproject	1
+```
+
 **State Inspection:**
 
 ```bash
@@ -600,7 +644,7 @@ ntm --robot-send=SESSION --msg="Fix auth" --type=claude  # Send to agents
 ntm --robot-ack=SESSION --ack-timeout=30s                # Watch for responses
 ntm --robot-spawn=SESSION --spawn-cc=2 --spawn-wait      # Create session
 ntm --robot-interrupt=SESSION --interrupt-msg="Stop"     # Send Ctrl+C
-ntm --robot-assign=SESSION --assign-beads=bd-1,bd-2      # Assign work to agents
+ntm --robot-assign=SESSION --beads=bd-1,bd-2             # Assign work to agents
 ntm --robot-replay=SESSION --replay-id=ID                # Replay command from history
 ntm --robot-dismiss-alert=ALERT_ID                       # Dismiss an alert
 ```
@@ -1736,11 +1780,16 @@ export NTM_THEME=plain   # Explicit no-color theme (escape hatch)
 
 #### First run (10 minutes)
 
-```bash
-# 1) Install + shell integration (zsh example)
-curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/ntm/main/install.sh?$(date +%s)" | bash -s -- --easy-mode
-echo 'eval "$(ntm init zsh)"' >> ~/.zshrc && source ~/.zshrc
+1) Install + shell integration (zsh example):
 
+```bash
+curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/ntm/main/install.sh?$(date +%s)" | bash -s -- --easy-mode
+echo 'eval "$(ntm shell zsh)"' >> ~/.zshrc && source ~/.zshrc
+```
+
+2) Sanity check + quick orientation:
+
+```bash
 # 2) Sanity check + quick orientation
 ntm deps -v
 ntm tutorial
@@ -2828,7 +2877,7 @@ retention_days = 90        # Delete entries older than this
 
 ## Work Distribution
 
-NTM integrates with bv (Beads Viewer) to provide intelligent work distribution based on dependency graph analysis. The `ntm work` commands help you prioritize tasks, identify bottlenecks, and distribute work effectively across agents.
+NTM integrates with bv (Beads Viewer) to provide intelligent prioritization based on dependency graph analysis. The `ntm work` commands help you prioritize tasks, identify bottlenecks, and feed assignment decisions across agents.
 
 ### Triage Analysis
 
@@ -2902,6 +2951,27 @@ This returns the highest-impact, unblocked item with a ready-to-run `bd update` 
 
 NTM includes a sophisticated work assignment system that matches tasks to agents based on agent capabilities, task characteristics, and configurable strategies.
 
+### Canonical Assignment Flow (CLI)
+
+Use `ntm assign` to recommend or execute assignments:
+
+```bash
+ntm assign myproject                        # Show assignment recommendations
+ntm assign myproject --auto                 # Execute assignments without confirmation
+ntm assign myproject --strategy=dependency  # Prioritize unblocking work
+ntm assign myproject --beads=bd-42,bd-45    # Assign specific beads only
+```
+
+Spawn and assign in one step:
+
+```bash
+ntm spawn myproject --cc=2 --cod=2 --assign
+ntm spawn myproject --cc=4 --assign --strategy=quality
+```
+
+Available strategies (shared by `ntm assign` and `ntm spawn --assign`):
+`balanced`, `speed`, `quality`, `dependency`, `round-robin`.
+
 ### Agent Capability Matrix
 
 Different AI agents excel at different types of work. NTM maintains a capability matrix that influences assignment recommendations:
@@ -2931,16 +3001,16 @@ Choose a strategy based on your priorities:
 
 ```bash
 # Balanced (default): Distribute work evenly across agents
-ntm --robot-assign=myproject --assign-strategy=balanced
+ntm --robot-assign=myproject --strategy=balanced
 
 # Speed: Assign any available work to any idle agent quickly
-ntm --robot-assign=myproject --assign-strategy=speed
+ntm --robot-assign=myproject --strategy=speed
 
 # Quality: Optimize agent-task match for best results
-ntm --robot-assign=myproject --assign-strategy=quality
+ntm --robot-assign=myproject --strategy=quality
 
 # Dependency: Prioritize items that unblock the most downstream work
-ntm --robot-assign=myproject --assign-strategy=dependency
+ntm --robot-assign=myproject --strategy=dependency
 ```
 
 ### Strategy Behavior
@@ -3011,10 +3081,10 @@ Returns recommendations with confidence scores:
 
 ```bash
 # Assign specific beads only
-ntm --robot-assign=myproject --assign-beads=bd-42,bd-45
+ntm --robot-assign=myproject --beads=bd-42,bd-45
 
 # Combine with strategy
-ntm --robot-assign=myproject --assign-strategy=quality --assign-beads=bd-42
+ntm --robot-assign=myproject --strategy=quality --beads=bd-42
 ```
 
 ### Integration with Agent Mail
@@ -3525,6 +3595,158 @@ Additional context: {{context}}
 
 ---
 
+## Workflow Templates
+
+Workflow templates define multi-agent coordination patterns for common development workflows. They specify which agents to spawn, how they interact, and when to transition between workflow stages.
+
+### Built-in Templates
+
+| Template | Coordination | Agents | Description |
+|----------|--------------|--------|-------------|
+| `red-green` | ping-pong | tester, implementer | TDD workflow: write failing tests, then make them pass |
+| `review-pipeline` | review-gate | implementer, 2× reviewer | Code with mandatory review before finalization |
+| `specialist-team` | pipeline | architect, 2× implementer, tester | Design → Build → QA pipeline |
+| `parallel-explore` | parallel | 3× explorer | Multiple agents explore different approaches simultaneously |
+
+### Template Commands
+
+```bash
+ntm workflows list                  # List all available templates
+ntm workflows show red-green        # Show detailed template info
+ntm workflows list --json           # JSON output for scripts
+```
+
+### Template Sources
+
+Templates are loaded from three locations (later sources override earlier):
+
+1. **Built-in**: Compiled into NTM (lowest priority)
+2. **User**: `~/.config/ntm/workflows/` (overrides built-in)
+3. **Project**: `.ntm/workflows/` (highest priority)
+
+### Coordination Types
+
+| Type | Icon | Description |
+|------|------|-------------|
+| `ping-pong` | ⇄ | Alternating work between agents (e.g., TDD red-green) |
+| `pipeline` | → | Sequential stages with handoff (e.g., design → build → qa) |
+| `parallel` | ≡ | Simultaneous independent work |
+| `review-gate` | ✓ | Work with approval gates |
+
+### Creating Custom Templates
+
+Create `~/.config/ntm/workflows/my-workflow.toml` or `.ntm/workflows/my-workflow.toml`:
+
+```toml
+[[workflows]]
+name = "my-workflow"
+description = "Custom workflow description"
+coordination = "ping-pong"
+
+[[workflows.agents]]
+profile = "implementer"
+role = "coder"
+description = "Writes the implementation"
+
+[[workflows.agents]]
+profile = "reviewer"
+role = "checker"
+description = "Reviews and suggests improvements"
+
+[workflows.flow]
+initial = "coder"
+
+[[workflows.flow.transitions]]
+from = "coder"
+to = "checker"
+[workflows.flow.transitions.trigger]
+type = "manual"
+label = "Ready for review"
+
+[[workflows.flow.transitions]]
+from = "checker"
+to = "coder"
+[workflows.flow.transitions.trigger]
+type = "agent_says"
+pattern = "changes requested"
+role = "checker"
+```
+
+### Trigger Types
+
+Transitions between workflow stages can be triggered by:
+
+| Trigger | Parameters | Description |
+|---------|------------|-------------|
+| `file_created` | `pattern` | File matching glob pattern is created |
+| `file_modified` | `pattern` | File matching glob pattern is modified |
+| `command_success` | `command` | Shell command exits successfully |
+| `command_failure` | `command` | Shell command fails |
+| `agent_says` | `pattern`, `role` | Agent output matches regex pattern |
+| `all_agents_idle` | `idle_minutes` | All agents idle for specified time |
+| `manual` | `label` | Manual trigger via UI or command |
+| `time_elapsed` | `minutes` | Fixed time delay |
+
+### Error Handling
+
+Configure how the workflow responds to errors:
+
+```toml
+[workflows.error_handling]
+on_agent_crash = "restart_agent"    # restart_agent, pause, skip_stage, abort, notify
+on_agent_error = "pause"
+on_timeout = "notify"
+stage_timeout_minutes = 30
+max_retries_per_stage = 2
+```
+
+### Example: Red-Green TDD Workflow
+
+```toml
+[[workflows]]
+name = "red-green"
+description = "Test-Driven Development: write failing tests, then make them pass"
+coordination = "ping-pong"
+
+[[workflows.agents]]
+profile = "tester"
+role = "red"
+description = "Writes failing tests that define expected behavior"
+
+[[workflows.agents]]
+profile = "implementer"
+role = "green"
+description = "Implements code to make tests pass"
+
+[workflows.flow]
+initial = "red"
+
+[[workflows.flow.transitions]]
+from = "red"
+to = "green"
+[workflows.flow.transitions.trigger]
+type = "file_created"
+pattern = "*_test.go"
+
+[[workflows.flow.transitions]]
+from = "green"
+to = "red"
+[workflows.flow.transitions.trigger]
+type = "command_success"
+command = "go test ./..."
+
+[[workflows.prompts]]
+key = "feature"
+question = "What feature are you implementing?"
+required = true
+
+[workflows.error_handling]
+on_agent_error = "pause"
+stage_timeout_minutes = 30
+```
+
+---
+
 ## Agent Resilience
 
 NTM monitors agent health and can automatically recover from crashes, rate limits, and other failures.
@@ -3936,7 +4158,7 @@ ntm upgrade
 
 **Q: Does this work with bash?**
 
-A: Yes! NTM is a compiled Go binary that works with any shell. The shell integration (`ntm init bash`) provides aliases and completions for bash.
+A: Yes! NTM is a compiled Go binary that works with any shell. The shell integration (`ntm shell bash`) provides aliases and completions for bash.
 
 **Q: Can I use this over SSH?**
 

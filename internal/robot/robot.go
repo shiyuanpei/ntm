@@ -8,10 +8,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,16 +18,19 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/bv"
 	"github.com/Dicklesworthstone/ntm/internal/cass"
 	"github.com/Dicklesworthstone/ntm/internal/config"
+	ntmctx "github.com/Dicklesworthstone/ntm/internal/context"
+	"github.com/Dicklesworthstone/ntm/internal/git"
+	"github.com/Dicklesworthstone/ntm/internal/handoff"
 	"github.com/Dicklesworthstone/ntm/internal/recipe"
 	"github.com/Dicklesworthstone/ntm/internal/status"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
+	"github.com/Dicklesworthstone/ntm/internal/tools"
 	"github.com/Dicklesworthstone/ntm/internal/tracker"
 )
 
-// ... existing code ...
-
 // CASSStatusOutput represents the output for --robot-cass-status
 type CASSStatusOutput struct {
+	RobotResponse
 	CASSAvailable bool           `json:"cass_available"`
 	Healthy       bool           `json:"healthy"`
 	Index         CASSIndexStats `json:"index"`
@@ -49,10 +50,21 @@ func PrintCASSStatus() error {
 	client := cass.NewClient()
 	status, err := client.Status(context.Background())
 
+	cassAvailable := client.IsInstalled()
 	output := CASSStatusOutput{
-		CASSAvailable: client.IsInstalled(),
+		RobotResponse: NewRobotResponse(true),
+		CASSAvailable: cassAvailable,
 		Healthy:       false,
 		Index:         CASSIndexStats{},
+	}
+
+	if !cassAvailable {
+		output.RobotResponse = NewErrorResponse(
+			fmt.Errorf("cass not installed"),
+			ErrCodeDependencyMissing,
+			"Install cass to enable search and context",
+		)
+		return encodeJSON(output)
 	}
 
 	if err == nil {
@@ -62,6 +74,12 @@ func PrintCASSStatus() error {
 		output.Index.LastIndexedAt = status.LastIndexedAt.Time.UnixMilli()
 		output.Index.Conversations = status.Conversations
 		output.Index.Messages = status.Messages
+	} else {
+		output.RobotResponse = NewErrorResponse(
+			err,
+			ErrCodeInternalError,
+			"Check cass index health and configuration",
+		)
 	}
 
 	return encodeJSON(output)
@@ -69,6 +87,7 @@ func PrintCASSStatus() error {
 
 // CASSSearchOutput represents the output for --robot-cass-search
 type CASSSearchOutput struct {
+	RobotResponse
 	Query        string          `json:"query"`
 	Count        int             `json:"count"`
 	TotalMatches int             `json:"total_matches"`
@@ -88,6 +107,18 @@ type CASSSearchHit struct {
 // PrintCASSSearch outputs search results as JSON
 func PrintCASSSearch(query, agent, workspace, since string, limit int) error {
 	client := cass.NewClient()
+	if !client.IsInstalled() {
+		output := CASSSearchOutput{
+			RobotResponse: NewErrorResponse(
+				fmt.Errorf("cass not installed"),
+				ErrCodeDependencyMissing,
+				"Install cass to enable search",
+			),
+			Query: query,
+			Hits:  []CASSSearchHit{},
+		}
+		return encodeJSON(output)
+	}
 	resp, err := client.Search(context.Background(), cass.SearchOptions{
 		Query:     query,
 		Agent:     agent,
@@ -97,14 +128,24 @@ func PrintCASSSearch(query, agent, workspace, since string, limit int) error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("search failed: %w", err)
+		output := CASSSearchOutput{
+			RobotResponse: NewErrorResponse(
+				err,
+				ErrCodeInternalError,
+				"Check cass index health and query parameters",
+			),
+			Query: query,
+			Hits:  []CASSSearchHit{},
+		}
+		return encodeJSON(output)
 	}
 
 	output := CASSSearchOutput{
-		Query:        resp.Query,
-		Count:        resp.Count,
-		TotalMatches: resp.TotalMatches,
-		Hits:         make([]CASSSearchHit, len(resp.Hits)),
+		RobotResponse: NewRobotResponse(true),
+		Query:         resp.Query,
+		Count:         resp.Count,
+		TotalMatches:  resp.TotalMatches,
+		Hits:          make([]CASSSearchHit, len(resp.Hits)),
 	}
 
 	for i, hit := range resp.Hits {
@@ -127,6 +168,7 @@ func PrintCASSSearch(query, agent, workspace, since string, limit int) error {
 
 // CASSInsightsOutput represents the output for --robot-cass-insights
 type CASSInsightsOutput struct {
+	RobotResponse
 	Period string                   `json:"period"`
 	Agents map[string]interface{}   `json:"agents"`
 	Topics []map[string]interface{} `json:"topics"`
@@ -136,6 +178,20 @@ type CASSInsightsOutput struct {
 // PrintCASSInsights outputs aggregated insights as JSON
 func PrintCASSInsights() error {
 	client := cass.NewClient()
+	if !client.IsInstalled() {
+		output := CASSInsightsOutput{
+			RobotResponse: NewErrorResponse(
+				fmt.Errorf("cass not installed"),
+				ErrCodeDependencyMissing,
+				"Install cass to enable insights",
+			),
+			Period: "7d",
+			Agents: map[string]interface{}{},
+			Topics: []map[string]interface{}{},
+			Errors: []map[string]interface{}{},
+		}
+		return encodeJSON(output)
+	}
 	// Get aggregations for the last 7 days by default
 	resp, err := client.Search(context.Background(), cass.SearchOptions{
 		Query: "*",
@@ -144,14 +200,26 @@ func PrintCASSInsights() error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("insights failed: %w", err)
+		output := CASSInsightsOutput{
+			RobotResponse: NewErrorResponse(
+				err,
+				ErrCodeInternalError,
+				"Check cass index health and configuration",
+			),
+			Period: "7d",
+			Agents: map[string]interface{}{},
+			Topics: []map[string]interface{}{},
+			Errors: []map[string]interface{}{},
+		}
+		return encodeJSON(output)
 	}
 
 	output := CASSInsightsOutput{
-		Period: "7d",
-		Agents: map[string]interface{}{},
-		Topics: []map[string]interface{}{},
-		Errors: []map[string]interface{}{},
+		RobotResponse: NewRobotResponse(true),
+		Period:        "7d",
+		Agents:        map[string]interface{}{},
+		Topics:        []map[string]interface{}{},
+		Errors:        []map[string]interface{}{},
 	}
 
 	if resp.Aggregations != nil {
@@ -179,6 +247,7 @@ func PrintCASSInsights() error {
 
 // CASSContextOutput represents output for --robot-cass-context
 type CASSContextOutput struct {
+	RobotResponse
 	Query            string               `json:"query"`
 	RelevantSessions []CASSContextSession `json:"relevant_sessions"`
 	SuggestedContext string               `json:"suggested_context"`
@@ -196,6 +265,18 @@ type CASSContextSession struct {
 // PrintCASSContext outputs relevant past context for spawning
 func PrintCASSContext(query string) error {
 	client := cass.NewClient()
+	if !client.IsInstalled() {
+		output := CASSContextOutput{
+			RobotResponse: NewErrorResponse(
+				fmt.Errorf("cass not installed"),
+				ErrCodeDependencyMissing,
+				"Install cass to enable context search",
+			),
+			Query:            query,
+			RelevantSessions: []CASSContextSession{},
+		}
+		return encodeJSON(output)
+	}
 	// Search for relevant sessions
 	resp, err := client.Search(context.Background(), cass.SearchOptions{
 		Query: query,
@@ -207,6 +288,7 @@ func PrintCASSContext(query string) error {
 	}
 
 	output := CASSContextOutput{
+		RobotResponse:    NewRobotResponse(true),
 		Query:            query,
 		RelevantSessions: []CASSContextSession{},
 	}
@@ -241,6 +323,523 @@ func PrintCASSContext(query string) error {
 	return encodeJSON(output)
 }
 
+// ===========================================================================
+// JFP (JeffreysPrompts) Robot Wrappers
+// ===========================================================================
+
+// JFPStatusOutput represents the output for --robot-jfp-status
+type JFPStatusOutput struct {
+	Success      bool        `json:"success"`
+	Timestamp    string      `json:"timestamp"`
+	JFPAvailable bool        `json:"jfp_available"`
+	Healthy      bool        `json:"healthy"`
+	Version      string      `json:"version,omitempty"`
+	Error        string      `json:"error,omitempty"`
+	ErrorCode    string      `json:"error_code,omitempty"`
+	Hint         string      `json:"hint,omitempty"`
+	Data         interface{} `json:"data,omitempty"`
+}
+
+// JFPListOutput represents the output for --robot-jfp-list
+type JFPListOutput struct {
+	Success   bool            `json:"success"`
+	Timestamp string          `json:"timestamp"`
+	Count     int             `json:"count"`
+	Prompts   json.RawMessage `json:"prompts"`
+	Error     string          `json:"error,omitempty"`
+	ErrorCode string          `json:"error_code,omitempty"`
+	Hint      string          `json:"hint,omitempty"`
+}
+
+// JFPSearchOutput represents the output for --robot-jfp-search
+type JFPSearchOutput struct {
+	Success   bool            `json:"success"`
+	Timestamp string          `json:"timestamp"`
+	Query     string          `json:"query"`
+	Count     int             `json:"count"`
+	Results   json.RawMessage `json:"results"`
+	Error     string          `json:"error,omitempty"`
+	ErrorCode string          `json:"error_code,omitempty"`
+	Hint      string          `json:"hint,omitempty"`
+}
+
+// JFPShowOutput represents the output for --robot-jfp-show
+type JFPShowOutput struct {
+	Success   bool            `json:"success"`
+	Timestamp string          `json:"timestamp"`
+	ID        string          `json:"id"`
+	Prompt    json.RawMessage `json:"prompt,omitempty"`
+	Error     string          `json:"error,omitempty"`
+	ErrorCode string          `json:"error_code,omitempty"`
+	Hint      string          `json:"hint,omitempty"`
+}
+
+// JFPSuggestOutput represents the output for --robot-jfp-suggest
+type JFPSuggestOutput struct {
+	Success     bool            `json:"success"`
+	Timestamp   string          `json:"timestamp"`
+	Task        string          `json:"task"`
+	Suggestions json.RawMessage `json:"suggestions"`
+	Error       string          `json:"error,omitempty"`
+	ErrorCode   string          `json:"error_code,omitempty"`
+	Hint        string          `json:"hint,omitempty"`
+}
+
+// JFPInstalledOutput represents the output for --robot-jfp-installed
+type JFPInstalledOutput struct {
+	Success   bool            `json:"success"`
+	Timestamp string          `json:"timestamp"`
+	Count     int             `json:"count"`
+	Skills    json.RawMessage `json:"skills"`
+	Error     string          `json:"error,omitempty"`
+	ErrorCode string          `json:"error_code,omitempty"`
+	Hint      string          `json:"hint,omitempty"`
+}
+
+// JFPCategoriesOutput represents the output for --robot-jfp-categories
+type JFPCategoriesOutput struct {
+	Success    bool            `json:"success"`
+	Timestamp  string          `json:"timestamp"`
+	Count      int             `json:"count"`
+	Categories json.RawMessage `json:"categories"`
+	Error      string          `json:"error,omitempty"`
+	ErrorCode  string          `json:"error_code,omitempty"`
+	Hint       string          `json:"hint,omitempty"`
+}
+
+// JFPTagsOutput represents the output for --robot-jfp-tags
+type JFPTagsOutput struct {
+	Success   bool            `json:"success"`
+	Timestamp string          `json:"timestamp"`
+	Count     int             `json:"count"`
+	Tags      json.RawMessage `json:"tags"`
+	Error     string          `json:"error,omitempty"`
+	ErrorCode string          `json:"error_code,omitempty"`
+	Hint      string          `json:"hint,omitempty"`
+}
+
+// JFPBundlesOutput represents the output for --robot-jfp-bundles
+type JFPBundlesOutput struct {
+	Success   bool            `json:"success"`
+	Timestamp string          `json:"timestamp"`
+	Count     int             `json:"count"`
+	Bundles   json.RawMessage `json:"bundles"`
+	Error     string          `json:"error,omitempty"`
+	ErrorCode string          `json:"error_code,omitempty"`
+	Hint      string          `json:"hint,omitempty"`
+}
+
+// PrintJFPStatus outputs JFP health and status as JSON
+func PrintJFPStatus() error {
+	adapter := tools.NewJFPAdapter()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	output := JFPStatusOutput{
+		Success:      true,
+		Timestamp:    now,
+		JFPAvailable: false,
+		Healthy:      false,
+	}
+
+	// Check if jfp is installed
+	_, installed := adapter.Detect()
+	output.JFPAvailable = installed
+
+	if !installed {
+		output.Success = false
+		output.ErrorCode = "DEPENDENCY_MISSING"
+		output.Error = "jfp not installed"
+		output.Hint = "Install jfp with: npm install -g jeffreysprompts"
+		return encodeJSON(output)
+	}
+
+	// Check health
+	ctx := context.Background()
+	health, err := adapter.Health(ctx)
+	if err != nil {
+		output.Success = false
+		output.ErrorCode = "HEALTH_CHECK_FAILED"
+		output.Error = err.Error()
+		output.Hint = "Run 'jfp doctor' to diagnose issues"
+		return encodeJSON(output)
+	}
+
+	output.Healthy = health.Healthy
+
+	// Get version
+	version, err := adapter.Version(ctx)
+	if err == nil {
+		output.Version = version.Raw
+	}
+
+	// Get registry status
+	statusData, err := adapter.Status(ctx)
+	if err == nil && len(statusData) > 0 {
+		output.Data = json.RawMessage(statusData)
+	}
+
+	return encodeJSON(output)
+}
+
+// PrintJFPList outputs all prompts as JSON
+func PrintJFPList(category, tag string) error {
+	adapter := tools.NewJFPAdapter()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	output := JFPListOutput{
+		Success:   true,
+		Timestamp: now,
+	}
+
+	// Check if jfp is installed
+	_, installed := adapter.Detect()
+	if !installed {
+		output.Success = false
+		output.ErrorCode = "DEPENDENCY_MISSING"
+		output.Error = "jfp not installed"
+		output.Hint = "Install jfp with: npm install -g jeffreysprompts"
+		return encodeJSON(output)
+	}
+
+	ctx := context.Background()
+	var data json.RawMessage
+	var err error
+
+	if category != "" {
+		data, err = adapter.ListByCategory(ctx, category)
+	} else if tag != "" {
+		data, err = adapter.ListByTag(ctx, tag)
+	} else {
+		data, err = adapter.List(ctx)
+	}
+
+	if err != nil {
+		output.Success = false
+		output.ErrorCode = "LIST_FAILED"
+		output.Error = err.Error()
+		output.Hint = "Check 'jfp status' for registry connectivity"
+		return encodeJSON(output)
+	}
+
+	output.Prompts = data
+
+	// Try to count items
+	var items []interface{}
+	if json.Unmarshal(data, &items) == nil {
+		output.Count = len(items)
+	}
+
+	return encodeJSON(output)
+}
+
+// PrintJFPSearch outputs search results as JSON
+func PrintJFPSearch(query string) error {
+	adapter := tools.NewJFPAdapter()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	output := JFPSearchOutput{
+		Success:   true,
+		Timestamp: now,
+		Query:     query,
+	}
+
+	// Check if jfp is installed
+	_, installed := adapter.Detect()
+	if !installed {
+		output.Success = false
+		output.ErrorCode = "DEPENDENCY_MISSING"
+		output.Error = "jfp not installed"
+		output.Hint = "Install jfp with: npm install -g jeffreysprompts"
+		return encodeJSON(output)
+	}
+
+	if query == "" {
+		output.Success = false
+		output.ErrorCode = "INVALID_FLAG"
+		output.Error = "query is required"
+		output.Hint = "Provide a search query, e.g., --robot-jfp-search='debugging'"
+		return encodeJSON(output)
+	}
+
+	ctx := context.Background()
+	data, err := adapter.Search(ctx, query)
+
+	if err != nil {
+		output.Success = false
+		output.ErrorCode = "SEARCH_FAILED"
+		output.Error = err.Error()
+		output.Hint = "Try a different search query"
+		return encodeJSON(output)
+	}
+
+	output.Results = data
+
+	// Try to count results
+	var items []interface{}
+	if json.Unmarshal(data, &items) == nil {
+		output.Count = len(items)
+	}
+
+	return encodeJSON(output)
+}
+
+// PrintJFPShow outputs a specific prompt by ID as JSON
+func PrintJFPShow(id string) error {
+	adapter := tools.NewJFPAdapter()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	output := JFPShowOutput{
+		Success:   true,
+		Timestamp: now,
+		ID:        id,
+	}
+
+	// Check if jfp is installed
+	_, installed := adapter.Detect()
+	if !installed {
+		output.Success = false
+		output.ErrorCode = "DEPENDENCY_MISSING"
+		output.Error = "jfp not installed"
+		output.Hint = "Install jfp with: npm install -g jeffreysprompts"
+		return encodeJSON(output)
+	}
+
+	if id == "" {
+		output.Success = false
+		output.ErrorCode = "INVALID_FLAG"
+		output.Error = "prompt ID is required"
+		output.Hint = "Provide a prompt ID, e.g., --robot-jfp-show=my-prompt-id"
+		return encodeJSON(output)
+	}
+
+	ctx := context.Background()
+	data, err := adapter.Show(ctx, id)
+
+	if err != nil {
+		output.Success = false
+		if strings.Contains(err.Error(), "not found") {
+			output.ErrorCode = "NOT_FOUND"
+		} else {
+			output.ErrorCode = "SHOW_FAILED"
+		}
+		output.Error = err.Error()
+		output.Hint = "Use --robot-jfp-search to find available prompts"
+		return encodeJSON(output)
+	}
+
+	output.Prompt = data
+	return encodeJSON(output)
+}
+
+// PrintJFPSuggest outputs prompt suggestions for a task as JSON
+func PrintJFPSuggest(task string) error {
+	adapter := tools.NewJFPAdapter()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	output := JFPSuggestOutput{
+		Success:   true,
+		Timestamp: now,
+		Task:      task,
+	}
+
+	// Check if jfp is installed
+	_, installed := adapter.Detect()
+	if !installed {
+		output.Success = false
+		output.ErrorCode = "DEPENDENCY_MISSING"
+		output.Error = "jfp not installed"
+		output.Hint = "Install jfp with: npm install -g jeffreysprompts"
+		return encodeJSON(output)
+	}
+
+	if task == "" {
+		output.Success = false
+		output.ErrorCode = "INVALID_FLAG"
+		output.Error = "task description is required"
+		output.Hint = "Provide a task description, e.g., --robot-jfp-suggest='build a REST API'"
+		return encodeJSON(output)
+	}
+
+	ctx := context.Background()
+	data, err := adapter.Suggest(ctx, task)
+
+	if err != nil {
+		output.Success = false
+		output.ErrorCode = "SUGGEST_FAILED"
+		output.Error = err.Error()
+		output.Hint = "Try a different task description"
+		return encodeJSON(output)
+	}
+
+	output.Suggestions = data
+	return encodeJSON(output)
+}
+
+// PrintJFPInstalled outputs installed Claude Code skills as JSON
+func PrintJFPInstalled() error {
+	adapter := tools.NewJFPAdapter()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	output := JFPInstalledOutput{
+		Success:   true,
+		Timestamp: now,
+	}
+
+	// Check if jfp is installed
+	_, installed := adapter.Detect()
+	if !installed {
+		output.Success = false
+		output.ErrorCode = "DEPENDENCY_MISSING"
+		output.Error = "jfp not installed"
+		output.Hint = "Install jfp with: npm install -g jeffreysprompts"
+		return encodeJSON(output)
+	}
+
+	ctx := context.Background()
+	data, err := adapter.Installed(ctx)
+
+	if err != nil {
+		output.Success = false
+		output.ErrorCode = "INSTALLED_FAILED"
+		output.Error = err.Error()
+		output.Hint = "Check if Claude Code skills directory exists"
+		return encodeJSON(output)
+	}
+
+	output.Skills = data
+
+	// Try to count items
+	var items []interface{}
+	if json.Unmarshal(data, &items) == nil {
+		output.Count = len(items)
+	}
+
+	return encodeJSON(output)
+}
+
+// PrintJFPCategories outputs all categories with counts as JSON
+func PrintJFPCategories() error {
+	adapter := tools.NewJFPAdapter()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	output := JFPCategoriesOutput{
+		Success:   true,
+		Timestamp: now,
+	}
+
+	// Check if jfp is installed
+	_, installed := adapter.Detect()
+	if !installed {
+		output.Success = false
+		output.ErrorCode = "DEPENDENCY_MISSING"
+		output.Error = "jfp not installed"
+		output.Hint = "Install jfp with: npm install -g jeffreysprompts"
+		return encodeJSON(output)
+	}
+
+	ctx := context.Background()
+	data, err := adapter.Categories(ctx)
+
+	if err != nil {
+		output.Success = false
+		output.ErrorCode = "CATEGORIES_FAILED"
+		output.Error = err.Error()
+		return encodeJSON(output)
+	}
+
+	output.Categories = data
+
+	// Try to count items
+	var items []interface{}
+	if json.Unmarshal(data, &items) == nil {
+		output.Count = len(items)
+	}
+
+	return encodeJSON(output)
+}
+
+// PrintJFPTags outputs all tags with counts as JSON
+func PrintJFPTags() error {
+	adapter := tools.NewJFPAdapter()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	output := JFPTagsOutput{
+		Success:   true,
+		Timestamp: now,
+	}
+
+	// Check if jfp is installed
+	_, installed := adapter.Detect()
+	if !installed {
+		output.Success = false
+		output.ErrorCode = "DEPENDENCY_MISSING"
+		output.Error = "jfp not installed"
+		output.Hint = "Install jfp with: npm install -g jeffreysprompts"
+		return encodeJSON(output)
+	}
+
+	ctx := context.Background()
+	data, err := adapter.Tags(ctx)
+
+	if err != nil {
+		output.Success = false
+		output.ErrorCode = "TAGS_FAILED"
+		output.Error = err.Error()
+		return encodeJSON(output)
+	}
+
+	output.Tags = data
+
+	// Try to count items
+	var items []interface{}
+	if json.Unmarshal(data, &items) == nil {
+		output.Count = len(items)
+	}
+
+	return encodeJSON(output)
+}
+
+// PrintJFPBundles outputs all bundles as JSON
+func PrintJFPBundles() error {
+	adapter := tools.NewJFPAdapter()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	output := JFPBundlesOutput{
+		Success:   true,
+		Timestamp: now,
+	}
+
+	// Check if jfp is installed
+	_, installed := adapter.Detect()
+	if !installed {
+		output.Success = false
+		output.ErrorCode = "DEPENDENCY_MISSING"
+		output.Error = "jfp not installed"
+		output.Hint = "Install jfp with: npm install -g jeffreysprompts"
+		return encodeJSON(output)
+	}
+
+	ctx := context.Background()
+	data, err := adapter.Bundles(ctx)
+
+	if err != nil {
+		output.Success = false
+		output.ErrorCode = "BUNDLES_FAILED"
+		output.Error = err.Error()
+		return encodeJSON(output)
+	}
+
+	output.Bundles = data
+
+	// Try to count items
+	var items []interface{}
+	if json.Unmarshal(data, &items) == nil {
+		output.Count = len(items)
+	}
+
+	return encodeJSON(output)
+}
+
 // Build info - these will be set by the caller from cli package
 var (
 	Version = "dev"
@@ -248,6 +847,11 @@ var (
 	Date    = "unknown"
 	BuiltBy = "unknown"
 )
+
+// OutputFormat controls the output serialization format for robot commands.
+// Set this from CLI flags, environment variables, or config before calling Print* functions.
+// Default is FormatAuto which currently resolves to JSON.
+var OutputFormat RobotFormat = FormatAuto
 
 // Global state tracker for delta snapshots
 var stateTracker = tracker.New()
@@ -271,6 +875,22 @@ type Agent struct {
 	Window   int    `json:"window"`
 	PaneIdx  int    `json:"pane_idx"`
 	IsActive bool   `json:"is_active"`
+
+	// Status enrichment fields
+	PID                  int       `json:"pid,omitempty"`                     // Shell PID
+	ChildPID             int       `json:"child_pid,omitempty"`               // Agent process PID
+	LastOutputTS         time.Time `json:"last_output_ts,omitempty"`          // Last output timestamp
+	SecondsSinceOutput   int       `json:"seconds_since_output,omitempty"`    // Time since last output
+	RateLimitDetected    bool      `json:"rate_limit_detected,omitempty"`     // Rate limit pattern matched
+	RateLimitMatch       string    `json:"rate_limit_match,omitempty"`        // The specific pattern matched
+	ProcessState         string    `json:"process_state,omitempty"`           // R, S, D, Z, T
+	ProcessStateName     string    `json:"process_state_name,omitempty"`      // running, sleeping, etc.
+	MemoryMB             int       `json:"memory_mb,omitempty"`               // Resident memory in MB
+	OutputLinesSinceLast int       `json:"output_lines_since_last,omitempty"` // Lines since last check
+	ContextTokens        int       `json:"context_tokens,omitempty"`          // Estimated tokens used
+	ContextLimit         int       `json:"context_limit,omitempty"`           // Model context limit
+	ContextPercent       float64   `json:"context_percent,omitempty"`         // Usage percentage (0-100+)
+	ContextModel         string    `json:"context_model,omitempty"`           // Model name for context limit lookup
 }
 
 // SystemInfo contains system and runtime information
@@ -286,6 +906,7 @@ type SystemInfo struct {
 
 // StatusOutput is the structured output for robot-status
 type StatusOutput struct {
+	RobotResponse
 	GeneratedAt  time.Time          `json:"generated_at"`
 	System       SystemInfo         `json:"system"`
 	Sessions     []SessionInfo      `json:"sessions"`
@@ -293,6 +914,8 @@ type StatusOutput struct {
 	Beads        *bv.BeadsSummary   `json:"beads,omitempty"`
 	GraphMetrics *GraphMetrics      `json:"graph_metrics,omitempty"`
 	AgentMail    *AgentMailSummary  `json:"agent_mail,omitempty"`
+	Handoff      *HandoffSummary    `json:"handoff,omitempty"`
+	Alerts       []StatusAlert      `json:"alerts,omitempty"`
 	FileChanges  []FileChangeInfo   `json:"file_changes,omitempty"`
 	Conflicts    []tracker.Conflict `json:"conflicts,omitempty"`
 }
@@ -306,6 +929,27 @@ type AgentMailSummary struct {
 	UrgentMessages     int    `json:"urgent_messages,omitempty"`
 	TotalLocks         int    `json:"total_locks,omitempty"`
 	Error              string `json:"error,omitempty"`
+}
+
+// HandoffSummary is the latest handoff across all sessions.
+type HandoffSummary struct {
+	Session    string `json:"session"`
+	Goal       string `json:"goal,omitempty"`
+	Now        string `json:"now,omitempty"`
+	Path       string `json:"path,omitempty"`
+	AgeSeconds int64  `json:"age_seconds,omitempty"`
+	Status     string `json:"status,omitempty"`
+}
+
+// StatusAlert represents a warning or alert emitted by robot status.
+type StatusAlert struct {
+	Type         string  `json:"type"`
+	Session      string  `json:"session,omitempty"`
+	Pane         string  `json:"pane,omitempty"`
+	PaneIdx      int     `json:"pane_idx,omitempty"`
+	UsagePercent float64 `json:"usage_percent,omitempty"`
+	ContextModel string  `json:"context_model,omitempty"`
+	Severity     string  `json:"severity,omitempty"`
 }
 
 // GraphMetrics provides bv graph analysis metrics for status output
@@ -353,6 +997,7 @@ type StatusSummary struct {
 
 // PlanOutput provides an execution plan for what can be done
 type PlanOutput struct {
+	RobotResponse
 	GeneratedAt    time.Time    `json:"generated_at"`
 	Recommendation string       `json:"recommendation"`
 	Actions        []PlanAction `json:"actions"`
@@ -398,78 +1043,98 @@ type PlanAction struct {
 func PrintHelp() {
 	help := `ntm (Named Tmux Manager) AI Agent Interface
 =============================================
-This tool helps AI agents manage tmux sessions with multiple coding assistants.
+Robot mode provides a JSON API for AI agents to orchestrate coding sessions.
 
-Commands for AI Agents:
------------------------
+API Design Principles (see docs/robot-api-design.md):
+-----------------------------------------------------
+1. Global commands: bool flags (--robot-status, --robot-plan)
+2. Session-scoped: =SESSION syntax (--robot-send=myproj, --robot-tail=myproj)
+3. Modifiers: unprefixed global flags (--limit, --since, --type)
+4. Output: JSON by default, TOON for token-efficient (--robot-format=toon)
 
---robot-status
-    Outputs JSON with all session information and agent counts.
-    Key fields:
-    - sessions: Array of active sessions with their agents
-    - summary: Aggregate counts (total_agents, claude_count, etc.)
-    - system: Version, OS, tmux availability
+Core Commands:
+--------------
+--robot-status          Session state, agents, alerts (start here)
+--robot-snapshot        Unified state: sessions + beads + alerts + mail
+--robot-capabilities    Machine-discoverable API schema
 
---robot-plan
-    Outputs a recommended execution plan based on current state.
-    Key fields:
-    - recommendation: What to do first
-    - actions: Prioritized list of commands to run
-    - warnings: Issues that need attention
-
---robot-sessions
-    Outputs minimal session list for quick lookup.
-    Faster than --robot-status when you only need names.
-
---robot-send <session> --msg="prompt" [options]
-    Send prompts to multiple panes atomically with structured result.
-    Options:
-    --all          Send to all panes (including user)
-    --panes=X,Y,Z  Specific pane indices
-    --type=claude  Filter by agent type (claude, codex, gemini)
-    --exclude=X,Y  Exclude specific panes
-    --delay-ms=100 Stagger sends to avoid thundering herd
-
-    Output includes:
-    - session: Target session name
-    - sent_at: Timestamp of send operation
-    - targets: Panes that were targeted
-    - successful: Panes where send succeeded
-    - failed: Array of {pane, error} for failures
-    - message_preview: First 50 chars of message
-
---robot-version
-    Outputs version info as JSON.
-
-Common Workflows:
------------------
-
-1) Start a coding session:
-   ntm spawn myproject --cc=2 --cod=1 --gem=1 --json
-
-2) Check session state:
-   ntm status --robot-status
-
-3) Send a prompt to all agents:
-   ntm send myproject --all "implement feature X"
-
-4) Get output from a specific agent:
-   ntm copy myproject:1 --last=50
-
-Tips for AI Agents:
+Session Operations:
 -------------------
-- Use --json flag on spawn/create for structured output
-- Parse ntm status --robot-status to understand current state
-- Use ntm send --all for broadcast, --pane=N for targeted
-- Output is always UTF-8 JSON, one object per line where applicable
+--robot-spawn=SESSION   Create session with --spawn-cc=N, --spawn-cod=N, --spawn-gmi=N
+--robot-send=SESSION    Send prompts (--msg="text", --panes=1,2, --type=claude)
+--robot-tail=SESSION    Capture pane output (--lines=50, --panes=1,2)
+--robot-interrupt=SESSION  Ctrl+C to agents (--interrupt-msg="new task")
+--robot-is-working=SESSION Check if agents are busy
+--robot-wait=SESSION    Wait for idle state (--timeout=5m, --condition=idle)
+
+Work Distribution:
+------------------
+--robot-assign=SESSION  Get assignment recommendations (--strategy=balanced)
+--robot-bulk-assign=SESSION  Batch assign beads (--from-bv)
+
+Analysis & Monitoring:
+----------------------
+--robot-triage          Prioritized work recommendations
+--robot-graph           Dependency graph insights
+--robot-context=SESSION Context window usage
+--robot-agent-health=SESSION  Comprehensive health check
+--robot-diagnose=SESSION Diagnose issues with fix recommendations
+
+Tool Bridges:
+-------------
+--robot-cass-search=QUERY    Search past conversations (--limit=20, --since=7d)
+--robot-jfp-search=QUERY     Search prompts library
+--robot-tokens               Token usage stats (--days=30, --group-by=agent)
+--robot-history=SESSION      Command history (--last=10)
+
+Bead Management:
+----------------
+--robot-beads-list      List beads (--status=open, --priority=P0-P1)
+--robot-bead-claim=ID   Claim a bead (--bead-assignee=agent-1)
+--robot-bead-create     Create bead (--bead-title="Fix bug")
+--robot-bead-close=ID   Close bead (--bead-close-reason="done")
+
+Output Formats:
+---------------
+--robot-format=json     Full JSON (default)
+--robot-format=toon     Token-efficient format
+--robot-markdown        Markdown tables (~50% fewer tokens)
+--robot-terse           Single-line state summary
+
+Common Modifiers:
+-----------------
+--limit=N       Max results (works with search, list commands)
+--since=DURATION  Time filter (1d, 7d, 30d, ISO8601, or duration like 1h)
+--type=TYPE     Agent type filter (claude, codex, gemini)
+--panes=X,Y     Pane filter (comma-separated indices)
+--dry-run       Preview without executing
+--verbose       Detailed output
+
+Quick Start:
+------------
+1) Create session:    ntm --robot-spawn=proj --spawn-cc=2 --spawn-wait
+2) Check state:       ntm --robot-status
+3) Send prompt:       ntm --robot-send=proj --msg="implement auth" --track
+4) Monitor progress:  ntm --robot-is-working=proj
+5) Get output:        ntm --robot-tail=proj --lines=100
+
+For complete API documentation: docs/robot-api-design.md
+For machine-readable schema:    ntm --robot-capabilities
 `
 	fmt.Println(help)
 }
 
 // PrintStatus outputs machine-readable status
 func PrintStatus() error {
+	wd := mustGetwd()
+	cfg, err := config.LoadMerged(wd, config.DefaultPath())
+	if err != nil {
+		cfg = config.Default()
+	}
+
 	output := StatusOutput{
-		GeneratedAt: time.Now().UTC(),
+		RobotResponse: NewRobotResponse(true),
+		GeneratedAt:   time.Now().UTC(),
 		System: SystemInfo{
 			Version:   Version,
 			Commit:    Commit,
@@ -479,8 +1144,11 @@ func PrintStatus() error {
 			Arch:      runtime.GOARCH,
 			TmuxOK:    tmux.IsInstalled(),
 		},
-		Sessions: []SessionInfo{},
-		Summary:  StatusSummary{},
+		Sessions:    []SessionInfo{},
+		Summary:     StatusSummary{},
+		Alerts:      []StatusAlert{},
+		FileChanges: []FileChangeInfo{},
+		Conflicts:   []tracker.Conflict{},
 	}
 
 	// Get all sessions
@@ -496,6 +1164,7 @@ func PrintStatus() error {
 			Exists:   true,
 			Attached: sess.Attached,
 			Windows:  sess.Windows,
+			Agents:   []Agent{},
 		}
 
 		// Try to get agents from panes
@@ -509,6 +1178,7 @@ func PrintStatus() error {
 					PaneIdx:  pane.Index,
 					IsActive: pane.Active,
 					Variant:  pane.Variant,
+					PID:      pane.PID,
 				}
 
 				// Use authoritative type from tmux package if available
@@ -519,6 +1189,28 @@ func PrintStatus() error {
 					// Fallback to loose detection for other agents (cursor, windsurf, etc.)
 					agent.Type = detectAgentType(pane.Title)
 				}
+
+				modelName := modelNameForPane(pane, cfg)
+
+				// Enrich status with process/output info
+				enrichAgentStatus(&agent, sess.Name, modelName)
+
+				if agent.ContextPercent >= 70 {
+					severity := "warning"
+					if agent.ContextPercent >= 85 {
+						severity = "critical"
+					}
+					output.Alerts = append(output.Alerts, StatusAlert{
+						Type:         "context_warning",
+						Session:      sess.Name,
+						Pane:         pane.ID,
+						PaneIdx:      pane.Index,
+						UsagePercent: agent.ContextPercent,
+						ContextModel: agent.ContextModel,
+						Severity:     severity,
+					})
+				}
+
 				info.Agents = append(info.Agents, agent)
 
 				// Update summary counts
@@ -549,12 +1241,27 @@ func PrintStatus() error {
 
 	// Add beads summary if bv is available
 	if bv.IsInstalled() {
-		output.Beads = bv.GetBeadsSummary(mustGetwd(), BeadLimit)
+		output.Beads = bv.GetBeadsSummary(wd, BeadLimit)
 		output.GraphMetrics = getGraphMetrics()
 	}
 
+	// Add latest handoff across sessions (best-effort)
+	if wd != "" {
+		reader := handoff.NewReader(wd)
+		if h, path, err := reader.FindLatestAny(); err == nil && h != nil {
+			output.Handoff = &HandoffSummary{
+				Session:    h.Session,
+				Goal:       h.Goal,
+				Now:        h.Now,
+				Path:       path,
+				Status:     h.Status,
+				AgeSeconds: int64(time.Since(h.CreatedAt).Seconds()),
+			}
+		}
+	}
+
 	// Enrich with Agent Mail summary (best-effort; degrade gracefully)
-	if summary := getAgentMailSummary(); summary != nil {
+	if summary, _ := getAgentMailSummary(); summary != nil {
 		output.AgentMail = summary
 	}
 
@@ -614,7 +1321,11 @@ func PrintMail(sessionName, projectKey string) error {
 	if projectKey == "" {
 		wd, err := os.Getwd()
 		if err == nil {
-			projectKey = wd
+			if root, err := git.FindProjectRoot(wd); err == nil {
+				projectKey = root
+			} else {
+				projectKey = wd
+			}
 		}
 	}
 
@@ -674,6 +1385,9 @@ func PrintMail(sessionName, projectKey string) error {
 
 	// Gather per-agent mail counts (best-effort).
 	for _, a := range agents {
+		if a.Name == "HumanOverseer" {
+			continue
+		}
 		agentByName[a.Name] = a
 		tally := getInboxTally(ctx, client, projectKey, a.Name, 50)
 		inboxByName[a.Name] = tally
@@ -688,13 +1402,20 @@ func PrintMail(sessionName, projectKey string) error {
 	assigned := make(map[string]bool)
 	if sessionName != "" && tmux.IsInstalled() && tmux.SessionExists(sessionName) {
 		if panes, err := tmux.GetPanes(sessionName); err == nil {
+			mapping := resolveAgentsForSession(panes, agents)
 			paneInfos := parseNTMPanes(panes)
-			agentsByType := groupAgentsByType(agents)
-			for _, paneType := range []string{"cc", "cod", "gmi"} {
-				mapping := assignAgentsToPanes(paneInfos[paneType], agentsByType[paneType])
+
+			// Collect and sort all pane types found
+			var paneTypes []string
+			for t := range paneInfos {
+				paneTypes = append(paneTypes, t)
+			}
+			sort.Strings(paneTypes)
+
+			for _, paneType := range paneTypes {
 				for _, pane := range paneInfos[paneType] {
 					entry := AgentMailAgent{Pane: pane.Label}
-					if agentName := mapping[pane.Label]; agentName != "" {
+					if agentName, ok := mapping[pane.Label]; ok {
 						assigned[agentName] = true
 						a := agentByName[agentName]
 						tally := inboxByName[agentName]
@@ -714,6 +1435,9 @@ func PrintMail(sessionName, projectKey string) error {
 	// If no panes were added (no session context), fall back to listing agents as-is.
 	if len(output.Agents) == 0 {
 		for _, a := range agents {
+			if a.Name == "HumanOverseer" {
+				continue
+			}
 			tally := inboxByName[a.Name]
 			output.Agents = append(output.Agents, AgentMailAgent{
 				AgentName:    a.Name,
@@ -727,6 +1451,9 @@ func PrintMail(sessionName, projectKey string) error {
 	} else {
 		// Include any registered agents that we couldn't map to panes.
 		for _, a := range agents {
+			if a.Name == "HumanOverseer" {
+				continue
+			}
 			if a.Program == "ntm" || assigned[a.Name] {
 				continue
 			}
@@ -803,11 +1530,11 @@ func getInboxTally(ctx context.Context, client *agentmail.Client, projectKey, ag
 	}
 
 	tally := inboxTally{Total: len(msgs)}
-	for _, m := range msgs {
-		if strings.EqualFold(m.Importance, "urgent") {
+	for _, msg := range msgs {
+		if strings.EqualFold(msg.Importance, "urgent") {
 			tally.Urgent++
 		}
-		if m.AckRequired {
+		if msg.AckRequired {
 			tally.PendingAck++
 		}
 	}
@@ -822,33 +1549,34 @@ type ntmPaneInfo struct {
 	Variant   string
 }
 
-var ntmPaneTitleRE = regexp.MustCompile(`^.+__(cc|cod|gmi)_(\d+)(?:_([A-Za-z0-9._/@:+-]+))?(?:\[[^\]]*\])?$`)
-
 func parseNTMPanes(panes []tmux.Pane) map[string][]ntmPaneInfo {
-	out := map[string][]ntmPaneInfo{
-		"cc":  {},
-		"cod": {},
-		"gmi": {},
-	}
+	out := make(map[string][]ntmPaneInfo)
 
 	for _, p := range panes {
-		matches := ntmPaneTitleRE.FindStringSubmatch(strings.TrimSpace(p.Title))
-		if matches == nil {
-			continue
-		}
-		idx, err := strconv.Atoi(matches[2])
-		if err != nil {
+		// Use the NTM-specific index parsed by the tmux package
+		// This avoids duplicate regex parsing and ensures consistency
+		idx := p.NTMIndex
+		if idx == 0 && p.Type == "user" {
+			// Skip user pane or panes that didn't parse correctly
+			// Note: parseAgentFromTitle returns 0 if no match.
+			// But for valid NTM panes, index should be > 0 (e.g. cc_1)
+			// User pane might be user_0 or just user?
+			// Let's check tmux.parseAgentFromTitle logic: matches[2] is the index group.
+			// "session__cc_1" -> index 1.
+			// "session__user" -> no match for regex which expects _\d+
+			// So if NTMIndex is 0, it's not a standard numbered agent pane.
 			continue
 		}
 
-		typ := matches[1]
-		variant := matches[3]
+		// Convert AgentType to string for map key
+		typ := string(p.Type)
+
 		out[typ] = append(out[typ], ntmPaneInfo{
 			Label:     fmt.Sprintf("%s_%d", typ, idx),
 			Type:      typ,
 			Index:     idx,
 			TmuxIndex: p.Index,
-			Variant:   variant,
+			Variant:   p.Variant,
 		})
 	}
 
@@ -859,11 +1587,8 @@ func parseNTMPanes(panes []tmux.Pane) map[string][]ntmPaneInfo {
 }
 
 func groupAgentsByType(agents []agentmail.Agent) map[string][]agentmail.Agent {
-	out := map[string][]agentmail.Agent{
-		"cc":  {},
-		"cod": {},
-		"gmi": {},
-	}
+	out := make(map[string][]agentmail.Agent)
+
 	for _, a := range agents {
 		if a.Program == "" || a.Program == "ntm" {
 			continue
@@ -890,8 +1615,14 @@ func agentTypeFromProgram(program string) string {
 		return "cod"
 	case strings.Contains(p, "gemini"):
 		return "gmi"
+	case strings.Contains(p, "cursor"):
+		return "cursor"
+	case strings.Contains(p, "windsurf"):
+		return "windsurf"
+	case strings.Contains(p, "aider"):
+		return "aider"
 	default:
-		return ""
+		return p
 	}
 }
 
@@ -913,7 +1644,24 @@ func assignAgentsToPanes(panes []ntmPaneInfo, agents []agentmail.Agent) map[stri
 	assigned := make(map[string]bool)
 	mapping := make(map[string]string)
 
-	for _, pane := range panes {
+	// Create a copy of panes to sort without affecting the caller
+	sortedPanes := make([]ntmPaneInfo, len(panes))
+	copy(sortedPanes, panes)
+
+	// Prioritize panes with variants (more specific requirements)
+	sort.SliceStable(sortedPanes, func(i, j int) bool {
+		hasVarI := sortedPanes[i].Variant != ""
+		hasVarJ := sortedPanes[j].Variant != ""
+		if hasVarI && !hasVarJ {
+			return true
+		}
+		if !hasVarI && hasVarJ {
+			return false
+		}
+		return sortedPanes[i].Index < sortedPanes[j].Index
+	})
+
+	for _, pane := range sortedPanes {
 		bestIdx := -1
 		bestScore := -1
 
@@ -1099,9 +1847,10 @@ func PrintSessions() error {
 // PrintPlan outputs an execution plan
 func PrintPlan() error {
 	plan := PlanOutput{
-		GeneratedAt: time.Now().UTC(),
-		Actions:     []PlanAction{},
-		BeadActions: []BeadAction{},
+		RobotResponse: NewRobotResponse(true),
+		GeneratedAt:   time.Now().UTC(),
+		Actions:       []PlanAction{},
+		BeadActions:   []BeadAction{},
 	}
 
 	// Check tmux availability
@@ -1344,6 +2093,12 @@ func detectAgentType(title string) string {
 	return "unknown"
 }
 
+// DetectAgentType detects the agent type from a pane title.
+// Returns one of: "claude", "codex", "gemini", "cursor", "windsurf", "aider", or "unknown".
+func DetectAgentType(title string) string {
+	return detectAgentType(title)
+}
+
 // containsShortForm checks if title contains the short form as a word boundary pattern
 // It matches patterns like "__cc_" or "__cc__" to avoid false positives
 func containsShortForm(title, short string) bool {
@@ -1419,10 +2174,11 @@ func detectModel(agentType, title string) string {
 	}
 }
 
+// encodeJSON outputs the payload using the current OutputFormat.
+// Despite the name (kept for backward compatibility), this now supports
+// multiple formats: json, toon, or auto (default).
 func encodeJSON(v interface{}) error {
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(v)
+	return Output(applyVerbosity(v, OutputVerbosity), OutputFormat)
 }
 
 // TailOutput is the structured output for --robot-tail
@@ -1657,79 +2413,43 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// buildSnapshotAgentMail assembles Agent Mail state for robot snapshot.
-// Best-effort: failures do not fail snapshot generation.
-func buildSnapshotAgentMail() *SnapshotAgentMail {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return &SnapshotAgentMail{Available: false, Reason: "unable to determine working directory"}
-	}
+// fetchAgentMailData retrieves Agent Mail state for the project.
+// Returns the summary, raw agent list, and per-agent stats map.
+func fetchAgentMailData(projectKey string) (*SnapshotAgentMail, []agentmail.Agent, map[string]SnapshotAgentMailStats) {
+	client := agentmail.NewClient(agentmail.WithProjectKey(projectKey))
 
-	client := agentmail.NewClient(agentmail.WithProjectKey(cwd))
-
-	// Quick availability check
 	if !client.IsAvailable() {
-		return &SnapshotAgentMail{
-			Available: false,
-			Reason:    fmt.Sprintf("agent mail server not available at %s", client.BaseURL()),
-			Project:   cwd,
-		}
+		return nil, nil, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Ensure project exists; if this fails, degrade gracefully.
-	if _, err := client.EnsureProject(ctx, cwd); err != nil {
+	// Ensure project exists
+	if _, err := client.EnsureProject(ctx, projectKey); err != nil {
 		return &SnapshotAgentMail{
 			Available: true,
 			Reason:    fmt.Sprintf("ensure_project failed: %v", err),
-			Project:   cwd,
-		}
+			Project:   projectKey,
+		}, nil, nil
 	}
 
-	agents, err := client.ListProjectAgents(ctx, cwd)
+	agents, err := client.ListProjectAgents(ctx, projectKey)
 	if err != nil {
 		return &SnapshotAgentMail{
 			Available: true,
 			Reason:    fmt.Sprintf("list_agents failed: %v", err),
-			Project:   cwd,
-		}
+			Project:   projectKey,
+		}, nil, nil
 	}
 
 	summary := &SnapshotAgentMail{
 		Available: true,
-		Project:   cwd,
+		Project:   projectKey,
 		Agents:    make(map[string]SnapshotAgentMailStats),
 	}
+	statsMap := make(map[string]SnapshotAgentMailStats)
 
-	// Best-effort: map Agent Mail identities to tmux panes by exact title match.
-	agentNames := make(map[string]struct{}, len(agents))
-	for _, a := range agents {
-		if a.Name == "HumanOverseer" {
-			continue
-		}
-		agentNames[a.Name] = struct{}{}
-	}
-	paneByAgent := make(map[string]string)
-	if tmux.IsInstalled() && len(agentNames) > 0 {
-		if sessions, err := tmux.ListSessions(); err == nil {
-			for _, sess := range sessions {
-				panes, err := tmux.GetPanes(sess.Name)
-				if err != nil {
-					continue
-				}
-				for _, pane := range panes {
-					if _, ok := agentNames[pane.Title]; ok {
-						// Mirror the snapshot pane format: windowIndex.paneIndex
-						paneByAgent[pane.Title] = fmt.Sprintf("%d.%d", 0, pane.Index)
-					}
-				}
-			}
-		}
-	}
-
-	// Fetch limited inbox slices to keep the call lightweight.
 	threadSet := make(map[string]struct{})
 	for _, agent := range agents {
 		if agent.Name == "HumanOverseer" {
@@ -1737,7 +2457,7 @@ func buildSnapshotAgentMail() *SnapshotAgentMail {
 		}
 
 		inbox, err := client.FetchInbox(ctx, agentmail.FetchInboxOptions{
-			ProjectKey:    cwd,
+			ProjectKey:    projectKey,
 			AgentName:     agent.Name,
 			Limit:         25,
 			IncludeBodies: false,
@@ -1755,7 +2475,6 @@ func buildSnapshotAgentMail() *SnapshotAgentMail {
 			if msg.ThreadID != nil && *msg.ThreadID != "" {
 				threadKey = *msg.ThreadID
 			} else {
-				// Messages without an explicit thread_id can be treated as their own thread.
 				threadKey = fmt.Sprintf("%d", msg.ID)
 			}
 			threadSet[threadKey] = struct{}{}
@@ -1765,26 +2484,59 @@ func buildSnapshotAgentMail() *SnapshotAgentMail {
 			Unread:     unread,
 			PendingAck: pendingAck,
 		}
-		if paneRef, ok := paneByAgent[agent.Name]; ok {
-			stats.Pane = paneRef
-		}
 		summary.Agents[agent.Name] = stats
+		statsMap[agent.Name] = stats
 	}
 
 	if len(threadSet) > 0 {
 		summary.ThreadsKnown = len(threadSet)
 	}
 
+	return summary, agents, statsMap
+}
+
+// resolveAgentsForSession maps pane titles to agent names for a specific session.
+func resolveAgentsForSession(panes []tmux.Pane, mailAgents []agentmail.Agent) map[string]string {
+	if len(mailAgents) == 0 || len(panes) == 0 {
+		return nil
+	}
+
+	paneInfos := parseNTMPanes(panes)
+	agentsByType := groupAgentsByType(mailAgents)
+	mapping := make(map[string]string)
+
+	for paneType, info := range paneInfos {
+		if agents, ok := agentsByType[paneType]; ok {
+			typeMapping := assignAgentsToPanes(info, agents)
+			for k, v := range typeMapping {
+				mapping[k] = v
+			}
+		}
+	}
+
+	return mapping
+}
+
+// buildSnapshotAgentMail assembles Agent Mail state for robot snapshot.
+// Deprecated: Use fetchAgentMailData instead.
+func buildSnapshotAgentMail() *SnapshotAgentMail {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return &SnapshotAgentMail{Available: false, Reason: "unable to determine working directory"}
+	}
+	summary, _, _ := fetchAgentMailData(cwd)
 	return summary
 }
 
 // SnapshotOutput provides complete system state for AI orchestration
 type SnapshotOutput struct {
+	RobotResponse
 	Timestamp      string             `json:"ts"`
 	Sessions       []SnapshotSession  `json:"sessions"`
 	BeadsSummary   *bv.BeadsSummary   `json:"beads_summary,omitempty"`
 	AgentMail      *SnapshotAgentMail `json:"agent_mail,omitempty"`
 	MailUnread     int                `json:"mail_unread,omitempty"`
+	Tools          []ToolInfoOutput   `json:"tools,omitempty"`           // Flywheel tool inventory and health
 	Alerts         []string           `json:"alerts"`                    // Legacy: simple string alerts
 	AlertsDetailed []AlertInfo        `json:"alerts_detailed,omitempty"` // Rich alert objects
 	AlertSummary   *AlertSummaryInfo  `json:"alert_summary,omitempty"`
@@ -1822,7 +2574,7 @@ type SnapshotSession struct {
 // SnapshotAgent represents an agent in the snapshot
 type SnapshotAgent struct {
 	Pane             string  `json:"pane"`
-	Type             string  `json:"type"`
+	Type             string  `json:"type"`              // claude, codex, gemini
 	Variant          string  `json:"variant,omitempty"` // Model alias or persona name
 	TypeConfidence   float64 `json:"type_confidence"`
 	TypeMethod       string  `json:"type_method"`
@@ -1840,7 +2592,7 @@ type SnapshotAgentMail struct {
 	Project      string                            `json:"project,omitempty"`
 	TotalUnread  int                               `json:"total_unread,omitempty"`
 	Agents       map[string]SnapshotAgentMailStats `json:"agents,omitempty"`
-	ThreadsKnown int                               `json:"threads_active,omitempty"`
+	ThreadsKnown int                               `json:"threads_known,omitempty"`
 }
 
 // SnapshotAgentMailStats holds per-agent inbox counts.
@@ -1859,22 +2611,42 @@ func PrintSnapshot(cfg *config.Config) error {
 		cfg = config.Default()
 	}
 	output := SnapshotOutput{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Sessions:  []SnapshotSession{},
-		Alerts:    []string{},
+		RobotResponse: NewRobotResponse(true),
+		Timestamp:     time.Now().UTC().Format(time.RFC3339),
+		Sessions:      []SnapshotSession{},
+		Alerts:        []string{},
 	}
 
 	// Check tmux availability
 	if !tmux.IsInstalled() {
+		output.RobotResponse = NewErrorResponse(
+			fmt.Errorf("tmux is not installed"),
+			ErrCodeDependencyMissing,
+			"Install tmux to enable snapshot",
+		)
 		output.Alerts = append(output.Alerts, "tmux is not installed")
 		return encodeJSON(output)
 	}
 
-	// Agent Mail summary (best-effort, graceful degradation). Populate early so we can attach
-	// per-pane PendingMail hints during snapshot construction.
-	output.AgentMail = buildSnapshotAgentMail()
-	if output.AgentMail != nil && output.AgentMail.Available {
-		output.MailUnread = output.AgentMail.TotalUnread
+	// Fetch Agent Mail data early
+	var mailAgents []agentmail.Agent
+	var mailStats map[string]SnapshotAgentMailStats
+	var projectKey string
+
+	cwd, err := os.Getwd()
+	if err == nil {
+		if root, err := git.FindProjectRoot(cwd); err == nil {
+			projectKey = root
+		} else {
+			projectKey = cwd
+		}
+		// Build initial mail summary without pane mapping
+		if summary, agents, stats := fetchAgentMailData(projectKey); summary != nil {
+			output.AgentMail = summary
+			output.MailUnread = summary.TotalUnread
+			mailAgents = agents
+			mailStats = stats
+		}
 	}
 
 	// Get all sessions
@@ -1898,6 +2670,9 @@ func PrintSnapshot(cfg *config.Config) error {
 			continue
 		}
 
+		// Resolve agent mapping for this session
+		agentMapping := resolveAgentsForSession(panes, mailAgents)
+
 		for _, pane := range panes {
 			// Capture output for state detection and enhanced type detection
 			captured := ""
@@ -1920,11 +2695,18 @@ func PrintSnapshot(cfg *config.Config) error {
 				PendingMail:      0,
 			}
 
-			// Best-effort mapping: if the pane title matches an Agent Mail identity, attach its
-			// unread count as a PendingMail hint.
-			if output.AgentMail != nil && output.AgentMail.Agents != nil {
-				if stats, ok := output.AgentMail.Agents[pane.Title]; ok {
+			// Map pending mail if available
+			if agentName, ok := agentMapping[pane.Title]; ok {
+				if stats, ok := mailStats[agentName]; ok {
 					agent.PendingMail = stats.Unread
+
+					// Update the mail summary with the pane ID
+					if output.AgentMail != nil && output.AgentMail.Agents != nil {
+						if s, exists := output.AgentMail.Agents[agentName]; exists {
+							s.Pane = agent.Pane
+							output.AgentMail.Agents[agentName] = s
+						}
+					}
 				}
 			}
 
@@ -1955,6 +2737,11 @@ func PrintSnapshot(cfg *config.Config) error {
 			}
 		}
 	}
+
+	// Include tool inventory and health status
+	toolCtx, toolCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	output.Tools = GetToolsSummary(toolCtx)
+	toolCancel()
 
 	// Generate and add detailed alerts using the alerts package
 	var alertCfg alerts.Config
@@ -2026,6 +2813,38 @@ func agentTypeString(t tmux.AgentType) string {
 		return "user"
 	default:
 		return "unknown"
+	}
+}
+
+func modelNameForPane(pane tmux.Pane, cfg *config.Config) string {
+	if pane.Variant != "" {
+		return pane.Variant
+	}
+	if cfg != nil {
+		switch pane.Type {
+		case tmux.AgentClaude:
+			if cfg.Models.DefaultClaude != "" {
+				return cfg.Models.DefaultClaude
+			}
+		case tmux.AgentCodex:
+			if cfg.Models.DefaultCodex != "" {
+				return cfg.Models.DefaultCodex
+			}
+		case tmux.AgentGemini:
+			if cfg.Models.DefaultGemini != "" {
+				return cfg.Models.DefaultGemini
+			}
+		}
+	}
+	switch pane.Type {
+	case tmux.AgentClaude:
+		return "claude-sonnet-4-20250514"
+	case tmux.AgentCodex:
+		return "gpt-4"
+	case tmux.AgentGemini:
+		return "gemini-2.0-flash"
+	default:
+		return ""
 	}
 }
 
@@ -2124,6 +2943,7 @@ type SendOptions struct {
 	Exclude    []string // Panes to exclude
 	DelayMs    int      // Delay between sends in milliseconds
 	DryRun     bool     // If true, show what would be sent without actually sending
+	Enter      *bool    // If set, override Enter behavior after paste
 
 	// CASS injection options
 	WithCASS     bool          // Enable CASS context injection
@@ -2287,6 +3107,25 @@ func PrintSend(opts SendOptions) error {
 		}
 	}
 
+	// Dry-run mode: show what would happen without sending
+	if opts.DryRun {
+		output.DryRun = true
+		if len(output.Targets) > 0 {
+			output.WouldSendTo = append(output.WouldSendTo, output.Targets...)
+			output.Success = true
+		} else {
+			output.Success = false
+			output.Error = "no target panes matched the filter criteria"
+			output.ErrorCode = ErrCodeInvalidFlag
+		}
+		return encodeJSON(output)
+	}
+
+	sendEnter := true
+	if opts.Enter != nil {
+		sendEnter = *opts.Enter
+	}
+
 	// Send to all targets
 	for i, pane := range targetPanes {
 		paneKey := fmt.Sprintf("%d", pane.Index)
@@ -2296,7 +3135,16 @@ func PrintSend(opts SendOptions) error {
 			time.Sleep(time.Duration(opts.DelayMs) * time.Millisecond)
 		}
 
-		err := tmux.SendKeys(pane.ID, messageToSend, true)
+		// Determine appropriate Enter delay based on pane type.
+		// User/shell panes need a longer delay than AI agent TUIs because
+		// shells (bash, zsh) have different input buffering behavior.
+		enterDelay := tmux.DefaultEnterDelay
+		agentType := detectAgentType(pane.Title)
+		if pane.Type == tmux.AgentUser || agentType == "user" || agentType == "unknown" {
+			enterDelay = tmux.ShellEnterDelay
+		}
+
+		err := tmux.SendKeysWithDelay(pane.ID, messageToSend, sendEnter, enterDelay)
 		if err != nil {
 			output.Failed = append(output.Failed, SendError{
 				Pane:  paneKey,
@@ -2362,6 +3210,7 @@ func truncateMessage(msg string) string {
 
 // SnapshotDeltaOutput provides changes since a given timestamp.
 type SnapshotDeltaOutput struct {
+	RobotResponse
 	Timestamp string   `json:"ts"`
 	Since     string   `json:"since"`
 	Changes   []Change `json:"changes"`
@@ -2379,9 +3228,10 @@ type Change struct {
 // Uses the internal state tracker ring buffer to return delta changes.
 func PrintSnapshotDelta(since time.Time) error {
 	output := SnapshotDeltaOutput{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Since:     since.Format(time.RFC3339),
-		Changes:   []Change{},
+		RobotResponse: NewRobotResponse(true),
+		Timestamp:     time.Now().UTC().Format(time.RFC3339),
+		Since:         since.Format(time.RFC3339),
+		Changes:       []Change{},
 	}
 
 	// Query the state tracker for changes since the given timestamp
@@ -2420,6 +3270,7 @@ func GetStateTracker() *tracker.StateTracker {
 
 // GraphOutput provides project graph analysis from bv
 type GraphOutput struct {
+	RobotResponse
 	GeneratedAt time.Time            `json:"generated_at"`
 	Available   bool                 `json:"available"`
 	Error       string               `json:"error,omitempty"`
@@ -2475,12 +3326,18 @@ type GraphMailSummary struct {
 // PrintGraph outputs bv graph insights for AI consumption
 func PrintGraph() error {
 	output := GraphOutput{
-		GeneratedAt: time.Now().UTC(),
-		Available:   bv.IsInstalled(),
+		RobotResponse: NewRobotResponse(true),
+		GeneratedAt:   time.Now().UTC(),
+		Available:     bv.IsInstalled(),
 	}
 
 	if !bv.IsInstalled() {
 		output.Error = "bv (beads_viewer) is not installed"
+		output.RobotResponse = NewErrorResponse(
+			fmt.Errorf("%s", output.Error),
+			ErrCodeDependencyMissing,
+			"Install bv to enable graph insights",
+		)
 		// Even if bv is missing, still attempt correlation to provide partial data.
 	} else {
 		wd := mustGetwd()
@@ -2489,6 +3346,11 @@ func PrintGraph() error {
 		insights, err := bv.GetInsights(wd)
 		if err != nil {
 			output.Error = fmt.Sprintf("failed to get insights: %v", err)
+			output.RobotResponse = NewErrorResponse(
+				err,
+				ErrCodeInternalError,
+				"Check bv graph data and repository state",
+			)
 		} else {
 			output.Insights = insights
 		}
@@ -2558,6 +3420,9 @@ func buildCorrelationGraph() *GraphCorrelation {
 
 	assignmentByAgent := make(map[string]*GraphAgentAssignment)
 	for _, a := range agents {
+		if a.Name == "HumanOverseer" {
+			continue
+		}
 		assignmentByAgent[a.Name] = &GraphAgentAssignment{
 			Agent:       a.Name,
 			AgentName:   a.Name,
@@ -2617,7 +3482,11 @@ func buildCorrelationGraph() *GraphCorrelation {
 	if len(agents) > 0 && agentMailClient.IsAvailable() {
 		const inboxLimit = 50
 		for _, a := range agents {
-			msgs, err := agentMailClient.FetchInbox(ctx, agentmail.FetchInboxOptions{
+			if a.Name == "HumanOverseer" {
+				continue
+			}
+
+			inbox, err := agentMailClient.FetchInbox(ctx, agentmail.FetchInboxOptions{
 				ProjectKey:    wd,
 				AgentName:     a.Name,
 				Limit:         inboxLimit,
@@ -2627,7 +3496,7 @@ func buildCorrelationGraph() *GraphCorrelation {
 				corr.Errors = append(corr.Errors, fmt.Sprintf("agent mail fetch_inbox %s: %v", a.Name, err))
 				continue
 			}
-			for _, msg := range msgs {
+			for _, msg := range inbox {
 				if msg.ThreadID == nil || strings.TrimSpace(*msg.ThreadID) == "" {
 					continue
 				}
@@ -2865,6 +3734,7 @@ func getBeadNeighbors(dir, issueID, direction string) ([]string, []bdDepTreeNode
 
 // AlertsOutput provides machine-readable alert information
 type AlertsOutput struct {
+	RobotResponse
 	GeneratedAt time.Time        `json:"generated_at"`
 	Enabled     bool             `json:"enabled"`
 	Active      []AlertInfo      `json:"active"`
@@ -2881,9 +3751,10 @@ func PrintAlertsDetailed(includeResolved bool) error {
 	summary := tracker.Summary()
 
 	output := AlertsOutput{
-		GeneratedAt: time.Now().UTC(),
-		Enabled:     alertCfg.Enabled,
-		Active:      make([]AlertInfo, len(active)),
+		RobotResponse: NewRobotResponse(true),
+		GeneratedAt:   time.Now().UTC(),
+		Enabled:       alertCfg.Enabled,
+		Active:        make([]AlertInfo, len(active)),
 		Summary: AlertSummaryInfo{
 			TotalActive: summary.TotalActive,
 			BySeverity:  summary.BySeverity,
@@ -2948,6 +3819,7 @@ type RecipeAgentInfo struct {
 
 // RecipesOutput is the structured output for --robot-recipes
 type RecipesOutput struct {
+	RobotResponse
 	GeneratedAt time.Time    `json:"generated_at"`
 	Count       int          `json:"count"`
 	Recipes     []RecipeInfo `json:"recipes"`
@@ -2960,6 +3832,11 @@ func PrintRecipes() error {
 	if err != nil {
 		// Return empty list on error
 		return encodeJSON(RecipesOutput{
+			RobotResponse: NewErrorResponse(
+				err,
+				ErrCodeInternalError,
+				"Check recipe configuration and file paths",
+			),
 			GeneratedAt: time.Now().UTC(),
 			Count:       0,
 			Recipes:     []RecipeInfo{},
@@ -2967,9 +3844,10 @@ func PrintRecipes() error {
 	}
 
 	output := RecipesOutput{
-		GeneratedAt: time.Now().UTC(),
-		Count:       len(recipes),
-		Recipes:     make([]RecipeInfo, len(recipes)),
+		RobotResponse: NewRobotResponse(true),
+		GeneratedAt:   time.Now().UTC(),
+		Count:         len(recipes),
+		Recipes:       make([]RecipeInfo, len(recipes)),
 	}
 
 	for i, r := range recipes {
@@ -2996,7 +3874,7 @@ func PrintRecipes() error {
 }
 
 // TerseState represents the ultra-compact state for token-constrained scenarios.
-// Format: S:session|A:active/total|W:working|I:idle|E:errors|C:ctx%|B:Rn/In/Bn|M:mail|!:Nc,Nw
+// Format: S:session|A:active/total|W:working|I:idle|E:errors|C:ctx%|B:Rn/In/Bn|M:mail|!:
 type TerseState struct {
 	Session        string `json:"session"`
 	ActiveAgents   int    `json:"active_agents"`
@@ -3014,7 +3892,7 @@ type TerseState struct {
 }
 
 // String returns the ultra-compact string representation.
-// Format: S:session|A:5/8|W:3|I:2|E:0|C:78%|B:R3/I2/B1|M:4|!:1c,2w
+// Format: S:session|A:active/total|W:working|I:idle|E:errors|C:ctx%|B:Rn/In/Bn|M:mail|!:
 func (t TerseState) String() string {
 	// Build alerts string (only include if non-zero)
 	alertStr := ""
@@ -3042,7 +3920,7 @@ func (t TerseState) String() string {
 }
 
 // ParseTerse parses the ultra-compact terse string into a TerseState.
-// Format: S:session|A:active/total|W:working|I:idle|E:errors|C:ctx%|B:Rn/In/Bn|M:mail|!:Nc,Nw
+// Format: S:session|A:active/total|W:working|I:idle|E:errors|C:ctx%|B:Rn/In/Bn|M:mail|!:
 func ParseTerse(s string) (*TerseState, error) {
 	state := &TerseState{}
 
@@ -3117,7 +3995,7 @@ func ParseTerse(s string) (*TerseState, error) {
 }
 
 // PrintTerse outputs ultra-compact single-line state for token-constrained scenarios.
-// Output format: S:session|A:active/total|W:working|I:idle|E:errors|C:ctx%|B:Rn/In/Bn|M:mail|!:Nc,Nw
+// Output format: S:session|A:active/total|W:working|I:idle|E:errors|C:ctx%|B:Rn/In/Bn|M:mail|!:
 // Multiple sessions are separated by semicolons.
 func PrintTerse(cfg *config.Config) error {
 	var results []string
@@ -3145,7 +4023,7 @@ func PrintTerse(cfg *config.Config) error {
 		}
 	}
 
-	// Get beads summary (shared across sessions)
+	// Get beads summary (same for all sessions in same project)
 	var beadsSummary *bv.BeadsSummary
 	if bv.IsInstalled() {
 		beadsSummary = bv.GetBeadsSummary("", 0)
@@ -3272,10 +4150,15 @@ func getTerseMailCount() int {
 }
 
 // getAgentMailSummary returns a best-effort Agent Mail summary for --robot-status.
-func getAgentMailSummary() *AgentMailSummary {
-	projectKey, err := os.Getwd()
+func getAgentMailSummary() (*AgentMailSummary, error) {
+	cwd, err := os.Getwd()
 	if err != nil {
-		return nil
+		return nil, err
+	}
+
+	projectKey := cwd
+	if root, err := git.FindProjectRoot(cwd); err == nil {
+		projectKey = root
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -3288,20 +4171,20 @@ func getAgentMailSummary() *AgentMailSummary {
 	}
 
 	if !client.IsAvailable() {
-		return summary
+		return summary, nil
 	}
 	summary.Available = true
 
 	// Ensure project exists
 	if _, err := client.EnsureProject(ctx, projectKey); err != nil {
 		summary.Error = fmt.Sprintf("ensure_project: %v", err)
-		return summary
+		return summary, nil
 	}
 
 	agents, err := client.ListProjectAgents(ctx, projectKey)
 	if err != nil {
 		summary.Error = fmt.Sprintf("list_agents: %v", err)
-		return summary
+		return summary, nil
 	}
 	summary.SessionsRegistered = len(agents)
 
@@ -3316,7 +4199,7 @@ func getAgentMailSummary() *AgentMailSummary {
 		summary.TotalLocks = len(locks)
 	}
 
-	return summary
+	return summary, nil
 }
 
 // countInbox returns the count of inbox entries for an agent.
@@ -3340,11 +4223,24 @@ func countInbox(ctx context.Context, client *agentmail.Client, projectKey, agent
 // ContextOutput is the structured output for --robot-context
 type ContextOutput struct {
 	RobotResponse
-	Session    string             `json:"session"`
-	CapturedAt time.Time          `json:"captured_at"`
-	Agents     []AgentContextInfo `json:"agents"`
-	Summary    ContextSummary     `json:"summary"`
-	AgentHints *ContextAgentHints `json:"_agent_hints,omitempty"`
+	Session          string                       `json:"session"`
+	CapturedAt       time.Time                    `json:"captured_at"`
+	Agents           []AgentContextInfo           `json:"agents"`
+	Summary          ContextSummary               `json:"summary"`
+	PendingRotations []ContextPendingRotationInfo `json:"pending_rotations,omitempty"`
+	AgentHints       *ContextAgentHints           `json:"_agent_hints,omitempty"`
+}
+
+// ContextPendingRotationInfo contains information about a pending rotation confirmation
+type ContextPendingRotationInfo struct {
+	AgentID        string  `json:"agent_id"`
+	SessionName    string  `json:"session_name"`
+	PaneID         string  `json:"pane_id"`
+	ContextPercent float64 `json:"context_percent"`
+	CreatedAt      string  `json:"created_at"`
+	TimeoutAt      string  `json:"timeout_at"`
+	DefaultAction  string  `json:"default_action"`
+	WorkDir        string  `json:"work_dir,omitempty"`
 }
 
 // AgentContextInfo contains context window information for a single agent pane
@@ -3526,6 +4422,21 @@ func PrintContext(session string, lines int) error {
 	output.Summary.HighUsageCount = len(highUsage)
 	if len(output.Agents) > 0 {
 		output.Summary.AvgUsage = totalUsage / float64(len(output.Agents))
+	}
+
+	// Add pending rotations for this session
+	pendingRotations, _ := ntmctx.GetPendingRotationsForSession(session)
+	for _, p := range pendingRotations {
+		output.PendingRotations = append(output.PendingRotations, ContextPendingRotationInfo{
+			AgentID:        p.AgentID,
+			SessionName:    p.SessionName,
+			PaneID:         p.PaneID,
+			ContextPercent: p.ContextPercent,
+			CreatedAt:      p.CreatedAt.Format(time.RFC3339),
+			TimeoutAt:      p.TimeoutAt.Format(time.RFC3339),
+			DefaultAction:  string(p.DefaultAction),
+			WorkDir:        p.WorkDir,
+		})
 	}
 
 	output.AgentHints = generateContextHints(lowUsage, highUsage, len(highUsage), len(output.Agents))
@@ -3967,6 +4878,460 @@ func PrintDiff(opts DiffOptions) error {
 	}
 
 	output.AgentHints = hints
+
+	return encodeJSON(output)
+}
+
+// TriageOptions configures the triage output
+type TriageOptions struct {
+	Limit int // Max recommendations per category (default 10)
+}
+
+// TriageOutput is the robot-triage JSON output structure
+type TriageOutput struct {
+	RobotResponse
+	GeneratedAt     time.Time                 `json:"generated_at"`
+	Available       bool                      `json:"available"`
+	DataHash        string                    `json:"data_hash,omitempty"`
+	Error           string                    `json:"error,omitempty"`
+	QuickRef        *bv.TriageQuickRef        `json:"quick_ref,omitempty"`
+	Recommendations []bv.TriageRecommendation `json:"recommendations,omitempty"`
+	QuickWins       []bv.TriageRecommendation `json:"quick_wins,omitempty"`
+	BlockersToClear []bv.BlockerToClear       `json:"blockers_to_clear,omitempty"`
+	ProjectHealth   *bv.ProjectHealth         `json:"project_health,omitempty"`
+	Commands        map[string]string         `json:"commands,omitempty"`
+	CacheInfo       *TriageCacheInfo          `json:"cache_info,omitempty"`
+}
+
+// TriageCacheInfo provides cache metadata
+type TriageCacheInfo struct {
+	Cached bool  `json:"cached"`
+	AgeMs  int64 `json:"age_ms,omitempty"`
+	TTLMs  int64 `json:"ttl_ms"`
+}
+
+// PrintTriage outputs bv triage analysis for AI consumption
+func PrintTriage(opts TriageOptions) error {
+	if opts.Limit <= 0 {
+		opts.Limit = 10
+	}
+
+	output := TriageOutput{
+		RobotResponse: NewRobotResponse(true),
+		GeneratedAt:   time.Now().UTC(),
+		Available:     bv.IsInstalled(),
+	}
+
+	if !bv.IsInstalled() {
+		output.Error = "bv (beads_viewer) is not installed"
+		output.RobotResponse = NewErrorResponse(
+			fmt.Errorf("%s", output.Error),
+			ErrCodeDependencyMissing,
+			"Install bv to enable triage",
+		)
+		return encodeJSON(output)
+	}
+
+	wd := mustGetwd()
+
+	// Get triage data (uses internal cache)
+	triage, err := bv.GetTriage(wd)
+	if err != nil {
+		output.Error = fmt.Sprintf("failed to get triage: %v", err)
+		output.RobotResponse = NewErrorResponse(
+			err,
+			ErrCodeInternalError,
+			"Check bv triage cache and repository state",
+		)
+		return encodeJSON(output)
+	}
+
+	if triage == nil {
+		output.Error = "no triage data returned"
+		output.RobotResponse = NewErrorResponse(
+			fmt.Errorf("%s", output.Error),
+			ErrCodeInternalError,
+			"Rebuild bv cache or retry triage",
+		)
+		return encodeJSON(output)
+	}
+
+	// Copy data with limits applied
+	output.DataHash = triage.DataHash
+	output.QuickRef = &triage.Triage.QuickRef
+	output.QuickWins = triage.Triage.QuickWins
+	output.BlockersToClear = triage.Triage.BlockersToClear
+	output.ProjectHealth = triage.Triage.ProjectHealth
+	output.Commands = triage.Triage.Commands
+
+	// Apply limits to recommendations
+	if len(triage.Triage.Recommendations) > opts.Limit {
+		output.Recommendations = triage.Triage.Recommendations[:opts.Limit]
+	} else {
+		output.Recommendations = triage.Triage.Recommendations
+	}
+
+	// Add cache info
+	output.CacheInfo = &TriageCacheInfo{
+		Cached: bv.IsCacheValid(),
+		AgeMs:  bv.GetCacheAge().Milliseconds(),
+		TTLMs:  bv.TriageCacheTTL.Milliseconds(),
+	}
+
+	return encodeJSON(output)
+}
+
+// Additional BV robot modes for comprehensive analysis
+
+// LabelAttentionOptions configures label attention analysis
+type LabelAttentionOptions struct {
+	Limit int
+}
+
+// FileBeadsOptions configures file-to-beads analysis
+type FileBeadsOptions struct {
+	FilePath string
+	Limit    int
+}
+
+// FileHotspotsOptions configures file hotspots analysis
+type FileHotspotsOptions struct {
+	Limit int
+}
+
+// FileRelationsOptions configures file relations analysis
+type FileRelationsOptions struct {
+	FilePath  string
+	Limit     int
+	Threshold float64
+}
+
+// PrintForecast outputs BV forecast analysis for ETA predictions
+func PrintForecast(target string) error {
+	output := struct {
+		RobotResponse
+		Target    string               `json:"target"`
+		Available bool                 `json:"available"`
+		Forecast  *bv.ForecastResponse `json:"forecast,omitempty"`
+		Error     string               `json:"error,omitempty"`
+	}{
+		RobotResponse: NewRobotResponse(true),
+		Target:        target,
+		Available:     bv.IsInstalled(),
+	}
+
+	if !bv.IsInstalled() {
+		output.Error = "bv (beads_viewer) is not installed"
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	wd := mustGetwd()
+	forecast, err := bv.GetForecast(wd, target)
+	if err != nil {
+		output.Error = fmt.Sprintf("failed to get forecast: %v", err)
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	output.Forecast = forecast
+
+	return encodeJSON(output)
+}
+
+// PrintSuggest outputs BV hygiene suggestions for code quality improvements
+func PrintSuggest() error {
+	output := struct {
+		RobotResponse
+		Available   bool                    `json:"available"`
+		Suggestions *bv.SuggestionsResponse `json:"suggestions,omitempty"`
+		Error       string                  `json:"error,omitempty"`
+	}{
+		RobotResponse: NewRobotResponse(true),
+		Available:     bv.IsInstalled(),
+	}
+
+	if !bv.IsInstalled() {
+		output.Error = "bv (beads_viewer) is not installed"
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	wd := mustGetwd()
+	suggestions, err := bv.GetSuggestions(wd)
+	if err != nil {
+		output.Error = fmt.Sprintf("failed to get suggestions: %v", err)
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	output.Suggestions = suggestions
+
+	return encodeJSON(output)
+}
+
+// PrintImpact outputs BV impact analysis for file changes
+func PrintImpact(filePath string) error {
+	output := struct {
+		RobotResponse
+		FilePath  string             `json:"file_path"`
+		Available bool               `json:"available"`
+		Impact    *bv.ImpactResponse `json:"impact,omitempty"`
+		Error     string             `json:"error,omitempty"`
+	}{
+		RobotResponse: NewRobotResponse(true),
+		FilePath:      filePath,
+		Available:     bv.IsInstalled(),
+	}
+
+	if !bv.IsInstalled() {
+		output.Error = "bv (beads_viewer) is not installed"
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	wd := mustGetwd()
+	impact, err := bv.GetImpact(wd, filePath)
+	if err != nil {
+		output.Error = fmt.Sprintf("failed to get impact analysis: %v", err)
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	output.Impact = impact
+
+	return encodeJSON(output)
+}
+
+// PrintSearch outputs BV semantic vector search results
+func PrintSearch(query string) error {
+	output := struct {
+		RobotResponse
+		Query     string             `json:"query"`
+		Available bool               `json:"available"`
+		Results   *bv.SearchResponse `json:"results,omitempty"`
+		Error     string             `json:"error,omitempty"`
+	}{
+		RobotResponse: NewRobotResponse(true),
+		Query:         query,
+		Available:     bv.IsInstalled(),
+	}
+
+	if !bv.IsInstalled() {
+		output.Error = "bv (beads_viewer) is not installed"
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	wd := mustGetwd()
+	results, err := bv.GetSearch(wd, query)
+	if err != nil {
+		output.Error = fmt.Sprintf("failed to perform search: %v", err)
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	output.Results = results
+
+	return encodeJSON(output)
+}
+
+// PrintLabelAttention outputs BV label attention ranking
+func PrintLabelAttention(opts LabelAttentionOptions) error {
+	output := struct {
+		RobotResponse
+		Available bool                       `json:"available"`
+		Labels    *bv.LabelAttentionResponse `json:"labels,omitempty"`
+		Limit     int                        `json:"limit"`
+		Error     string                     `json:"error,omitempty"`
+	}{
+		RobotResponse: NewRobotResponse(true),
+		Available:     bv.IsInstalled(),
+		Limit:         opts.Limit,
+	}
+
+	if !bv.IsInstalled() {
+		output.Error = "bv (beads_viewer) is not installed"
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	wd := mustGetwd()
+	labels, err := bv.GetLabelAttention(wd, opts.Limit)
+	if err != nil {
+		output.Error = fmt.Sprintf("failed to get label attention: %v", err)
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	output.Labels = labels
+
+	return encodeJSON(output)
+}
+
+// PrintLabelFlow outputs BV cross-label dependency flow analysis
+func PrintLabelFlow() error {
+	output := struct {
+		RobotResponse
+		Available bool                  `json:"available"`
+		Flow      *bv.LabelFlowResponse `json:"flow,omitempty"`
+		Error     string                `json:"error,omitempty"`
+	}{
+		RobotResponse: NewRobotResponse(true),
+		Available:     bv.IsInstalled(),
+	}
+
+	if !bv.IsInstalled() {
+		output.Error = "bv (beads_viewer) is not installed"
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	wd := mustGetwd()
+	flow, err := bv.GetLabelFlow(wd)
+	if err != nil {
+		output.Error = fmt.Sprintf("failed to get label flow: %v", err)
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	output.Flow = flow
+
+	return encodeJSON(output)
+}
+
+// PrintLabelHealth outputs BV per-label health analysis
+func PrintLabelHealth() error {
+	output := struct {
+		RobotResponse
+		Available bool                    `json:"available"`
+		Health    *bv.LabelHealthResponse `json:"health,omitempty"`
+		Error     string                  `json:"error,omitempty"`
+	}{
+		RobotResponse: NewRobotResponse(true),
+		Available:     bv.IsInstalled(),
+	}
+
+	if !bv.IsInstalled() {
+		output.Error = "bv (beads_viewer) is not installed"
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	wd := mustGetwd()
+	health, err := bv.GetLabelHealth(wd)
+	if err != nil {
+		output.Error = fmt.Sprintf("failed to get label health: %v", err)
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	output.Health = health
+
+	return encodeJSON(output)
+}
+
+// PrintFileBeads outputs BV file-to-beads mapping
+func PrintFileBeads(opts FileBeadsOptions) error {
+	output := struct {
+		RobotResponse
+		FilePath  string                `json:"file_path"`
+		Available bool                  `json:"available"`
+		Beads     *bv.FileBeadsResponse `json:"beads,omitempty"`
+		Limit     int                   `json:"limit"`
+		Error     string                `json:"error,omitempty"`
+	}{
+		RobotResponse: NewRobotResponse(true),
+		FilePath:      opts.FilePath,
+		Available:     bv.IsInstalled(),
+		Limit:         opts.Limit,
+	}
+
+	if !bv.IsInstalled() {
+		output.Error = "bv (beads_viewer) is not installed"
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	wd := mustGetwd()
+	beads, err := bv.GetFileBeads(wd, opts.FilePath, opts.Limit)
+	if err != nil {
+		output.Error = fmt.Sprintf("failed to get file beads: %v", err)
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	output.Beads = beads
+
+	return encodeJSON(output)
+}
+
+// PrintFileHotspots outputs BV file quality hotspots
+func PrintFileHotspots(opts FileHotspotsOptions) error {
+	output := struct {
+		RobotResponse
+		Available bool                     `json:"available"`
+		Hotspots  *bv.FileHotspotsResponse `json:"hotspots,omitempty"`
+		Limit     int                      `json:"limit"`
+		Error     string                   `json:"error,omitempty"`
+	}{
+		RobotResponse: NewRobotResponse(true),
+		Available:     bv.IsInstalled(),
+		Limit:         opts.Limit,
+	}
+
+	if !bv.IsInstalled() {
+		output.Error = "bv (beads_viewer) is not installed"
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	wd := mustGetwd()
+	hotspots, err := bv.GetFileHotspots(wd, opts.Limit)
+	if err != nil {
+		output.Error = fmt.Sprintf("failed to get file hotspots: %v", err)
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	output.Hotspots = hotspots
+
+	return encodeJSON(output)
+}
+
+// PrintFileRelations outputs BV file co-change relations
+func PrintFileRelations(opts FileRelationsOptions) error {
+	output := struct {
+		RobotResponse
+		FilePath  string                    `json:"file_path"`
+		Available bool                      `json:"available"`
+		Relations *bv.FileRelationsResponse `json:"relations,omitempty"`
+		Limit     int                       `json:"limit"`
+		Threshold float64                   `json:"threshold"`
+		Error     string                    `json:"error,omitempty"`
+	}{
+		RobotResponse: NewRobotResponse(true),
+		FilePath:      opts.FilePath,
+		Available:     bv.IsInstalled(),
+		Limit:         opts.Limit,
+		Threshold:     opts.Threshold,
+	}
+
+	if !bv.IsInstalled() {
+		output.Error = "bv (beads_viewer) is not installed"
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	wd := mustGetwd()
+	relations, err := bv.GetFileRelations(wd, opts.FilePath, opts.Limit, opts.Threshold)
+	if err != nil {
+		output.Error = fmt.Sprintf("failed to get file relations: %v", err)
+		output.Success = false
+		return encodeJSON(output)
+	}
+
+	output.Relations = relations
 
 	return encodeJSON(output)
 }

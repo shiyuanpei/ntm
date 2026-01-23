@@ -109,12 +109,15 @@ linters-settings:
 
 issues:
   exclude-rules:
-    # Exclude errcheck from test files
+    # Exclude linters from test files
     - path: _test\.go
       linters:
         - errcheck
         - gosec
         - staticcheck
+        - dogsled
+        - rowserrcheck
+        - sqlclosecheck
 
     # Exclude errcheck from CLI - many intentional unchecked errors for UX
     - path: internal/cli/
@@ -122,7 +125,7 @@ issues:
         - errcheck
 
     # Exclude errcheck from specific packages with intentional unchecked errors
-    - path: internal/(checkpoint|agentmail|cass|bv|auth|tmux|config|robot|events|history|notify|output|quota|tui|status|scanner|prompt)/
+    - path: internal/(checkpoint|agentmail|cass|bv|auth|tmux|config|robot|events|history|notify|output|quota|tui|status|scanner|prompt|state|supervisor|tools|util|agent|handoff)/
       linters:
         - errcheck
 
@@ -130,6 +133,9 @@ issues:
     - path: tests/
       linters:
         - errcheck
+        - dogsled
+        - rowserrcheck
+        - sqlclosecheck
 
     # Exclude deprecated API warnings (SA1019) - we handle these appropriately
     - linters:

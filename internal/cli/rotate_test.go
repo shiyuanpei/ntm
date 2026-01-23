@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
@@ -38,14 +40,28 @@ func TestRotateCmdValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Change to a temp dir to prevent CWD-based session inference
+			tmpDir := t.TempDir()
+			oldWd, _ := os.Getwd()
+			if err := os.Chdir(tmpDir); err != nil {
+				t.Fatalf("chdir failed: %v", err)
+			}
+			defer os.Chdir(oldWd)
+
+			// Unset TMUX env var to prevent auto-detection from environment
+			oldTmux := os.Getenv("TMUX")
+			os.Unsetenv("TMUX")
+			defer os.Setenv("TMUX", oldTmux)
+
 			if tt.skipIfAutoSelectPossible && sessionAutoSelectPossible() {
 				t.Skip("Skipping: exactly one tmux session running (auto-selection applies)")
 			}
 
 			cmd := newRotateCmd()
-			// Redirect output to discard
-			cmd.SetOut(nil)
-			cmd.SetErr(nil)
+			// Redirect output to buffer to ensure non-interactive mode
+			var buf bytes.Buffer
+			cmd.SetOut(&buf)
+			cmd.SetErr(&buf)
 
 			// Set args
 			if len(tt.args) > 0 {

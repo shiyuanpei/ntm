@@ -17,29 +17,83 @@ import (
 
 // Config represents the main configuration
 type Config struct {
-	ProjectsBase    string                `toml:"projects_base"`
-	Theme           string                `toml:"theme"`        // UI Theme (mocha, macchiato, nord, latte, auto)
-	PaletteFile     string                `toml:"palette_file"` // Path to command_palette.md (optional)
-	Agents          AgentConfig           `toml:"agents"`
-	Palette         []PaletteCmd          `toml:"palette"`
-	PaletteState    PaletteState          `toml:"palette_state"`
-	Tmux            TmuxConfig            `toml:"tmux"`
-	AgentMail       AgentMailConfig       `toml:"agent_mail"`
-	Models          ModelsConfig          `toml:"models"`
-	Alerts          AlertsConfig          `toml:"alerts"`
-	Checkpoints     CheckpointsConfig     `toml:"checkpoints"`
-	Notifications   notify.Config         `toml:"notifications"`
-	Resilience      ResilienceConfig      `toml:"resilience"`
-	Health          HealthConfig          `toml:"health"`           // Health monitoring configuration
-	Scanner         ScannerConfig         `toml:"scanner"`          // UBS scanner configuration
-	CASS            CASSConfig            `toml:"cass"`             // CASS integration configuration
-	Accounts        AccountsConfig        `toml:"accounts"`         // Multi-account management
-	Rotation        RotationConfig        `toml:"rotation"`         // Account rotation configuration
-	GeminiSetup     GeminiSetupConfig     `toml:"gemini_setup"`     // Gemini post-spawn setup
-	ContextRotation ContextRotationConfig `toml:"context_rotation"` // Context window rotation
+	ProjectsBase       string                `toml:"projects_base"`
+	Theme              string                `toml:"theme"`               // UI Theme (mocha, macchiato, nord, latte, auto)
+	PaletteFile        string                `toml:"palette_file"`        // Path to command_palette.md (optional)
+	SuggestionsEnabled bool                  `toml:"suggestions_enabled"` // Show contextual CLI suggestions
+	Agents             AgentConfig           `toml:"agents"`
+	Palette            []PaletteCmd          `toml:"palette"`
+	PaletteState       PaletteState          `toml:"palette_state"`
+	Tmux               TmuxConfig            `toml:"tmux"`
+	Robot              RobotConfig           `toml:"robot"`
+	AgentMail          AgentMailConfig       `toml:"agent_mail"`
+	Integrations       IntegrationsConfig    `toml:"integrations"` // External tool integrations (dcg, caam, etc.)
+	Models             ModelsConfig          `toml:"models"`
+	Alerts             AlertsConfig          `toml:"alerts"`
+	Checkpoints        CheckpointsConfig     `toml:"checkpoints"`
+	Notifications      notify.Config         `toml:"notifications"`
+	Resilience         ResilienceConfig      `toml:"resilience"`
+	Health             HealthConfig          `toml:"health"`           // Health monitoring configuration
+	Scanner            ScannerConfig         `toml:"scanner"`          // UBS scanner configuration
+	CASS               CASSConfig            `toml:"cass"`             // CASS integration configuration
+	Accounts           AccountsConfig        `toml:"accounts"`         // Multi-account management
+	Rotation           RotationConfig        `toml:"rotation"`         // Account rotation configuration
+	GeminiSetup        GeminiSetupConfig     `toml:"gemini_setup"`     // Gemini post-spawn setup
+	ContextRotation    ContextRotationConfig `toml:"context_rotation"` // Context window rotation
+	SessionRecovery    SessionRecoveryConfig `toml:"recovery"`         // Smart session recovery
+	Cleanup            CleanupConfig         `toml:"cleanup"`          // Temp file cleanup configuration
+	FileReservation    FileReservationConfig `toml:"file_reservation"` // Auto file reservation via Agent Mail
+	Memory             MemoryConfig          `toml:"memory"`           // CASS Memory (cm) integration
+	Assign             AssignConfig          `toml:"assign"`           // Assignment strategy configuration
+	Swarm              SwarmConfig           `toml:"swarm"`            // Weighted multi-project agent swarm
 
 	// Runtime-only fields (populated by project config merging)
 	ProjectDefaults map[string]int `toml:"-"`
+}
+
+// RobotConfig holds defaults for robot output behavior.
+type RobotConfig struct {
+	Verbosity string            `toml:"verbosity"` // terse, default, or debug
+	Output    RobotOutputConfig `toml:"output"`    // Output format configuration
+}
+
+// RobotOutputConfig holds configuration for robot mode output format.
+type RobotOutputConfig struct {
+	Format     string `toml:"format"`     // Output format: "json" or "toon"
+	Pretty     bool   `toml:"pretty"`     // Pretty print output (adds whitespace for readability)
+	Timestamps bool   `toml:"timestamps"` // Include timestamps in output
+	Compress   bool   `toml:"compress"`   // Compression for large outputs
+}
+
+// DefaultRobotOutputConfig returns sensible robot output defaults.
+func DefaultRobotOutputConfig() RobotOutputConfig {
+	return RobotOutputConfig{
+		Format:     "json", // JSON for backwards compatibility
+		Pretty:     false,  // Compact by default
+		Timestamps: true,   // Include timestamps
+		Compress:   false,  // No compression by default
+	}
+}
+
+// ValidateRobotOutputConfig validates the robot output configuration.
+func ValidateRobotOutputConfig(cfg *RobotOutputConfig) error {
+	// Empty format is valid - defaults to "json"
+	if cfg.Format == "" {
+		return nil
+	}
+	validFormats := map[string]bool{"json": true, "toon": true}
+	if !validFormats[cfg.Format] {
+		return fmt.Errorf("invalid robot output format %q: must be \"json\" or \"toon\"", cfg.Format)
+	}
+	return nil
+}
+
+// DefaultRobotConfig returns sensible robot defaults.
+func DefaultRobotConfig() RobotConfig {
+	return RobotConfig{
+		Verbosity: "default",
+		Output:    DefaultRobotOutputConfig(),
+	}
 }
 
 // CheckpointsConfig holds configuration for automatic checkpoints
@@ -366,32 +420,38 @@ func DefaultCASSConfig() CASSConfig {
 
 // AgentConfig defines the commands for each agent type
 type AgentConfig struct {
-	Claude string `toml:"claude"`
-	Codex  string `toml:"codex"`
-	Gemini string `toml:"gemini"`
+	Claude       string            `toml:"claude"`
+	Codex        string            `toml:"codex"`
+	Gemini       string            `toml:"gemini"`
+	Plugins      map[string]string `toml:"plugins"` // Custom agent commands keyed by type
+	DefaultCount int               `toml:"default_count"`
 }
 
 // ContextRotationConfig holds configuration for automatic context window rotation
 type ContextRotationConfig struct {
-	Enabled          bool    `toml:"enabled"`             // Master toggle for context rotation
-	WarningThreshold float64 `toml:"warning_threshold"`   // 0.0-1.0, warn when context usage exceeds this
-	RotateThreshold  float64 `toml:"rotate_threshold"`    // 0.0-1.0, rotate agent when usage exceeds this
-	SummaryMaxTokens int     `toml:"summary_max_tokens"`  // Max tokens for handoff summary
-	MinSessionAgeSec int     `toml:"min_session_age_sec"` // Don't rotate agents younger than this
-	TryCompactFirst  bool    `toml:"try_compact_first"`   // Try to compact before rotating
-	RequireConfirm   bool    `toml:"require_confirm"`     // Require user confirmation before rotating
+	Enabled              bool    `toml:"enabled"`                // Master toggle for context rotation
+	WarningThreshold     float64 `toml:"warning_threshold"`      // 0.0-1.0, warn when context usage exceeds this
+	RotateThreshold      float64 `toml:"rotate_threshold"`       // 0.0-1.0, rotate agent when usage exceeds this
+	SummaryMaxTokens     int     `toml:"summary_max_tokens"`     // Max tokens for handoff summary
+	MinSessionAgeSec     int     `toml:"min_session_age_sec"`    // Don't rotate agents younger than this
+	TryCompactFirst      bool    `toml:"try_compact_first"`      // Try to compact before rotating
+	RequireConfirm       bool    `toml:"require_confirm"`        // Require user confirmation before rotating
+	ConfirmTimeoutSec    int     `toml:"confirm_timeout_sec"`    // Seconds to wait for confirmation (0 = no auto-rotate)
+	DefaultConfirmAction string  `toml:"default_confirm_action"` // Action if timeout expires: "rotate", "ignore", "compact"
 }
 
 // DefaultContextRotationConfig returns sensible defaults for context rotation
 func DefaultContextRotationConfig() ContextRotationConfig {
 	return ContextRotationConfig{
-		Enabled:          true,
-		WarningThreshold: 0.80,  // Warn at 80%
-		RotateThreshold:  0.95,  // Rotate at 95%
-		SummaryMaxTokens: 2000,  // 2000 tokens for handoff summary
-		MinSessionAgeSec: 300,   // 5 minutes minimum session age
-		TryCompactFirst:  true,  // Try compaction before rotation
-		RequireConfirm:   false, // Don't require confirmation by default
+		Enabled:              true,
+		WarningThreshold:     0.80,     // Warn at 80%
+		RotateThreshold:      0.95,     // Rotate at 95%
+		SummaryMaxTokens:     2000,     // 2000 tokens for handoff summary
+		MinSessionAgeSec:     300,      // 5 minutes minimum session age
+		TryCompactFirst:      true,     // Try compaction before rotation
+		RequireConfirm:       false,    // Don't require confirmation by default
+		ConfirmTimeoutSec:    60,       // 60 seconds timeout for confirmation
+		DefaultConfirmAction: "rotate", // Auto-rotate on timeout
 	}
 }
 
@@ -412,6 +472,13 @@ func ValidateContextRotationConfig(cfg *ContextRotationConfig) error {
 	}
 	if cfg.MinSessionAgeSec < 0 {
 		return fmt.Errorf("min_session_age_sec must be non-negative, got %d", cfg.MinSessionAgeSec)
+	}
+	if cfg.ConfirmTimeoutSec < 0 {
+		return fmt.Errorf("confirm_timeout_sec must be non-negative, got %d", cfg.ConfirmTimeoutSec)
+	}
+	validActions := map[string]bool{"rotate": true, "ignore": true, "compact": true, "": true}
+	if !validActions[cfg.DefaultConfirmAction] {
+		return fmt.Errorf("default_confirm_action must be 'rotate', 'ignore', or 'compact', got %q", cfg.DefaultConfirmAction)
 	}
 	return nil
 }
@@ -436,10 +503,182 @@ type GeminiSetupConfig struct {
 func DefaultGeminiSetupConfig() GeminiSetupConfig {
 	return GeminiSetupConfig{
 		AutoSelectProModel:        true,  // Select Pro by default
-		ReadyTimeoutSeconds:       30,    // 30 seconds to wait for ready
-		ModelSelectTimeoutSeconds: 10,    // 10 seconds for model menu
+		ReadyTimeoutSeconds:       60,    // 60 seconds to wait for ready (increased from 30 for slower networks)
+		ModelSelectTimeoutSeconds: 20,    // 20 seconds for model menu (increased from 10 for reliability)
 		Verbose:                   false, // Quiet by default
 	}
+}
+
+// SessionRecoveryConfig holds configuration for smart session recovery context injection.
+// This is used to provide agents with context when they start a new session.
+type SessionRecoveryConfig struct {
+	Enabled             bool `toml:"enabled"`               // Master toggle for recovery context injection
+	IncludeAgentMail    bool `toml:"include_agent_mail"`    // Include recent Agent Mail messages
+	IncludeCMMemories   bool `toml:"include_cm_memories"`   // Include CM procedural memories
+	IncludeBeadsContext bool `toml:"include_beads_context"` // Include BV task status
+	MaxRecoveryTokens   int  `toml:"max_recovery_tokens"`   // Cap recovery context size
+	AutoInjectOnSpawn   bool `toml:"auto_inject_on_spawn"`  // Send automatically on spawn
+	StaleThresholdHours int  `toml:"stale_threshold_hours"` // Ignore context older than this
+	MaxCMRules          int  `toml:"max_cm_rules"`          // Max CM rules to include (default: 10)
+	MaxCMSnippets       int  `toml:"max_cm_snippets"`       // Max CM history snippets (default: 3)
+}
+
+// DefaultSessionRecoveryConfig returns sensible defaults for session recovery.
+func DefaultSessionRecoveryConfig() SessionRecoveryConfig {
+	return SessionRecoveryConfig{
+		Enabled:             true, // Enabled by default
+		IncludeAgentMail:    true, // Include Agent Mail messages
+		IncludeCMMemories:   true, // Include CM procedural memories
+		IncludeBeadsContext: true, // Include bead/task context
+		MaxRecoveryTokens:   2000, // Token budget for recovery context
+		AutoInjectOnSpawn:   true, // Inject on spawn by default
+		StaleThresholdHours: 24,   // Consider context up to 24 hours old
+		MaxCMRules:          10,   // Max CM rules to include
+		MaxCMSnippets:       3,    // Max CM history snippets
+	}
+}
+
+// CleanupConfig holds configuration for automatic temp file cleanup.
+// NTM can accumulate temp files in /tmp from tests, atomic writes, and
+// other operations. This config controls automatic cleanup on startup.
+type CleanupConfig struct {
+	AutoCleanOnStartup bool `toml:"auto_clean_on_startup"` // Clean stale temp files on startup
+	MaxAgeHours        int  `toml:"max_age_hours"`         // Hours before a temp file is considered stale
+	Verbose            bool `toml:"verbose"`               // Log cleanup operations
+}
+
+// DefaultCleanupConfig returns sensible defaults for temp file cleanup.
+func DefaultCleanupConfig() CleanupConfig {
+	return CleanupConfig{
+		AutoCleanOnStartup: true, // Clean old temp files on startup
+		MaxAgeHours:        24,   // Consider files older than 24h as stale
+		Verbose:            false,
+	}
+}
+
+// FileReservationConfig holds configuration for automatic file reservation via Agent Mail.
+// When enabled, NTM monitors pane output for file edits and automatically reserves
+// those files in Agent Mail, preventing other agents from conflicting edits.
+type FileReservationConfig struct {
+	Enabled               bool `toml:"enabled"`                   // Master toggle for auto file reservation
+	AutoReserve           bool `toml:"auto_reserve"`              // Automatically reserve on edit detection
+	AutoReleaseIdleMin    int  `toml:"auto_release_idle_minutes"` // Release reservations after this idle time
+	NotifyOnConflict      bool `toml:"notify_on_conflict"`        // Show notification when conflict detected
+	ExtendOnActivity      bool `toml:"extend_on_activity"`        // Extend TTL while agent is actively editing
+	DefaultTTLMin         int  `toml:"default_ttl_minutes"`       // Default TTL for reservations
+	PollIntervalSec       int  `toml:"poll_interval_seconds"`     // How often to poll pane output for edits
+	CaptureLinesForDetect int  `toml:"capture_lines"`             // Lines of output to scan for file edits
+	Debug                 bool `toml:"debug"`                     // Enable debug logging
+}
+
+// DefaultFileReservationConfig returns sensible defaults for file reservation.
+func DefaultFileReservationConfig() FileReservationConfig {
+	return FileReservationConfig{
+		Enabled:               true,  // Enabled by default (when Agent Mail is available)
+		AutoReserve:           true,  // Automatically reserve detected edits
+		AutoReleaseIdleMin:    10,    // Release after 10 minutes of inactivity
+		NotifyOnConflict:      true,  // Notify user on conflicts
+		ExtendOnActivity:      true,  // Extend TTL while actively editing
+		DefaultTTLMin:         15,    // 15-minute reservation TTL
+		PollIntervalSec:       10,    // Poll every 10 seconds
+		CaptureLinesForDetect: 100,   // Scan last 100 lines for file patterns
+		Debug:                 false, // Debug logging disabled by default
+	}
+}
+
+// ValidateFileReservationConfig validates the file reservation configuration.
+func ValidateFileReservationConfig(cfg *FileReservationConfig) error {
+	if cfg.AutoReleaseIdleMin < 1 && cfg.AutoReleaseIdleMin != 0 {
+		return fmt.Errorf("auto_release_idle_minutes must be 0 (disabled) or at least 1, got %d", cfg.AutoReleaseIdleMin)
+	}
+	if cfg.DefaultTTLMin < 1 {
+		return fmt.Errorf("default_ttl_minutes must be at least 1, got %d", cfg.DefaultTTLMin)
+	}
+	if cfg.PollIntervalSec < 1 {
+		return fmt.Errorf("poll_interval_seconds must be at least 1, got %d", cfg.PollIntervalSec)
+	}
+	if cfg.CaptureLinesForDetect < 10 {
+		return fmt.Errorf("capture_lines must be at least 10, got %d", cfg.CaptureLinesForDetect)
+	}
+	return nil
+}
+
+// MemoryConfig holds configuration for CASS Memory (cm) integration.
+// When enabled, NTM can query the memory system for relevant context
+// before starting tasks and include learned rules in session recovery.
+type MemoryConfig struct {
+	Enabled             bool `toml:"enabled"`               // Master toggle for memory integration
+	IncludeInRecovery   bool `toml:"include_in_recovery"`   // Include memory context in session recovery
+	MaxRules            int  `toml:"max_rules"`             // Maximum number of rules to inject
+	IncludeAntiPatterns bool `toml:"include_anti_patterns"` // Include anti-patterns in context
+	IncludeHistory      bool `toml:"include_history"`       // Include historical snippets
+	QueryTimeoutSeconds int  `toml:"query_timeout_seconds"` // Timeout for cm command
+}
+
+// DefaultMemoryConfig returns sensible defaults for memory integration.
+func DefaultMemoryConfig() MemoryConfig {
+	return MemoryConfig{
+		Enabled:             true, // Enabled by default (when cm is available)
+		IncludeInRecovery:   true, // Include in session recovery context
+		MaxRules:            10,   // Cap number of rules to inject
+		IncludeAntiPatterns: true, // Include anti-patterns by default
+		IncludeHistory:      true, // Include historical snippets
+		QueryTimeoutSeconds: 5,    // 5 second timeout for cm queries
+	}
+}
+
+// ValidateMemoryConfig validates the memory configuration.
+func ValidateMemoryConfig(cfg *MemoryConfig) error {
+	if cfg.MaxRules < 0 {
+		return fmt.Errorf("max_rules must be non-negative, got %d", cfg.MaxRules)
+	}
+	if cfg.QueryTimeoutSeconds < 1 {
+		return fmt.Errorf("query_timeout_seconds must be at least 1, got %d", cfg.QueryTimeoutSeconds)
+	}
+	return nil
+}
+
+// ValidateDCGConfig validates the DCG integration configuration.
+func ValidateDCGConfig(cfg *DCGConfig) error {
+	if cfg == nil {
+		return nil
+	}
+
+	if cfg.BinaryPath != "" {
+		path := ExpandHome(cfg.BinaryPath)
+		info, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("binary_path: %w", err)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("binary_path: %q is a directory", path)
+		}
+	}
+
+	if cfg.AuditLog != "" {
+		auditPath := ExpandHome(cfg.AuditLog)
+		dir := filepath.Dir(auditPath)
+		info, err := os.Stat(dir)
+		if err != nil {
+			return fmt.Errorf("audit_log: %w", err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("audit_log: %q is not a directory", dir)
+		}
+		if !dirWritable(info) {
+			return fmt.Errorf("audit_log: directory not writable: %s", dir)
+		}
+	}
+
+	return nil
+}
+
+func dirWritable(info os.FileInfo) bool {
+	if info == nil {
+		return false
+	}
+	mode := info.Mode().Perm()
+	return mode&0200 != 0 || mode&0020 != 0 || mode&0002 != 0
 }
 
 // PaletteCmd represents a command in the palette
@@ -473,6 +712,273 @@ type AgentMailConfig struct {
 	ProgramName  string `toml:"program_name"`  // Program identifier for registration
 }
 
+// IntegrationsConfig holds external tool integration settings.
+type IntegrationsConfig struct {
+	DCG           DCGConfig           `toml:"dcg"`
+	CAAM          CAAMConfig          `toml:"caam"`           // CAAM (Coding Agent Account Manager) integration
+	RCH           RCHConfig           `toml:"rch"`            // RCH (Remote Compilation Helper) integration
+	Caut          CautConfig          `toml:"caut"`           // caut (Cloud API Usage Tracker) integration
+	ProcessTriage ProcessTriageConfig `toml:"process_triage"` // pt (process_triage) Bayesian health classification
+	Rano          RanoConfig          `toml:"rano"`           // rano network observer for per-agent API tracking
+}
+
+// DCGConfig holds configuration for the DCG (destructive_commit_guard) integration.
+type DCGConfig struct {
+	Enabled         bool     `toml:"enabled"`
+	BinaryPath      string   `toml:"binary_path"`
+	CustomBlocklist []string `toml:"custom_blocklist"`
+	CustomWhitelist []string `toml:"custom_whitelist"`
+	AuditLog        string   `toml:"audit_log"`
+	AllowOverride   bool     `toml:"allow_override"`
+}
+
+// AssignConfig holds configuration for the ntm assign command
+type AssignConfig struct {
+	Strategy string `toml:"strategy"` // Default strategy: balanced, speed, quality, dependency, round-robin
+}
+
+// ValidAssignStrategies are the recognized assignment strategies
+var ValidAssignStrategies = []string{"balanced", "speed", "quality", "dependency", "round-robin"}
+
+// IsValidStrategy returns true if the strategy is recognized
+func IsValidStrategy(strategy string) bool {
+	for _, s := range ValidAssignStrategies {
+		if s == strategy {
+			return true
+		}
+	}
+	return false
+}
+
+// DefaultAssignConfig returns the default assign configuration
+func DefaultAssignConfig() AssignConfig {
+	return AssignConfig{
+		Strategy: "balanced",
+	}
+}
+
+// DefaultIntegrationsConfig returns sensible defaults for integrations.
+func DefaultIntegrationsConfig() IntegrationsConfig {
+	return IntegrationsConfig{
+		DCG: DCGConfig{
+			Enabled:         false,
+			BinaryPath:      "",
+			CustomBlocklist: nil,
+			CustomWhitelist: nil,
+			AuditLog:        "",
+			AllowOverride:   true,
+		},
+		CAAM:          DefaultCAAMConfig(),
+		RCH:           DefaultRCHConfig(),
+		Caut:          DefaultCautConfig(),
+		ProcessTriage: DefaultProcessTriageConfig(),
+		Rano:          DefaultRanoConfig(),
+	}
+}
+
+// CAAMConfig holds configuration for CAAM (Coding Agent Account Manager) integration.
+// CAAM provides automatic account rotation when rate limits are hit.
+type CAAMConfig struct {
+	Enabled           bool     `toml:"enabled"`             // Enable CAAM account management
+	BinaryPath        string   `toml:"binary_path"`         // Path to caam binary (optional, defaults to PATH lookup)
+	AutoRotate        bool     `toml:"auto_rotate"`         // Enable automatic account rotation on rate limit
+	Providers         []string `toml:"providers"`           // Providers to manage (empty = all available)
+	RateLimitPatterns []string `toml:"rate_limit_patterns"` // Custom rate limit detection patterns
+	AccountCooldown   int      `toml:"account_cooldown"`    // Cooldown before retrying same account (seconds)
+	AlertThreshold    int      `toml:"alert_threshold"`     // Alert threshold (percentage of limit)
+}
+
+// DefaultCAAMConfig returns sensible defaults for CAAM integration.
+func DefaultCAAMConfig() CAAMConfig {
+	return CAAMConfig{
+		Enabled:           true,                                   // Enabled by default (when caam is available)
+		BinaryPath:        "",                                     // Default to PATH lookup
+		AutoRotate:        true,                                   // Auto-rotate on rate limit by default
+		Providers:         []string{"claude", "openai", "gemini"}, // Manage all major providers
+		RateLimitPatterns: nil,                                    // Use built-in patterns
+		AccountCooldown:   300,                                    // 5 minute cooldown
+		AlertThreshold:    80,                                     // Alert at 80% of limit
+	}
+}
+
+// RCHConfig holds configuration for RCH (Remote Compilation Helper) integration.
+// RCH provides build offloading to remote workers for faster compilation.
+type RCHConfig struct {
+	Enabled           bool     `toml:"enabled"`            // Enable RCH build offloading
+	BinaryPath        string   `toml:"binary_path"`        // Path to rch binary (optional, defaults to PATH lookup)
+	MinBuildTime      int      `toml:"min_build_time"`     // Minimum build time (seconds) to consider remote; builds faster than this run locally
+	InterceptPatterns []string `toml:"intercept_patterns"` // Commands to intercept (regex patterns)
+	FallbackLocal     bool     `toml:"fallback_local"`     // Fallback to local build on RCH failure
+	ShowLocation      bool     `toml:"show_location"`      // Show build location in output
+	PreferredWorker   string   `toml:"preferred_worker"`   // Worker preference (by name or "auto")
+}
+
+// DefaultRCHConfig returns sensible defaults for RCH integration.
+func DefaultRCHConfig() RCHConfig {
+	return RCHConfig{
+		Enabled:      true, // Enabled by default (when rch is available)
+		BinaryPath:   "",   // Default to PATH lookup
+		MinBuildTime: 10,   // Only offload builds expected to take 10+ seconds
+		InterceptPatterns: []string{
+			"^cargo (build|test|check)",
+			"^go (build|test)",
+			"^npm run build",
+			"^make",
+		},
+		FallbackLocal:   true,   // Fallback to local if remote fails
+		ShowLocation:    true,   // Show where build ran
+		PreferredWorker: "auto", // Auto-select best worker
+	}
+}
+
+// CautConfig holds configuration for caut (Cloud API Usage Tracker) integration.
+// caut tracks API usage, quotas, and spending across cloud providers.
+type CautConfig struct {
+	Enabled          bool     `toml:"enabled"`            // Enable caut usage tracking integration
+	BinaryPath       string   `toml:"binary_path"`        // Path to caut binary (optional, defaults to PATH lookup)
+	PollInterval     int      `toml:"poll_interval"`      // Polling interval in seconds
+	AlertThreshold   int      `toml:"alert_threshold"`    // Alert threshold (percentage of quota)
+	Providers        []string `toml:"providers"`          // Providers to track (empty = all available)
+	PerAgentTracking bool     `toml:"per_agent_tracking"` // Enable per-agent usage attribution
+	Currency         string   `toml:"currency"`           // Cost display currency
+}
+
+// DefaultCautConfig returns sensible defaults for caut integration.
+func DefaultCautConfig() CautConfig {
+	return CautConfig{
+		Enabled:          true,  // Enabled by default (when caut is available)
+		BinaryPath:       "",    // Default to PATH lookup
+		PollInterval:     60,    // Poll every 60 seconds
+		AlertThreshold:   80,    // Alert at 80% quota usage
+		Providers:        nil,   // Track all available providers
+		PerAgentTracking: true,  // Enable per-agent tracking if supported
+		Currency:         "USD", // Default to USD
+	}
+}
+
+// ProcessTriageConfig holds configuration for process_triage (pt) integration.
+// pt uses Bayesian classification to identify useful, abandoned, and zombie processes.
+type ProcessTriageConfig struct {
+	Enabled        bool   `toml:"enabled"`         // Enable process triage integration
+	BinaryPath     string `toml:"binary_path"`     // Path to pt binary (optional, defaults to PATH lookup)
+	CheckInterval  int    `toml:"check_interval"`  // How often to check processes (seconds)
+	IdleThreshold  int    `toml:"idle_threshold"`  // Seconds of idle before considering abandoned
+	StuckThreshold int    `toml:"stuck_threshold"` // Seconds stuck before considering zombie
+	OnStuck        string `toml:"on_stuck"`        // Action when stuck: "alert", "kill", "ignore"
+	UseRanoData    bool   `toml:"use_rano_data"`   // Use rano network data to improve classification
+}
+
+// DefaultProcessTriageConfig returns sensible defaults for process_triage integration.
+func DefaultProcessTriageConfig() ProcessTriageConfig {
+	return ProcessTriageConfig{
+		Enabled:        true,    // Enabled by default (when pt is available)
+		BinaryPath:     "",      // Default to PATH lookup
+		CheckInterval:  30,      // Check every 30 seconds
+		IdleThreshold:  300,     // 5 minutes idle = abandoned candidate
+		StuckThreshold: 600,     // 10 minutes stuck = zombie candidate
+		OnStuck:        "alert", // Alert by default, don't auto-kill
+		UseRanoData:    true,    // Use rano data when available
+	}
+}
+
+// ValidateProcessTriageConfig validates the process_triage configuration.
+func ValidateProcessTriageConfig(cfg *ProcessTriageConfig) error {
+	if cfg == nil {
+		return nil
+	}
+
+	// Skip validation for unconfigured/zero-valued configs (use defaults)
+	if !cfg.Enabled && cfg.CheckInterval == 0 && cfg.IdleThreshold == 0 && cfg.StuckThreshold == 0 && cfg.OnStuck == "" {
+		return nil
+	}
+
+	if cfg.BinaryPath != "" {
+		path := ExpandHome(cfg.BinaryPath)
+		info, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("binary_path: %w", err)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("binary_path: %q is a directory", path)
+		}
+	}
+
+	if cfg.CheckInterval < 5 {
+		return fmt.Errorf("check_interval must be at least 5 seconds, got %d", cfg.CheckInterval)
+	}
+
+	if cfg.IdleThreshold < 30 {
+		return fmt.Errorf("idle_threshold must be at least 30 seconds, got %d", cfg.IdleThreshold)
+	}
+
+	if cfg.StuckThreshold < cfg.IdleThreshold {
+		return fmt.Errorf("stuck_threshold (%d) must be >= idle_threshold (%d)", cfg.StuckThreshold, cfg.IdleThreshold)
+	}
+
+	validActions := map[string]bool{"alert": true, "kill": true, "ignore": true}
+	if !validActions[cfg.OnStuck] {
+		return fmt.Errorf("on_stuck must be 'alert', 'kill', or 'ignore', got %q", cfg.OnStuck)
+	}
+
+	return nil
+}
+
+// RanoConfig holds configuration for the rano network observer integration.
+// rano monitors network activity per process, enabling per-agent API tracking.
+type RanoConfig struct {
+	Enabled        bool     `toml:"enabled"`          // Enable rano network monitoring integration
+	BinaryPath     string   `toml:"binary_path"`      // Path to rano binary (optional, defaults to PATH lookup)
+	PollIntervalMs int      `toml:"poll_interval_ms"` // Polling interval in milliseconds
+	Providers      []string `toml:"providers"`        // Track these providers (empty = all known: anthropic, openai, google)
+	PersistHistory bool     `toml:"persist_history"`  // Persist historical network data
+	HistoryDays    int      `toml:"history_days"`     // Days to retain historical data
+}
+
+// DefaultRanoConfig returns sensible defaults for rano integration.
+func DefaultRanoConfig() RanoConfig {
+	return RanoConfig{
+		Enabled:        true,                                      // Enabled by default (when rano is available)
+		BinaryPath:     "",                                        // Default to PATH lookup
+		PollIntervalMs: 1000,                                      // Poll every second
+		Providers:      []string{"anthropic", "openai", "google"}, // Track major AI providers
+		PersistHistory: true,                                      // Keep historical data
+		HistoryDays:    7,                                         // Retain for a week
+	}
+}
+
+// ValidateRanoConfig validates the rano configuration.
+func ValidateRanoConfig(cfg *RanoConfig) error {
+	if cfg == nil {
+		return nil
+	}
+
+	// Skip validation for unconfigured/zero-valued configs (use defaults)
+	if !cfg.Enabled && cfg.PollIntervalMs == 0 && len(cfg.Providers) == 0 {
+		return nil
+	}
+
+	if cfg.BinaryPath != "" {
+		path := ExpandHome(cfg.BinaryPath)
+		info, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("binary_path: %w", err)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("binary_path: %q is a directory", path)
+		}
+	}
+
+	if cfg.PollIntervalMs < 100 {
+		return fmt.Errorf("poll_interval_ms must be at least 100ms, got %d", cfg.PollIntervalMs)
+	}
+
+	if cfg.HistoryDays < 0 {
+		return fmt.Errorf("history_days must be non-negative, got %d", cfg.HistoryDays)
+	}
+
+	return nil
+}
+
 // ModelsConfig holds model alias configuration for each agent type
 type ModelsConfig struct {
 	DefaultClaude string            `toml:"default_claude"` // Default model for Claude
@@ -497,12 +1003,12 @@ func DefaultModels() ModelsConfig {
 			"fast":      "claude-sonnet-4-20250514",
 		},
 		Codex: map[string]string{
-			"gpt4":   "gpt-4",
-			"gpt5":   "gpt-5.2-codex",
-			"o1":     "o1",
-			"o3":     "o3",
-			"turbo":  "gpt-4-turbo",
-			"codex":  "gpt-5.2-codex",
+			"gpt4":  "gpt-4",
+			"gpt5":  "gpt-5.2-codex",
+			"o1":    "o1",
+			"o3":    "o3",
+			"turbo": "gpt-4-turbo",
+			"codex": "gpt-5.2-codex",
 		},
 		Gemini: map[string]string{
 			"pro":    "gemini-3-pro-preview",
@@ -587,7 +1093,8 @@ func DefaultProjectsBase() string {
 		}
 		return filepath.Join(home, "Developer")
 	}
-	return "/data/projects"
+	// Linux/other: use /tmp to avoid polluting project directories
+	return os.TempDir()
 }
 
 // findPaletteMarkdown searches for a command_palette.md file in standard locations
@@ -725,12 +1232,14 @@ func Default() *Config {
 	}
 
 	cfg := &Config{
-		ProjectsBase: projectsBase,
-		Agents:       DefaultAgentTemplates(),
+		ProjectsBase:       projectsBase,
+		SuggestionsEnabled: true,
+		Agents:             DefaultAgentTemplates(),
 		Tmux: TmuxConfig{
 			DefaultPanes: 10,
 			PaletteKey:   "F6",
 		},
+		Robot: DefaultRobotConfig(),
 		AgentMail: AgentMailConfig{
 			Enabled:      true,
 			URL:          DefaultAgentMailURL,
@@ -738,6 +1247,7 @@ func Default() *Config {
 			AutoRegister: true,
 			ProgramName:  "ntm",
 		},
+		Integrations:    DefaultIntegrationsConfig(),
 		Models:          DefaultModels(),
 		Alerts:          DefaultAlertsConfig(),
 		Checkpoints:     DefaultCheckpointsConfig(),
@@ -750,6 +1260,12 @@ func Default() *Config {
 		Rotation:        DefaultRotationConfig(),
 		GeminiSetup:     DefaultGeminiSetupConfig(),
 		ContextRotation: DefaultContextRotationConfig(),
+		SessionRecovery: DefaultSessionRecoveryConfig(),
+		Cleanup:         DefaultCleanupConfig(),
+		FileReservation: DefaultFileReservationConfig(),
+		Memory:          DefaultMemoryConfig(),
+		Assign:          DefaultAssignConfig(),
+		Swarm:           DefaultSwarmConfig(),
 	}
 
 	// Try to load palette from markdown file
@@ -973,6 +1489,33 @@ func Load(path string) (*Config, error) {
 		cfg.GeminiSetup.AutoSelectProModel = autoSelect == "1" || autoSelect == "true"
 	}
 
+	// Session Recovery Env Overrides
+	if recoveryEnabled := os.Getenv("NTM_RECOVERY_ENABLED"); recoveryEnabled != "" {
+		cfg.SessionRecovery.Enabled = recoveryEnabled == "1" || recoveryEnabled == "true"
+	}
+	if includeAgentMail := os.Getenv("NTM_RECOVERY_INCLUDE_AGENT_MAIL"); includeAgentMail != "" {
+		cfg.SessionRecovery.IncludeAgentMail = includeAgentMail == "1" || includeAgentMail == "true"
+	}
+	if includeCM := os.Getenv("NTM_RECOVERY_INCLUDE_CM"); includeCM != "" {
+		cfg.SessionRecovery.IncludeCMMemories = includeCM == "1" || includeCM == "true"
+	}
+	if includeBeads := os.Getenv("NTM_RECOVERY_INCLUDE_BEADS"); includeBeads != "" {
+		cfg.SessionRecovery.IncludeBeadsContext = includeBeads == "1" || includeBeads == "true"
+	}
+	if maxTokens := os.Getenv("NTM_RECOVERY_MAX_TOKENS"); maxTokens != "" {
+		if n, err := strconv.Atoi(maxTokens); err == nil && n > 0 {
+			cfg.SessionRecovery.MaxRecoveryTokens = n
+		}
+	}
+	if autoInject := os.Getenv("NTM_RECOVERY_AUTO_INJECT"); autoInject != "" {
+		cfg.SessionRecovery.AutoInjectOnSpawn = autoInject == "1" || autoInject == "true"
+	}
+	if staleHours := os.Getenv("NTM_RECOVERY_STALE_HOURS"); staleHours != "" {
+		if n, err := strconv.Atoi(staleHours); err == nil && n > 0 {
+			cfg.SessionRecovery.StaleThresholdHours = n
+		}
+	}
+
 	// 4. Palette Precedence: Markdown > TOML > Default
 	// Default() already loaded Markdown if available.
 	// Unmarshal() might have overwritten cfg.Palette with TOML entries.
@@ -1177,6 +1720,15 @@ func Print(cfg *Config, w io.Writer) error {
 	fmt.Fprintf(w, "palette_key = %q\n", cfg.Tmux.PaletteKey)
 	fmt.Fprintln(w)
 
+	fmt.Fprintln(w, "[robot]")
+	fmt.Fprintln(w, "# Robot output defaults (JSON/TOON)")
+	if cfg.Robot.Verbosity != "" {
+		fmt.Fprintf(w, "verbosity = %q\n", cfg.Robot.Verbosity)
+	} else {
+		fmt.Fprintln(w, "# verbosity = \"default\"")
+	}
+	fmt.Fprintln(w)
+
 	fmt.Fprintln(w, "[agent_mail]")
 	fmt.Fprintln(w, "# Agent Mail server settings for multi-agent coordination")
 	fmt.Fprintln(w, "# Environment variables: AGENT_MAIL_URL, AGENT_MAIL_TOKEN, AGENT_MAIL_ENABLED")
@@ -1190,6 +1742,36 @@ func Print(cfg *Config, w io.Writer) error {
 	}
 	fmt.Fprintf(w, "auto_register = %t\n", cfg.AgentMail.AutoRegister)
 	fmt.Fprintf(w, "program_name = %q\n", cfg.AgentMail.ProgramName)
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "[integrations]")
+	fmt.Fprintln(w, "# External tool integrations (dcg, caam, caut, etc.)")
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "[integrations.dcg]")
+	fmt.Fprintln(w, "# Destructive Command Guard (dcg) settings")
+	fmt.Fprintf(w, "enabled = %t\n", cfg.Integrations.DCG.Enabled)
+	if cfg.Integrations.DCG.BinaryPath != "" {
+		fmt.Fprintf(w, "binary_path = %q\n", cfg.Integrations.DCG.BinaryPath)
+	} else {
+		fmt.Fprintln(w, "# binary_path = \"\"  # Auto-detect from PATH")
+	}
+	if len(cfg.Integrations.DCG.CustomBlocklist) > 0 {
+		fmt.Fprintf(w, "custom_blocklist = %s\n", renderTOMLStringArray(cfg.Integrations.DCG.CustomBlocklist))
+	} else {
+		fmt.Fprintln(w, "custom_blocklist = []")
+	}
+	if len(cfg.Integrations.DCG.CustomWhitelist) > 0 {
+		fmt.Fprintf(w, "custom_whitelist = %s\n", renderTOMLStringArray(cfg.Integrations.DCG.CustomWhitelist))
+	} else {
+		fmt.Fprintln(w, "custom_whitelist = []")
+	}
+	if cfg.Integrations.DCG.AuditLog != "" {
+		fmt.Fprintf(w, "audit_log = %q\n", cfg.Integrations.DCG.AuditLog)
+	} else {
+		fmt.Fprintln(w, "# audit_log = \"~/.ntm/dcg_audit.log\"")
+	}
+	fmt.Fprintf(w, "allow_override = %t\n", cfg.Integrations.DCG.AllowOverride)
 	fmt.Fprintln(w)
 
 	// Write models configuration
@@ -1653,6 +2235,30 @@ func GetValue(cfg *Config, path string) (interface{}, error) {
 		case "auto_register":
 			return cfg.AgentMail.AutoRegister, nil
 		}
+	case "integrations":
+		if len(parts) < 2 {
+			return cfg.Integrations, nil
+		}
+		switch parts[1] {
+		case "dcg":
+			if len(parts) < 3 {
+				return cfg.Integrations.DCG, nil
+			}
+			switch parts[2] {
+			case "enabled":
+				return cfg.Integrations.DCG.Enabled, nil
+			case "binary_path":
+				return cfg.Integrations.DCG.BinaryPath, nil
+			case "custom_blocklist":
+				return cfg.Integrations.DCG.CustomBlocklist, nil
+			case "custom_whitelist":
+				return cfg.Integrations.DCG.CustomWhitelist, nil
+			case "audit_log":
+				return cfg.Integrations.DCG.AuditLog, nil
+			case "allow_override":
+				return cfg.Integrations.DCG.AllowOverride, nil
+			}
+		}
 	case "alerts":
 		if len(parts) < 2 {
 			return cfg.Alerts, nil
@@ -1808,6 +2414,7 @@ func Diff(cfg *Config) []ConfigDiff {
 	addDiff("agents.claude", defaults.Agents.Claude, cfg.Agents.Claude)
 	addDiff("agents.codex", defaults.Agents.Codex, cfg.Agents.Codex)
 	addDiff("agents.gemini", defaults.Agents.Gemini, cfg.Agents.Gemini)
+	addDiff("agents.plugins", defaults.Agents.Plugins, cfg.Agents.Plugins)
 
 	// Tmux
 	addDiff("tmux.default_panes", defaults.Tmux.DefaultPanes, cfg.Tmux.DefaultPanes)
@@ -1817,6 +2424,14 @@ func Diff(cfg *Config) []ConfigDiff {
 	addDiff("agent_mail.enabled", defaults.AgentMail.Enabled, cfg.AgentMail.Enabled)
 	addDiff("agent_mail.url", defaults.AgentMail.URL, cfg.AgentMail.URL)
 	addDiff("agent_mail.auto_register", defaults.AgentMail.AutoRegister, cfg.AgentMail.AutoRegister)
+
+	// Integrations (DCG)
+	addDiff("integrations.dcg.enabled", defaults.Integrations.DCG.Enabled, cfg.Integrations.DCG.Enabled)
+	addDiff("integrations.dcg.binary_path", defaults.Integrations.DCG.BinaryPath, cfg.Integrations.DCG.BinaryPath)
+	addDiff("integrations.dcg.custom_blocklist", defaults.Integrations.DCG.CustomBlocklist, cfg.Integrations.DCG.CustomBlocklist)
+	addDiff("integrations.dcg.custom_whitelist", defaults.Integrations.DCG.CustomWhitelist, cfg.Integrations.DCG.CustomWhitelist)
+	addDiff("integrations.dcg.audit_log", defaults.Integrations.DCG.AuditLog, cfg.Integrations.DCG.AuditLog)
+	addDiff("integrations.dcg.allow_override", defaults.Integrations.DCG.AllowOverride, cfg.Integrations.DCG.AllowOverride)
 
 	// Alerts
 	addDiff("alerts.enabled", defaults.Alerts.Enabled, cfg.Alerts.Enabled)
@@ -1878,6 +2493,21 @@ func Validate(cfg *Config) []error {
 	// Validate health monitoring
 	if err := ValidateHealthConfig(&cfg.Health); err != nil {
 		errs = append(errs, fmt.Errorf("health: %w", err))
+	}
+
+	// Validate robot output config
+	if err := ValidateRobotOutputConfig(&cfg.Robot.Output); err != nil {
+		errs = append(errs, fmt.Errorf("robot.output: %w", err))
+	}
+
+	// Validate DCG integration config
+	if err := ValidateDCGConfig(&cfg.Integrations.DCG); err != nil {
+		errs = append(errs, fmt.Errorf("integrations.dcg: %w", err))
+	}
+
+	// Validate ProcessTriage integration config
+	if err := ValidateProcessTriageConfig(&cfg.Integrations.ProcessTriage); err != nil {
+		errs = append(errs, fmt.Errorf("integrations.process_triage: %w", err))
 	}
 
 	// Validate projects_base if set

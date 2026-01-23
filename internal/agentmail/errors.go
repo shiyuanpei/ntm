@@ -3,6 +3,7 @@ package agentmail
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Common errors returned by the Agent Mail client.
@@ -105,6 +106,17 @@ func IsReservationConflict(err error) bool {
 func mapJSONRPCError(rpcErr *JSONRPCError) error {
 	if rpcErr == nil {
 		return nil
+	}
+
+	// Map application-specific errors by message content (heuristic)
+	msg := strings.ToLower(rpcErr.Message)
+	switch {
+	case strings.Contains(msg, "agent not registered"):
+		return fmt.Errorf("%w: %s", ErrAgentNotRegistered, rpcErr.Message)
+	case strings.Contains(msg, "message not found"):
+		return fmt.Errorf("%w: %s", ErrMessageNotFound, rpcErr.Message)
+	case strings.Contains(msg, "conflict") || strings.Contains(msg, "reservation"):
+		return fmt.Errorf("%w: %s", ErrReservationConflict, rpcErr.Message)
 	}
 
 	// Map common JSON-RPC error codes

@@ -18,6 +18,7 @@ type TickerData struct {
 	ClaudeCount  int
 	CodexCount   int
 	GeminiCount  int
+	UserCount    int
 
 	// Alerts
 	CriticalAlerts int
@@ -30,9 +31,11 @@ type TickerData struct {
 	BlockedBeads    int
 
 	// Mail
-	UnreadMessages int
-	ActiveLocks    int
-	MailConnected  bool
+	UnreadMessages   int
+	ActiveLocks      int
+	MailConnected    bool
+	MailAvailable    bool // HTTP API reachable
+	MailArchiveFound bool // Archive directory exists (fallback detection)
 
 	// Checkpoints
 	CheckpointCount  int
@@ -172,7 +175,7 @@ func (m *TickerPanel) buildPlainSegments() []string {
 func (m *TickerPanel) buildPlainFleetSegment() string {
 	var parts []string
 
-	activeStatus := fmt.Sprintf("Fleet: %d/%d", m.data.ActiveAgents, m.data.TotalAgents)
+	activeStatus := fmt.Sprintf("Fleet: %d active / %d total", m.data.ActiveAgents, m.data.TotalAgents)
 	parts = append(parts, activeStatus)
 
 	if m.data.TotalAgents > 0 {
@@ -185,6 +188,9 @@ func (m *TickerPanel) buildPlainFleetSegment() string {
 		}
 		if m.data.GeminiCount > 0 {
 			agentParts = append(agentParts, fmt.Sprintf("G:%d", m.data.GeminiCount))
+		}
+		if m.data.UserCount > 0 {
+			agentParts = append(agentParts, fmt.Sprintf("U:%d", m.data.UserCount))
 		}
 		if len(agentParts) > 0 {
 			parts = append(parts, "("+strings.Join(agentParts, " ")+")")
@@ -234,23 +240,27 @@ func (m *TickerPanel) buildPlainBeadsSegment() string {
 
 // buildPlainMailSegment creates plain text mail segment
 func (m *TickerPanel) buildPlainMailSegment() string {
-	if !m.data.MailConnected {
-		return "Mail: offline"
+	// Connected via HTTP - full functionality available
+	if m.data.MailConnected {
+		var mailParts []string
+		if m.data.UnreadMessages > 0 {
+			mailParts = append(mailParts, fmt.Sprintf("%d unread", m.data.UnreadMessages))
+		} else {
+			mailParts = append(mailParts, "0 unread")
+		}
+		if m.data.ActiveLocks > 0 {
+			mailParts = append(mailParts, fmt.Sprintf("%d locks", m.data.ActiveLocks))
+		}
+		return "Mail: " + strings.Join(mailParts, " ")
 	}
 
-	var mailParts []string
-
-	if m.data.UnreadMessages > 0 {
-		mailParts = append(mailParts, fmt.Sprintf("%d unread", m.data.UnreadMessages))
-	} else {
-		mailParts = append(mailParts, "0 unread")
+	// Fallback: archive detected (Agent Mail running via MCP stdio, not HTTP)
+	if m.data.MailArchiveFound {
+		return "Mail: detected"
 	}
 
-	if m.data.ActiveLocks > 0 {
-		mailParts = append(mailParts, fmt.Sprintf("%d locks", m.data.ActiveLocks))
-	}
-
-	return "Mail: " + strings.Join(mailParts, " ")
+	// Neither HTTP nor archive found
+	return "Mail: offline"
 }
 
 // buildPlainCheckpointSegment creates plain text checkpoint segment
@@ -340,27 +350,27 @@ func (m *TickerPanel) styleVisibleText(text string) string {
 
 	// Style "Fleet:" label
 	fleetLabel := lipgloss.NewStyle().Foreground(t.Blue).Bold(true).Render("Fleet:")
-	result = strings.Replace(result, "Fleet:", fleetLabel, 1)
+	result = strings.Replace(result, "Fleet:", fleetLabel, -1)
 
 	// Style "Alerts:" label
 	alertsLabel := lipgloss.NewStyle().Foreground(t.Pink).Bold(true).Render("Alerts:")
-	result = strings.Replace(result, "Alerts:", alertsLabel, 1)
+	result = strings.Replace(result, "Alerts:", alertsLabel, -1)
 
 	// Style "Beads:" label
 	beadsLabel := lipgloss.NewStyle().Foreground(t.Green).Bold(true).Render("Beads:")
-	result = strings.Replace(result, "Beads:", beadsLabel, 1)
+	result = strings.Replace(result, "Beads:", beadsLabel, -1)
 
 	// Style "Mail:" label
 	mailLabel := lipgloss.NewStyle().Foreground(t.Lavender).Bold(true).Render("Mail:")
-	result = strings.Replace(result, "Mail:", mailLabel, 1)
+	result = strings.Replace(result, "Mail:", mailLabel, -1)
 
 	// Style "Ckpt:" label
 	ckptLabel := lipgloss.NewStyle().Foreground(t.Teal).Bold(true).Render("Ckpt:")
-	result = strings.Replace(result, "Ckpt:", ckptLabel, 1)
+	result = strings.Replace(result, "Ckpt:", ckptLabel, -1)
 
 	// Style "Bugs:" label
 	bugsLabel := lipgloss.NewStyle().Foreground(t.Peach).Bold(true).Render("Bugs:")
-	result = strings.Replace(result, "Bugs:", bugsLabel, 1)
+	result = strings.Replace(result, "Bugs:", bugsLabel, -1)
 
 	// Style separators
 	sepStyled := lipgloss.NewStyle().Foreground(t.Surface2).Render(" | ")
@@ -368,11 +378,15 @@ func (m *TickerPanel) styleVisibleText(text string) string {
 
 	// Style "OK" in green
 	okStyled := lipgloss.NewStyle().Foreground(t.Green).Render("OK")
-	result = strings.Replace(result, " OK", " "+okStyled, 1)
+	result = strings.Replace(result, " OK", " "+okStyled, -1)
 
 	// Style "offline" in dim
 	offlineStyled := lipgloss.NewStyle().Foreground(t.Overlay).Italic(true).Render("offline")
-	result = strings.Replace(result, "offline", offlineStyled, 1)
+	result = strings.Replace(result, "offline", offlineStyled, -1)
+
+	// Style "detected" in yellow (MCP-only mode, partial functionality)
+	detectedStyled := lipgloss.NewStyle().Foreground(t.Yellow).Render("detected")
+	result = strings.Replace(result, "detected", detectedStyled, -1)
 
 	return result
 }

@@ -18,6 +18,7 @@ import (
 
 // HealthOutput provides a focused project health summary for AI agents
 type HealthOutput struct {
+	RobotResponse
 	CheckedAt time.Time `json:"checked_at"`
 
 	// System-level health
@@ -79,11 +80,12 @@ const noOutputThreshold = 300 // 5 minutes
 // PrintHealth outputs a focused project health summary for AI consumption
 func PrintHealth() error {
 	output := HealthOutput{
-		CheckedAt:   time.Now().UTC(),
-		BvAvailable: bv.IsInstalled(),
-		BdAvailable: bv.IsBdInstalled(),
-		Sessions:    make(map[string]SessionHealthInfo),
-		Alerts:      []string{},
+		RobotResponse: NewRobotResponse(true),
+		CheckedAt:     time.Now().UTC(),
+		BvAvailable:   bv.IsInstalled(),
+		BdAvailable:   bv.IsBdInstalled(),
+		Sessions:      make(map[string]SessionHealthInfo),
+		Alerts:        []string{},
 	}
 
 	// Get system health
@@ -300,7 +302,9 @@ func getAgentHealth(session string, pane tmux.Pane) AgentHealthInfo {
 	health.OutputRate = calculateOutputRate(health.LastActivitySec)
 
 	// Capture recent output to detect error states
-	captured, err := tmux.CapturePaneOutput(pane.ID, 20)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	captured, err := tmux.CapturePaneOutputContext(ctx, pane.ID, 20)
 	if err == nil {
 		// Get agent type from pane info
 		agentType := agentTypeString(pane.Type)
@@ -449,7 +453,9 @@ func checkProcess(paneID string) *ProcessCheckResult {
 	}
 
 	// Capture pane output to check for exit indicators
-	output, err := tmux.CapturePaneOutput(paneID, 30)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	output, err := tmux.CapturePaneOutputContext(ctx, paneID, 30)
 	if err != nil {
 		result.Reason = "failed to capture pane output"
 		return result
@@ -570,7 +576,9 @@ func checkErrors(paneID string) *ErrorCheckResult {
 	}
 
 	// Capture pane output
-	output, err := tmux.CapturePaneOutput(paneID, 50)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	output, err := tmux.CapturePaneOutputContext(ctx, paneID, 50)
 	if err != nil {
 		result.Reason = "failed to capture pane output"
 		return result
@@ -712,12 +720,11 @@ func calculateHealthConfidence(check *HealthCheck) float64 {
 
 // SessionHealthOutput is the response format for --robot-health=SESSION
 type SessionHealthOutput struct {
-	Success   bool                 `json:"success"`
+	RobotResponse
 	Session   string               `json:"session"`
 	CheckedAt time.Time            `json:"checked_at"`
 	Agents    []SessionAgentHealth `json:"agents"`
 	Summary   SessionHealthSummary `json:"summary"`
-	Error     string               `json:"error,omitempty"`
 }
 
 // SessionAgentHealth contains health metrics for a single agent pane
@@ -745,25 +752,31 @@ type SessionHealthSummary struct {
 // PrintSessionHealth outputs per-agent health for a specific session
 func PrintSessionHealth(session string) error {
 	output := SessionHealthOutput{
-		Success:   true,
-		Session:   session,
-		CheckedAt: time.Now().UTC(),
-		Agents:    []SessionAgentHealth{},
-		Summary:   SessionHealthSummary{},
+		RobotResponse: NewRobotResponse(true),
+		Session:       session,
+		CheckedAt:     time.Now().UTC(),
+		Agents:        []SessionAgentHealth{},
+		Summary:       SessionHealthSummary{},
 	}
 
 	// Check if session exists
 	if !tmux.SessionExists(session) {
-		output.Success = false
-		output.Error = fmt.Sprintf("session '%s' not found", session)
+		output.RobotResponse = NewErrorResponse(
+			fmt.Errorf("session '%s' not found", session),
+			ErrCodeSessionNotFound,
+			"Use --robot-status to list available sessions",
+		)
 		return encodeJSON(output)
 	}
 
 	// Get panes in the session
 	panes, err := tmux.GetPanes(session)
 	if err != nil {
-		output.Success = false
-		output.Error = fmt.Sprintf("failed to get panes: %v", err)
+		output.RobotResponse = NewErrorResponse(
+			err,
+			ErrCodeInternalError,
+			"Check tmux session state",
+		)
 		return encodeJSON(output)
 	}
 
@@ -1787,7 +1800,7 @@ func (rm *RestartManager) trySoftRestart(ctx context.Context, paneID, agentType 
 			return result
 		case <-ticker.C:
 			// Check if agent is now idle
-			output, err := tmux.CapturePaneOutput(target, 5)
+			output, err := tmux.CapturePaneOutputContext(timeoutCtx, target, 5)
 			if err != nil {
 				continue
 			}
@@ -1842,7 +1855,7 @@ func (rm *RestartManager) tryHardRestart(ctx context.Context, paneID, agentType 
 		return result
 	case <-time.After(500 * time.Millisecond):
 	}
-	output, _ := tmux.CapturePaneOutput(target, 5)
+	output, _ := tmux.CapturePaneOutputContext(ctx, target, 5)
 
 	// If still not at prompt, try Ctrl+D
 	if !isShellPrompt(output) {
@@ -1877,7 +1890,7 @@ func (rm *RestartManager) tryHardRestart(ctx context.Context, paneID, agentType 
 	}
 
 	// Verify agent started
-	output, captureErr := tmux.CapturePaneOutput(target, 10)
+	output, captureErr := tmux.CapturePaneOutputContext(ctx, target, 10)
 	if captureErr != nil {
 		result.Reason = fmt.Sprintf("failed to capture output: %v", captureErr)
 		return result

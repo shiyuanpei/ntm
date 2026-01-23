@@ -11,6 +11,7 @@ import (
 	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/Dicklesworthstone/ntm/internal/bv"
+	"github.com/Dicklesworthstone/ntm/internal/integrations/pt"
 	status "github.com/Dicklesworthstone/ntm/internal/status"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
 	"github.com/Dicklesworthstone/ntm/internal/tokens"
@@ -260,6 +261,8 @@ type PaneTableRow struct {
 	ModelVariant     string
 	Title            string
 	Status           string
+	HealthClass      pt.Classification // Health classification from process_triage
+	HealthSince      time.Time         // When this health state started
 	ContextPct       float64
 	Model            string
 	Command          string
@@ -274,7 +277,7 @@ type PaneTableRow struct {
 }
 
 // BuildPaneTableRows hydrates pane table rows using live status, bead progress,
-// file change activity, and lightweight token velocity estimates.
+// file change activity, health states, and lightweight token velocity estimates.
 // The theme is used to assign per-agent border colors.
 func BuildPaneTableRows(
 	panes []tmux.Pane,
@@ -282,6 +285,7 @@ func BuildPaneTableRows(
 	paneStatus map[int]PaneStatus,
 	beads *bv.BeadsSummary,
 	fileChanges []tracker.RecordedFileChange,
+	healthStates map[string]*pt.AgentState,
 	tick int,
 	t theme.Theme,
 ) []PaneTableRow {
@@ -299,6 +303,7 @@ func BuildPaneTableRows(
 			ModelVariant:  pane.Variant,
 			Title:         pane.Title,
 			Status:        "unknown",
+			HealthClass:   pt.ClassUnknown,
 			Command:       pane.Command,
 			FileChanges:   changeCounts[pane.Title],
 			TokenVelocity: 0,
@@ -306,6 +311,17 @@ func BuildPaneTableRows(
 			Model:         ps.ContextModel,
 			IsCompacted:   ps.LastCompaction != nil,
 			BorderColor:   AgentBorderColor(string(pane.Type), t),
+		}
+
+		// Populate health classification from process_triage
+		if healthStates != nil {
+			if hs, ok := healthStates[pane.Title]; ok {
+				row.HealthClass = hs.Classification
+				row.HealthSince = hs.Since
+			} else if hs, ok := healthStates[pane.ID]; ok {
+				row.HealthClass = hs.Classification
+				row.HealthSince = hs.Since
+			}
 		}
 
 		row.CurrentBead = currentBeadForPane(pane, beads)
@@ -552,6 +568,37 @@ func RenderPaneRow(row PaneTableRow, dims LayoutDimensions, t theme.Theme) strin
 		parts = append(parts, statusStyle.Render(statusIcon))
 	}
 
+	// Health indicator from process_triage (useful/waiting=green, idle=yellow, stuck=red, zombie=black)
+	if dims.ShowStatusCol {
+		healthStyle := lipgloss.NewStyle()
+		var healthIcon string
+		switch row.HealthClass {
+		case pt.ClassUseful, pt.ClassWaiting:
+			healthIcon = "🟢"
+			healthStyle = healthStyle.Foreground(t.Green)
+		case pt.ClassIdle:
+			// Show yellow if idle for >5min
+			if !row.HealthSince.IsZero() && time.Since(row.HealthSince) > 5*time.Minute {
+				healthIcon = "🟡"
+				healthStyle = healthStyle.Foreground(t.Yellow)
+			} else {
+				healthIcon = "🟢"
+				healthStyle = healthStyle.Foreground(t.Green)
+			}
+		case pt.ClassStuck:
+			healthIcon = "🔴"
+			healthStyle = healthStyle.Foreground(t.Red)
+		case pt.ClassZombie:
+			healthIcon = "⚫"
+			healthStyle = healthStyle.Foreground(t.Overlay)
+		default:
+			// Unknown - show subtle dot
+			healthIcon = "·"
+			healthStyle = healthStyle.Foreground(t.Surface1)
+		}
+		parts = append(parts, healthStyle.Render(healthIcon))
+	}
+
 	// Title (flexible width)
 	titleWidth := dims.CardWidth - 16 // Base width minus fixed columns
 	if dims.ShowContextCol {
@@ -565,8 +612,10 @@ func RenderPaneRow(row PaneTableRow, dims LayoutDimensions, t theme.Theme) strin
 	}
 
 	title := row.Title
-	if len(title) > titleWidth {
-		title = layout.Truncate(title, titleWidth)
+	if lipgloss.Width(title) > titleWidth {
+		// Use smart truncation that preserves the agent suffix (e.g., __cc_1)
+		// so panes with the same project prefix remain visually distinguishable
+		title = layout.TruncatePaneTitle(title, titleWidth)
 	}
 	titleStyle := lipgloss.NewStyle().Foreground(t.Text)
 	if row.IsSelected {
@@ -844,7 +893,7 @@ func getStatusIconAndColor(state string, t theme.Theme, tick int) (string, lipgl
 // truncate shortens a string to maxLen with ellipsis.
 // Uses the standard single-character ellipsis "…" (U+2026).
 func truncate(s string, maxLen int) string {
-	return layout.Truncate(s, maxLen)
+	return layout.TruncateWidthDefault(s, maxLen)
 }
 
 // RenderTableHeader renders the header row for pane table

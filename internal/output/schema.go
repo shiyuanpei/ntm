@@ -65,16 +65,20 @@ type SessionResponse struct {
 
 // PaneResponse is the standard format for pane-related output
 type PaneResponse struct {
-	Index         int    `json:"index"`
-	Title         string `json:"title"`
-	Type          string `json:"type"`              // claude, codex, gemini, user
-	Variant       string `json:"variant,omitempty"` // model alias or persona name
-	Active        bool   `json:"active,omitempty"`
-	Width         int    `json:"width,omitempty"`
-	Height        int    `json:"height,omitempty"`
-	Command       string `json:"command,omitempty"`
-	Status        string `json:"status,omitempty"`          // idle, working, error
-	PromptDelayMs int64  `json:"prompt_delay_ms,omitempty"` // Stagger delay in milliseconds
+	Index          int     `json:"index"`
+	Title          string  `json:"title"`
+	Type           string  `json:"type"`              // claude, codex, gemini, user
+	Variant        string  `json:"variant,omitempty"` // model alias or persona name
+	Active         bool    `json:"active,omitempty"`
+	Width          int     `json:"width,omitempty"`
+	Height         int     `json:"height,omitempty"`
+	Command        string  `json:"command,omitempty"`
+	Status         string  `json:"status,omitempty"`          // idle, working, error
+	PromptDelayMs  int64   `json:"prompt_delay_ms,omitempty"` // Stagger delay in milliseconds
+	ContextTokens  int     `json:"context_tokens,omitempty"`
+	ContextLimit   int     `json:"context_limit,omitempty"`
+	ContextPercent float64 `json:"context_percent,omitempty"`
+	ContextModel   string  `json:"context_model,omitempty"`
 }
 
 // AgentCountsResponse is the standard format for agent counts
@@ -92,15 +96,25 @@ type StaggerConfig struct {
 	IntervalMs int64 `json:"interval_ms,omitempty"`
 }
 
+// AgentMailSpawnStatus represents Agent Mail registration status for a spawn operation
+type AgentMailSpawnStatus struct {
+	Available         bool              `json:"available"`
+	ProjectRegistered bool              `json:"project_registered"`
+	AgentsRegistered  int               `json:"agents_registered"`
+	AgentsFailed      int               `json:"agents_failed"`
+	AgentMap          map[string]string `json:"agent_map,omitempty"` // pane index -> agent name
+}
+
 // SpawnResponse is the output format for spawn command (with agents)
 type SpawnResponse struct {
 	TimestampedResponse
-	Session          string              `json:"session"`
-	Created          bool                `json:"created"`
-	WorkingDirectory string              `json:"working_directory,omitempty"`
-	Panes            []PaneResponse      `json:"panes"`
-	AgentCounts      AgentCountsResponse `json:"agent_counts"`
-	Stagger          *StaggerConfig      `json:"stagger,omitempty"`
+	Session          string                `json:"session"`
+	Created          bool                  `json:"created"`
+	WorkingDirectory string                `json:"working_directory,omitempty"`
+	Panes            []PaneResponse        `json:"panes"`
+	AgentCounts      AgentCountsResponse   `json:"agent_counts"`
+	Stagger          *StaggerConfig        `json:"stagger,omitempty"`
+	AgentMail        *AgentMailSpawnStatus `json:"agent_mail,omitempty"`
 }
 
 // CreateResponse is the output format for create command (basic session)
@@ -156,13 +170,28 @@ type SessionListItem struct {
 // StatusResponse is the output format for status command
 type StatusResponse struct {
 	TimestampedResponse
-	Session          string              `json:"session"`
-	Exists           bool                `json:"exists"`
-	Attached         bool                `json:"attached"`
-	WorkingDirectory string              `json:"working_directory"`
-	Panes            []PaneResponse      `json:"panes"`
-	AgentCounts      AgentCountsResponse `json:"agent_counts"`
-	AgentMail        *AgentMailStatus    `json:"agent_mail,omitempty"`
+	Session           string               `json:"session"`
+	Exists            bool                 `json:"exists"`
+	Attached          bool                 `json:"attached"`
+	WorkingDirectory  string               `json:"working_directory"`
+	Panes             []PaneResponse       `json:"panes"`
+	AgentCounts       AgentCountsResponse  `json:"agent_counts"`
+	AgentMail         *AgentMailStatus     `json:"agent_mail,omitempty"`
+	Handoff           *HandoffStatus       `json:"handoff,omitempty"`
+	Assignments       []AssignmentResponse `json:"assignments,omitempty"`
+	AssignmentStats   *AssignmentStats     `json:"assignment_stats,omitempty"`
+	AssignmentFilters *AssignmentFilters   `json:"assignment_filters,omitempty"`
+	AssignmentSummary *AssignmentSummary   `json:"assignment_summary,omitempty"`
+}
+
+// HandoffStatus represents the latest handoff for a session.
+type HandoffStatus struct {
+	Session    string `json:"session,omitempty"`
+	Goal       string `json:"goal,omitempty"`
+	Now        string `json:"now,omitempty"`
+	Path       string `json:"path,omitempty"`
+	AgeSeconds int64  `json:"age_seconds,omitempty"`
+	Status     string `json:"status,omitempty"`
 }
 
 // AgentMailStatus represents Agent Mail integration status for a session
@@ -222,4 +251,62 @@ type AnalyticsResponse struct {
 	TotalCharsSent int    `json:"total_chars_sent"`
 	TotalTokensEst int    `json:"total_tokens_estimated"`
 	ErrorCount     int    `json:"error_count"`
+}
+
+// AssignmentResponse represents a single bead-to-agent assignment
+type AssignmentResponse struct {
+	BeadID      string  `json:"bead_id"`
+	BeadTitle   string  `json:"bead_title"`
+	Pane        int     `json:"pane"`
+	AgentType   string  `json:"agent_type"`
+	AgentName   string  `json:"agent_name,omitempty"`
+	Status      string  `json:"status"`
+	AssignedAt  string  `json:"assigned_at"`
+	StartedAt   *string `json:"started_at,omitempty"`
+	CompletedAt *string `json:"completed_at,omitempty"`
+	FailedAt    *string `json:"failed_at,omitempty"`
+	FailReason  string  `json:"fail_reason,omitempty"`
+}
+
+// AssignmentsResponse is the output format for assignment tracking
+type AssignmentsResponse struct {
+	TimestampedResponse
+	Session     string               `json:"session"`
+	Assignments []AssignmentResponse `json:"assignments"`
+	Stats       AssignmentStats      `json:"stats"`
+}
+
+// AssignmentStats contains summary statistics for assignments
+type AssignmentStats struct {
+	Total      int `json:"total"`
+	Assigned   int `json:"assigned"`
+	Working    int `json:"working"`
+	Completed  int `json:"completed"`
+	Failed     int `json:"failed"`
+	Reassigned int `json:"reassigned"`
+}
+
+// AssignmentFilters represents active filters on assignment output
+type AssignmentFilters struct {
+	Status    string `json:"status,omitempty"`
+	AgentType string `json:"agent_type,omitempty"`
+	Pane      *int   `json:"pane,omitempty"`
+}
+
+// AssignmentStatsByAgent contains per-agent-type stats
+type AssignmentStatsByAgent struct {
+	AgentType string `json:"agent_type"`
+	Total     int    `json:"total"`
+	Working   int    `json:"working"`
+	Completed int    `json:"completed"`
+	Failed    int    `json:"failed"`
+}
+
+// AssignmentSummary provides comprehensive summary statistics
+type AssignmentSummary struct {
+	Total          int                      `json:"total"`
+	ByStatus       map[string]int           `json:"by_status"`
+	ByAgent        []AssignmentStatsByAgent `json:"by_agent"`
+	CompletionRate float64                  `json:"completion_rate"`
+	AvgDurationSec float64                  `json:"avg_duration_seconds,omitempty"`
 }

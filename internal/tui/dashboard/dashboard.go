@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -22,13 +24,16 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/cass"
 	"github.com/Dicklesworthstone/ntm/internal/checkpoint"
 	"github.com/Dicklesworthstone/ntm/internal/config"
+	ctxmon "github.com/Dicklesworthstone/ntm/internal/context"
 	"github.com/Dicklesworthstone/ntm/internal/health"
 	"github.com/Dicklesworthstone/ntm/internal/history"
+	"github.com/Dicklesworthstone/ntm/internal/integrations/pt"
 	"github.com/Dicklesworthstone/ntm/internal/robot"
 	"github.com/Dicklesworthstone/ntm/internal/scanner"
 	"github.com/Dicklesworthstone/ntm/internal/status"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
 	"github.com/Dicklesworthstone/ntm/internal/tokens"
+	"github.com/Dicklesworthstone/ntm/internal/tools"
 	"github.com/Dicklesworthstone/ntm/internal/tracker"
 	"github.com/Dicklesworthstone/ntm/internal/tui/components"
 	"github.com/Dicklesworthstone/ntm/internal/tui/dashboard/panels"
@@ -36,6 +41,7 @@ import (
 	"github.com/Dicklesworthstone/ntm/internal/tui/layout"
 	"github.com/Dicklesworthstone/ntm/internal/tui/styles"
 	"github.com/Dicklesworthstone/ntm/internal/tui/theme"
+	"github.com/Dicklesworthstone/ntm/internal/watcher"
 )
 
 // DashboardTickMsg is sent for animation updates
@@ -50,6 +56,7 @@ type StatusUpdateMsg struct {
 	Time     time.Time
 	Duration time.Duration
 	Err      error
+	Gen      uint64
 }
 
 // ConfigReloadMsg is sent when configuration changes
@@ -69,14 +76,33 @@ type ScanStatusMsg struct {
 	Totals   scanner.ScanTotals
 	Duration time.Duration
 	Err      error
+	Gen      uint64
 }
 
 // AgentMailUpdateMsg is sent when Agent Mail data is fetched
 type AgentMailUpdateMsg struct {
-	Available bool
-	Connected bool
-	Locks     int
-	LockInfo  []AgentMailLockInfo
+	Available    bool
+	Connected    bool
+	ArchiveFound bool // Fallback detection via archive directory
+	Locks        int
+	LockInfo     []AgentMailLockInfo
+	Gen          uint64
+}
+
+// AgentMailInboxSummaryMsg is sent when per-agent inbox summaries are fetched.
+type AgentMailInboxSummaryMsg struct {
+	Inboxes  map[string][]agentmail.InboxMessage // paneID -> messages
+	AgentMap map[string]string                   // paneID -> agent name
+	Err      error
+	Gen      uint64
+}
+
+// AgentMailInboxDetailMsg is sent when message bodies are fetched for a single agent.
+type AgentMailInboxDetailMsg struct {
+	PaneID   string
+	Messages []agentmail.InboxMessage
+	Err      error
+	Gen      uint64
 }
 
 // CassSelectMsg is sent when a CASS search result is selected
@@ -89,41 +115,48 @@ type BeadsUpdateMsg struct {
 	Summary bv.BeadsSummary
 	Ready   []bv.BeadPreview
 	Err     error
+	Gen     uint64
 }
 
 // AlertsUpdateMsg is sent when alerts are refreshed
 type AlertsUpdateMsg struct {
 	Alerts []alerts.Alert
 	Err    error
+	Gen    uint64
 }
 
 // SpawnUpdateMsg is sent when spawn state is updated
 type SpawnUpdateMsg struct {
 	Data panels.SpawnData
+	Gen  uint64
 }
 
 // MetricsUpdateMsg is sent when session metrics are updated
 type MetricsUpdateMsg struct {
 	Data panels.MetricsData
 	Err  error
+	Gen  uint64
 }
 
 // HistoryUpdateMsg is sent when command history is fetched
 type HistoryUpdateMsg struct {
 	Entries []history.HistoryEntry
 	Err     error
+	Gen     uint64
 }
 
 // FileChangeMsg is sent when file changes are detected
 type FileChangeMsg struct {
 	Changes []tracker.RecordedFileChange
 	Err     error
+	Gen     uint64
 }
 
 // CASSContextMsg is sent when relevant context is found
 type CASSContextMsg struct {
 	Hits []cass.SearchHit
 	Err  error
+	Gen  uint64
 }
 
 // HealthUpdateMsg is sent when agent health check completes
@@ -132,10 +165,17 @@ type HealthUpdateMsg struct {
 	Err    error
 }
 
+// PTHealthStatesMsg is sent when process_triage health states are fetched
+type PTHealthStatesMsg struct {
+	States map[string]*pt.AgentState
+	Gen    uint64
+}
+
 // RoutingUpdateMsg is sent when routing scores are fetched
 type RoutingUpdateMsg struct {
 	Scores map[string]RoutingScore // keyed by pane ID
 	Err    error
+	Gen    uint64
 }
 
 // CheckpointUpdateMsg is sent when checkpoint status is fetched
@@ -145,12 +185,47 @@ type CheckpointUpdateMsg struct {
 	LatestAge time.Duration // Age of latest checkpoint
 	Status    string        // "recent", "stale", "old", "none"
 	Err       error
+	Gen       uint64
+}
+
+// HandoffUpdateMsg is sent when handoff status is fetched
+type HandoffUpdateMsg struct {
+	Goal   string
+	Now    string
+	Age    time.Duration
+	Path   string
+	Status string
+	Err    error
+	Gen    uint64
 }
 
 // CheckpointCreatedMsg is sent when a new checkpoint is created
 type CheckpointCreatedMsg struct {
 	Checkpoint *checkpoint.Checkpoint
 	Err        error
+}
+
+// FileConflictMsg is sent when a file reservation conflict is detected
+type FileConflictMsg struct {
+	Conflict watcher.FileConflict
+}
+
+// DCGStatusUpdateMsg is sent when DCG status is fetched
+type DCGStatusUpdateMsg struct {
+	Enabled     bool   // Whether DCG is enabled in config
+	Available   bool   // Whether DCG binary is available
+	Version     string // DCG version string
+	Blocked     int    // Commands blocked this session
+	LastBlocked string // Last blocked command
+	Err         error
+	Gen         uint64
+}
+
+// PendingRotationsUpdateMsg is sent when pending rotations data is fetched
+type PendingRotationsUpdateMsg struct {
+	Pending []*ctxmon.PendingRotation
+	Err     error
+	Gen     uint64
 }
 
 // RoutingScore holds routing info for a single agent
@@ -176,10 +251,35 @@ const (
 	PanelDetail
 	PanelBeads
 	PanelAlerts
+	PanelConflicts // File reservation conflicts panel
 	PanelMetrics
 	PanelHistory
 	PanelSidebar
 	PanelCount // Total number of focusable panels
+)
+
+type refreshSource int
+
+const (
+	refreshSession refreshSource = iota
+	refreshStatus
+	refreshBeads
+	refreshAlerts
+	refreshMetrics
+	refreshHistory
+	refreshFiles
+	refreshCass
+	refreshScan
+	refreshCheckpoint
+	refreshHandoff
+	refreshSpawn
+	refreshAgentMail
+	refreshAgentMailInbox
+	refreshRouting
+	refreshDCG
+	refreshPendingRotations
+	refreshPTHealth
+	refreshSourceCount
 )
 
 // Model is the session dashboard model
@@ -223,6 +323,10 @@ type Model struct {
 	lastRefresh   time.Time
 	refreshPaused bool
 
+	// Refresh sequencing (prevents stale async updates)
+	refreshSeq  [refreshSourceCount]uint64
+	lastUpdated [refreshSourceCount]time.Time
+
 	// Subsystem refresh timers
 	lastPaneFetch        time.Time
 	lastContextFetch     time.Time
@@ -230,6 +334,7 @@ type Model struct {
 	lastBeadsFetch       time.Time
 	lastCassContextFetch time.Time
 	lastScanFetch        time.Time
+	lastHandoffFetch     time.Time
 
 	// Fetch state tracking to prevent pile-up
 	fetchingSession     bool
@@ -242,9 +347,11 @@ type Model struct {
 	fetchingHistory     bool
 	fetchingFileChanges bool
 	fetchingScan        bool
+	fetchingHandoff     bool
 	scanDisabled        bool // User toggled UBS scanning off
 	fetchingSpawn       bool
 	spawnActive         bool // Whether a spawn is currently active (for adaptive polling)
+	fetchingPTHealth    bool // Whether we're currently fetching process_triage health states
 
 	// Coalescing/cancellation for user-triggered refreshes
 	sessionFetchPending bool
@@ -264,6 +371,7 @@ type Model struct {
 	cassContextRefreshInterval time.Duration
 	scanRefreshInterval        time.Duration
 	checkpointRefreshInterval  time.Duration
+	handoffRefreshInterval     time.Duration
 	spawnRefreshInterval       time.Duration // How often to poll spawn state (faster when active)
 
 	// Pane output capture budgeting/caching
@@ -287,11 +395,20 @@ type Model struct {
 	tier layout.Tier
 
 	// Agent Mail integration
-	agentMailAvailable bool
-	agentMailConnected bool
-	agentMailLocks     int                 // Active file reservations
-	agentMailUnread    int                 // Unread message count (requires agent context)
-	agentMailLockInfo  []AgentMailLockInfo // Lock details for display
+	agentMailAvailable       bool
+	agentMailConnected       bool
+	agentMailArchiveFound    bool                // Fallback: archive directory exists
+	agentMailLocks           int                 // Active file reservations
+	agentMailUnread          int                 // Unread message count (requires agent context)
+	agentMailUrgent          int                 // Urgent unread count (subset of unread)
+	agentMailLockInfo        []AgentMailLockInfo // Lock details for display
+	agentMailInbox           map[string][]agentmail.InboxMessage
+	agentMailInboxErrors     map[string]error
+	agentMailAgents          map[string]string // paneID -> agent name
+	fetchingMailInbox        bool
+	lastMailInboxFetch       time.Time
+	mailInboxRefreshInterval time.Duration
+	showInboxDetails         bool
 
 	// Config watcher
 	configSub    chan *config.Config
@@ -309,14 +426,16 @@ type Model struct {
 	showHelp bool
 
 	// Panels
-	beadsPanel   *panels.BeadsPanel
-	alertsPanel  *panels.AlertsPanel
-	metricsPanel *panels.MetricsPanel
-	historyPanel *panels.HistoryPanel
-	cassPanel    *panels.CASSPanel
-	filesPanel   *panels.FilesPanel
-	tickerPanel  *panels.TickerPanel
-	spawnPanel   *panels.SpawnPanel
+	beadsPanel           *panels.BeadsPanel
+	alertsPanel          *panels.AlertsPanel
+	metricsPanel         *panels.MetricsPanel
+	historyPanel         *panels.HistoryPanel
+	cassPanel            *panels.CASSPanel
+	filesPanel           *panels.FilesPanel
+	tickerPanel          *panels.TickerPanel
+	spawnPanel           *panels.SpawnPanel
+	conflictsPanel       *panels.ConflictsPanel
+	rotationConfirmPanel *panels.RotationConfirmPanel
 
 	// Data for new panels
 	beadsSummary  bv.BeadsSummary
@@ -330,6 +449,15 @@ type Model struct {
 	cassContext   []cass.SearchHit
 	routingScores map[string]RoutingScore // keyed by pane ID
 
+	// Process triage health states (from pt.HealthMonitor)
+	healthStates map[string]*pt.AgentState // pane -> health state
+
+	// Pending rotation confirmations
+	pendingRotations    []*ctxmon.PendingRotation
+	pendingRotationsErr error
+	lastPendingFetch    time.Time
+	fetchingPendingRot  bool
+
 	// Checkpoint status
 	checkpointCount     int                    // Number of checkpoints for this session
 	latestCheckpoint    *checkpoint.Checkpoint // Most recent checkpoint
@@ -339,11 +467,30 @@ type Model struct {
 	checkpointError     error
 	lastSpawnFetch      time.Time
 
+	// Handoff status
+	handoffGoal   string
+	handoffNow    string
+	handoffAge    time.Duration
+	handoffPath   string
+	handoffStatus string
+	handoffError  error
+
 	// UBS bug scanner status
 	bugsCritical int  // Critical bugs from last scan
 	bugsWarning  int  // Warning bugs from last scan
 	bugsInfo     int  // Info bugs from last scan
 	bugsScanned  bool // Whether a scan has been run
+
+	// DCG (Destructive Command Guard) status
+	dcgEnabled         bool   // Whether DCG is enabled in config
+	dcgAvailable       bool   // Whether DCG binary is available
+	dcgVersion         string // DCG version string
+	dcgBlocked         int    // Commands blocked this session
+	dcgLastBlocked     string // Last blocked command (for tooltip)
+	dcgError           error  // Any error from DCG check
+	fetchingDCG        bool   // Whether we're currently fetching DCG status
+	lastDCGFetch       time.Time
+	dcgRefreshInterval time.Duration // How often to refresh DCG status
 
 	// Error tracking for data sources (displayed as badges)
 	beadsError       error
@@ -367,6 +514,10 @@ type PaneStatus struct {
 	ContextPercent float64 // Usage percentage (0-100+)
 	ContextModel   string  // Model name for context limit lookup
 
+	// Agent Mail inbox tracking
+	MailUnread int
+	MailUrgent int
+
 	TokenVelocity float64 // Estimated tokens/sec
 
 	// Health tracking
@@ -374,6 +525,10 @@ type PaneStatus struct {
 	HealthIssues  []string // List of issue messages (rate limit, crash, etc.)
 	RestartCount  int      // Number of restarts in last hour
 	UptimeSeconds int      // Seconds since agent started (negative = uptime from tracker)
+
+	// Rotation tracking
+	IsRotating bool       // True when agent rotation is in progress
+	RotatedAt  *time.Time // When agent was last rotated (nil if never)
 }
 
 // AgentMailLockInfo represents a file lock for dashboard display
@@ -399,6 +554,7 @@ type KeyMap struct {
 	Quit           key.Binding
 	ContextRefresh key.Binding // 'c' to refresh context data
 	MailRefresh    key.Binding // 'm' to refresh Agent Mail data
+	InboxToggle    key.Binding // 'i' to toggle inbox details
 	CassSearch     key.Binding // 'ctrl+s' to open CASS search
 	Help           key.Binding // '?' to toggle help overlay
 	Diagnostics    key.Binding // 'd' to toggle diagnostics
@@ -428,9 +584,12 @@ const (
 	BeadsRefreshInterval       = 5 * time.Second
 	CassContextRefreshInterval = 15 * time.Minute
 	ScanRefreshInterval        = 1 * time.Minute
+	DCGRefreshInterval         = 5 * time.Minute // DCG status changes infrequently
 	CheckpointRefreshInterval  = 30 * time.Second
+	HandoffRefreshInterval     = 30 * time.Second
 	SpawnActiveRefreshInterval = 500 * time.Millisecond // Poll frequently when spawn is active
 	SpawnIdleRefreshInterval   = 2 * time.Second        // Poll slowly when no spawn is active
+	MailInboxRefreshInterval   = 30 * time.Second
 )
 
 func (m *Model) initRenderer(width int) {
@@ -455,9 +614,10 @@ var dashKeys = KeyMap{
 	Quit:           key.NewBinding(key.WithKeys("q", "esc"), key.WithHelp("q/esc", "quit")),
 	ContextRefresh: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "refresh context")),
 	MailRefresh:    key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "refresh mail")),
+	InboxToggle:    key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "inbox details")),
 	CassSearch:     key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "cass search")),
 	Help:           key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "toggle help")),
-	Diagnostics:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "toggle diagnostics")),
+	Diagnostics:    key.NewBinding(key.WithKeys("d", "ctrl+d"), key.WithHelp("d/ctrl+d", "toggle diagnostics")),
 	ScanToggle:     key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "toggle UBS scan")),
 	Checkpoint:     key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "create checkpoint")),
 	Tab:            key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next panel")),
@@ -497,28 +657,37 @@ func New(session, projectDir string) Model {
 		beadsRefreshInterval:       BeadsRefreshInterval,
 		cassContextRefreshInterval: CassContextRefreshInterval,
 		scanRefreshInterval:        ScanRefreshInterval,
+		dcgRefreshInterval:         DCGRefreshInterval,
 		checkpointRefreshInterval:  CheckpointRefreshInterval,
+		handoffRefreshInterval:     HandoffRefreshInterval,
 		spawnRefreshInterval:       SpawnIdleRefreshInterval,
+		mailInboxRefreshInterval:   MailInboxRefreshInterval,
 		paneOutputLines:            50,
 		paneOutputCaptureBudget:    20,
+		paneOutputCaptureCursor:    0,
 		paneOutputCache:            make(map[string]string),
 		paneOutputLastCaptured:     make(map[string]time.Time),
 		renderedOutputCache:        make(map[string]string),
 		healthStatus:               "unknown",
 		healthMessage:              "",
+		agentMailInbox:             make(map[string][]agentmail.InboxMessage),
+		agentMailInboxErrors:       make(map[string]error),
+		agentMailAgents:            make(map[string]string),
 		cassSearch: components.NewCassSearch(func(hit cass.SearchHit) tea.Cmd {
 			return func() tea.Msg {
 				return CassSelectMsg{Hit: hit}
 			}
 		}),
-		beadsPanel:   panels.NewBeadsPanel(),
-		alertsPanel:  panels.NewAlertsPanel(),
-		metricsPanel: panels.NewMetricsPanel(),
-		historyPanel: panels.NewHistoryPanel(),
-		cassPanel:    panels.NewCASSPanel(),
-		filesPanel:   panels.NewFilesPanel(),
-		tickerPanel:  panels.NewTickerPanel(),
-		spawnPanel:   panels.NewSpawnPanel(),
+		beadsPanel:           panels.NewBeadsPanel(),
+		alertsPanel:          panels.NewAlertsPanel(),
+		metricsPanel:         panels.NewMetricsPanel(),
+		historyPanel:         panels.NewHistoryPanel(),
+		cassPanel:            panels.NewCASSPanel(),
+		filesPanel:           panels.NewFilesPanel(),
+		tickerPanel:          panels.NewTickerPanel(),
+		spawnPanel:           panels.NewSpawnPanel(),
+		conflictsPanel:       panels.NewConflictsPanel(),
+		rotationConfirmPanel: panels.NewRotationConfirmPanel(),
 
 		// Init() kicks off these fetches immediately; mark as fetching so the tick loop
 		// doesn't pile on duplicates if the first round is still in flight.
@@ -532,6 +701,9 @@ func New(session, projectDir string) Model {
 		fetchingHistory:     true,
 		fetchingFileChanges: true,
 		fetchingCheckpoint:  true,
+		fetchingHandoff:     true,
+		fetchingMailInbox:   true,
+		fetchingDCG:         true,
 	}
 
 	// Initialize last-fetch timestamps to start cadence after the initial fetches from Init.
@@ -542,10 +714,16 @@ func New(session, projectDir string) Model {
 	m.lastBeadsFetch = now
 	m.lastCassContextFetch = now
 	m.lastScanFetch = now
+	m.lastDCGFetch = now
 	m.lastCheckpointFetch = now
+	m.lastHandoffFetch = now
 	m.lastSpawnFetch = now
+	m.lastMailInboxFetch = now
 
 	applyDashboardEnvOverrides(&m)
+
+	// Set up conflict action handler for the conflicts panel
+	m.conflictsPanel.SetActionHandler(m.handleConflictAction)
 
 	// Setup config watcher
 	m.configSub = make(chan *config.Config, 1)
@@ -591,6 +769,7 @@ func (m Model) Init() tea.Cmd {
 		m.fetchStatuses(),
 		m.fetchHealthCmd(), // Agent health check
 		m.fetchAgentMailStatus(),
+		m.fetchAgentMailInboxes(),
 		m.fetchBeadsCmd(),
 		m.fetchAlertsCmd(),
 		m.fetchMetricsCmd(),
@@ -599,8 +778,104 @@ func (m Model) Init() tea.Cmd {
 		m.fetchFileChangesCmd(),
 		m.fetchCASSContextCmd(),
 		m.fetchCheckpointStatus(),
+		m.fetchHandoffCmd(),
+		m.fetchDCGStatus(),
+		m.fetchPendingRotations(),
+		m.fetchPTHealthStatesCmd(),
 		m.subscribeToConfig(),
 	)
+}
+
+func (m *Model) nextGen(src refreshSource) uint64 {
+	m.refreshSeq[src]++
+	return m.refreshSeq[src]
+}
+
+func (m *Model) isStale(src refreshSource, gen uint64) bool {
+	return gen > 0 && gen < m.refreshSeq[src]
+}
+
+func (m *Model) markUpdated(src refreshSource, t time.Time) {
+	if t.IsZero() {
+		t = time.Now()
+	}
+	m.lastUpdated[src] = t
+}
+
+func (m *Model) acceptUpdate(src refreshSource, gen uint64) bool {
+	if m.isStale(src, gen) {
+		return false
+	}
+	if gen > m.refreshSeq[src] {
+		m.refreshSeq[src] = gen
+	}
+	return true
+}
+
+func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	prevWidth := m.width
+	prevHeight := m.height
+	prevTier := m.tier
+
+	width := msg.Width
+	height := msg.Height
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+
+	m.width = width
+	m.height = height
+	m.tier = layout.TierForWidthWithHysteresis(width, prevTier)
+
+	m.cycleFocus(0)
+
+	_, detailWidth := layout.SplitProportions(width)
+	contentWidth := detailWidth - 4
+	if contentWidth < 20 {
+		contentWidth = 20
+	}
+	m.initRenderer(contentWidth)
+
+	if prevWidth != m.width || prevHeight != m.height {
+		m.renderedOutputCache = make(map[string]string)
+	}
+
+	searchW := int(float64(width) * 0.6)
+	searchH := int(float64(height) * 0.6)
+	if searchW < 20 {
+		searchW = 20
+	}
+	if searchH < 10 {
+		searchH = 10
+	}
+	m.cassSearch.SetSize(searchW, searchH)
+
+	m.resizePanelsForLayout()
+
+	if dashboardDebugEnabled(m) {
+		contentHeight := contentHeightFor(m.height)
+		log.Printf("[dashboard] resize width=%d height=%d contentHeight=%d tier=%s",
+			m.width, m.height, contentHeight, tierLabel(m.tier))
+		log.Printf("[dashboard] panels %s %s %s %s %s %s %s",
+			logPanelSize("beads", m.beadsPanel),
+			logPanelSize("alerts", m.alertsPanel),
+			logPanelSize("metrics", m.metricsPanel),
+			logPanelSize("history", m.historyPanel),
+			logPanelSize("files", m.filesPanel),
+			logPanelSize("cass", m.cassPanel),
+			logPanelSize("spawn", m.spawnPanel),
+		)
+	}
+
+	if prevTier != m.tier {
+		log.Printf("[dashboard] tier transition %s -> %s (width=%d height=%d)",
+			tierLabel(prevTier), tierLabel(m.tier), m.width, m.height)
+	}
+
+	return m, nil
 }
 
 func (m Model) subscribeToConfig() tea.Cmd {
@@ -651,10 +926,11 @@ func (m Model) fetchHealthStatus() tea.Cmd {
 	}
 }
 
-func (m Model) fetchScanStatusWithContext(ctx context.Context) tea.Cmd {
+func (m *Model) fetchScanStatusWithContext(ctx context.Context) tea.Cmd {
+	gen := m.nextGen(refreshScan)
 	return func() tea.Msg {
 		if !scanner.IsAvailable() {
-			return ScanStatusMsg{Status: "unavailable"}
+			return ScanStatusMsg{Status: "unavailable", Gen: gen}
 		}
 
 		if ctx == nil {
@@ -674,17 +950,17 @@ func (m Model) fetchScanStatusWithContext(ctx context.Context) tea.Cmd {
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				if errors.Is(ctxErr, context.Canceled) {
-					return ScanStatusMsg{Err: ctxErr}
+					return ScanStatusMsg{Err: ctxErr, Gen: gen}
 				}
-				return ScanStatusMsg{Status: "error", Err: ctxErr}
+				return ScanStatusMsg{Status: "error", Err: ctxErr, Gen: gen}
 			}
 			if errors.Is(err, context.Canceled) {
-				return ScanStatusMsg{Err: err}
+				return ScanStatusMsg{Err: err, Gen: gen}
 			}
-			return ScanStatusMsg{Status: "error", Err: err}
+			return ScanStatusMsg{Status: "error", Err: err, Gen: gen}
 		}
 		if result == nil {
-			return ScanStatusMsg{Status: "unavailable"}
+			return ScanStatusMsg{Status: "unavailable", Gen: gen}
 		}
 
 		status := "clean"
@@ -704,32 +980,120 @@ func (m Model) fetchScanStatusWithContext(ctx context.Context) tea.Cmd {
 			Status:   status,
 			Totals:   result.Totals,
 			Duration: dur,
+			Gen:      gen,
 		}
 	}
 }
 
-// fetchAgentMailStatus fetches Agent Mail data (locks, connection status)
-func (m Model) fetchAgentMailStatus() tea.Cmd {
+// fetchDCGStatus fetches the current DCG status
+func (m *Model) fetchDCGStatus() tea.Cmd {
+	gen := m.nextGen(refreshDCG)
+	cfg := m.cfg
+
 	return func() tea.Msg {
-		// Get project key from current working directory
-		projectKey, err := os.Getwd()
-		if err != nil {
-			return AgentMailUpdateMsg{Available: false}
+		// Check if DCG is enabled in config
+		enabled := false
+		if cfg != nil {
+			enabled = cfg.Integrations.DCG.Enabled
 		}
 
-		client := agentmail.NewClient(agentmail.WithProjectKey(projectKey))
+		// Get availability from the DCG adapter
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		// Check availability
+		adapter := tools.NewDCGAdapter()
+		availability, err := adapter.GetAvailability(ctx)
+
+		msg := DCGStatusUpdateMsg{
+			Enabled: enabled,
+			Gen:     gen,
+		}
+
+		if err != nil {
+			msg.Err = err
+			return msg
+		}
+
+		if availability != nil {
+			msg.Available = availability.Available && availability.Compatible
+			if availability.Version.Major > 0 || availability.Version.Minor > 0 || availability.Version.Patch > 0 {
+				msg.Version = availability.Version.String()
+			}
+		}
+
+		// TODO: Read blocked count from audit log when available
+		// For now, we just report availability status
+
+		return msg
+	}
+}
+
+// fetchPendingRotations fetches pending rotation confirmations for the session
+func (m *Model) fetchPendingRotations() tea.Cmd {
+	gen := m.nextGen(refreshPendingRotations)
+	session := m.session
+	return func() tea.Msg {
+		pending, err := ctxmon.GetPendingRotationsForSession(session)
+		return PendingRotationsUpdateMsg{
+			Pending: pending,
+			Err:     err,
+			Gen:     gen,
+		}
+	}
+}
+
+func (m *Model) newAgentMailClient(projectKey string) *agentmail.Client {
+	if projectKey == "" {
+		return nil
+	}
+	var opts []agentmail.Option
+	opts = append(opts, agentmail.WithProjectKey(projectKey))
+	if m.cfg != nil {
+		if !m.cfg.AgentMail.Enabled {
+			return nil
+		}
+		if m.cfg.AgentMail.URL != "" {
+			opts = append(opts, agentmail.WithBaseURL(m.cfg.AgentMail.URL))
+		}
+		if m.cfg.AgentMail.Token != "" {
+			opts = append(opts, agentmail.WithToken(m.cfg.AgentMail.Token))
+		}
+	}
+	return agentmail.NewClient(opts...)
+}
+
+// fetchAgentMailStatus fetches Agent Mail data (locks, connection status)
+func (m *Model) fetchAgentMailStatus() tea.Cmd {
+	gen := m.nextGen(refreshAgentMail)
+	projectKey := m.projectDir
+	return func() tea.Msg {
+		if projectKey == "" {
+			return AgentMailUpdateMsg{Available: false, Gen: gen}
+		}
+
+		client := m.newAgentMailClient(projectKey)
+		if client == nil {
+			return AgentMailUpdateMsg{Available: false, Gen: gen}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Check availability via HTTP
 		if !client.IsAvailable() {
-			return AgentMailUpdateMsg{Available: false}
+			// Fallback: check if archive directory exists
+			// This detects Agent Mail running via MCP stdio protocol (not HTTP)
+			archiveFound := agentmail.HasArchiveForProject(projectKey)
+			return AgentMailUpdateMsg{
+				Available:    false,
+				ArchiveFound: archiveFound,
+				Gen:          gen,
+			}
 		}
 
 		// Ensure project exists
-		_, err = client.EnsureProject(ctx, projectKey)
+		_, err := client.EnsureProject(ctx, projectKey)
 		if err != nil {
-			return AgentMailUpdateMsg{Available: true, Connected: false}
+			return AgentMailUpdateMsg{Available: true, Connected: false, Gen: gen}
 		}
 
 		// Fetch file reservations
@@ -766,12 +1130,170 @@ func (m Model) fetchAgentMailStatus() tea.Cmd {
 			Connected: true,
 			Locks:     len(lockInfo),
 			LockInfo:  lockInfo,
+			Gen:       gen,
+		}
+	}
+}
+
+// fetchAgentMailInboxes polls inbox summaries for all registered agents in this session.
+func (m *Model) fetchAgentMailInboxes() tea.Cmd {
+	gen := m.nextGen(refreshAgentMailInbox)
+	projectKey := m.projectDir
+	sessionName := m.session
+	panes := append([]tmux.Pane(nil), m.panes...)
+
+	return func() tea.Msg {
+		if projectKey == "" || sessionName == "" {
+			return AgentMailInboxSummaryMsg{Gen: gen}
+		}
+
+		client := m.newAgentMailClient(projectKey)
+		if client == nil || !client.IsAvailable() {
+			return AgentMailInboxSummaryMsg{Gen: gen}
+		}
+
+		registry, err := agentmail.LoadSessionAgentRegistry(sessionName, projectKey)
+		if err != nil {
+			return AgentMailInboxSummaryMsg{Err: err, Gen: gen}
+		}
+		if registry == nil {
+			return AgentMailInboxSummaryMsg{AgentMap: map[string]string{}, Gen: gen}
+		}
+
+		agentMap := make(map[string]string)
+		for _, pane := range panes {
+			if pane.Type == tmux.AgentUser {
+				continue
+			}
+			if name, ok := registry.GetAgent(pane.Title, pane.ID); ok {
+				agentMap[pane.ID] = name
+			}
+		}
+
+		if len(agentMap) == 0 {
+			return AgentMailInboxSummaryMsg{AgentMap: agentMap, Gen: gen}
+		}
+
+		type job struct {
+			paneID    string
+			agentName string
+		}
+		type result struct {
+			paneID string
+			inbox  []agentmail.InboxMessage
+			err    error
+		}
+
+		inboxes := make(map[string][]agentmail.InboxMessage, len(agentMap))
+		var firstErr error
+		var mu sync.Mutex
+		jobs := make(chan job)
+		results := make(chan result, len(agentMap))
+		workerCount := 4
+		if len(agentMap) < workerCount {
+			workerCount = len(agentMap)
+		}
+
+		var wg sync.WaitGroup
+		for i := 0; i < workerCount; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := range jobs {
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					msgs, err := client.FetchInbox(ctx, agentmail.FetchInboxOptions{
+						ProjectKey:    projectKey,
+						AgentName:     j.agentName,
+						UrgentOnly:    false,
+						Limit:         5,
+						IncludeBodies: false,
+					})
+					cancel()
+					results <- result{paneID: j.paneID, inbox: msgs, err: err}
+				}
+			}()
+		}
+
+		go func() {
+			for paneID, agentName := range agentMap {
+				jobs <- job{paneID: paneID, agentName: agentName}
+			}
+			close(jobs)
+			wg.Wait()
+			close(results)
+		}()
+
+		for res := range results {
+			if res.err != nil {
+				if firstErr == nil {
+					firstErr = res.err
+				}
+				continue
+			}
+			mu.Lock()
+			inboxes[res.paneID] = res.inbox
+			mu.Unlock()
+		}
+
+		return AgentMailInboxSummaryMsg{
+			Inboxes:  inboxes,
+			AgentMap: agentMap,
+			Err:      firstErr,
+			Gen:      gen,
+		}
+	}
+}
+
+// fetchAgentMailInboxDetails fetches message bodies for a single agent.
+func (m *Model) fetchAgentMailInboxDetails(pane tmux.Pane) tea.Cmd {
+	gen := m.nextGen(refreshAgentMailInbox)
+	projectKey := m.projectDir
+	sessionName := m.session
+	paneID := pane.ID
+	paneTitle := pane.Title
+
+	return func() tea.Msg {
+		if projectKey == "" || sessionName == "" {
+			return AgentMailInboxDetailMsg{PaneID: paneID, Gen: gen}
+		}
+
+		client := m.newAgentMailClient(projectKey)
+		if client == nil || !client.IsAvailable() {
+			return AgentMailInboxDetailMsg{PaneID: paneID, Gen: gen}
+		}
+
+		registry, err := agentmail.LoadSessionAgentRegistry(sessionName, projectKey)
+		if err != nil || registry == nil {
+			return AgentMailInboxDetailMsg{PaneID: paneID, Err: err, Gen: gen}
+		}
+
+		agentName, ok := registry.GetAgent(paneTitle, paneID)
+		if !ok {
+			return AgentMailInboxDetailMsg{PaneID: paneID, Gen: gen}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		msgs, err := client.FetchInbox(ctx, agentmail.FetchInboxOptions{
+			ProjectKey:    projectKey,
+			AgentName:     agentName,
+			UrgentOnly:    false,
+			Limit:         5,
+			IncludeBodies: true,
+		})
+		cancel()
+
+		return AgentMailInboxDetailMsg{
+			PaneID:   paneID,
+			Messages: msgs,
+			Err:      err,
+			Gen:      gen,
 		}
 	}
 }
 
 // fetchCheckpointStatus fetches checkpoint status for the session
-func (m Model) fetchCheckpointStatus() tea.Cmd {
+func (m *Model) fetchCheckpointStatus() tea.Cmd {
+	gen := m.nextGen(refreshCheckpoint)
 	session := m.session
 	return func() tea.Msg {
 		storage := checkpoint.NewStorage()
@@ -780,6 +1302,7 @@ func (m Model) fetchCheckpointStatus() tea.Cmd {
 			return CheckpointUpdateMsg{
 				Status: "none",
 				Err:    err,
+				Gen:    gen,
 			}
 		}
 
@@ -787,6 +1310,7 @@ func (m Model) fetchCheckpointStatus() tea.Cmd {
 			return CheckpointUpdateMsg{
 				Count:  0,
 				Status: "none",
+				Gen:    gen,
 			}
 		}
 
@@ -810,6 +1334,7 @@ func (m Model) fetchCheckpointStatus() tea.Cmd {
 			Latest:    latest,
 			LatestAge: age,
 			Status:    status,
+			Gen:       gen,
 		}
 	}
 }
@@ -824,6 +1349,78 @@ func (m Model) createCheckpointCmd() tea.Cmd {
 			return CheckpointCreatedMsg{Err: err}
 		}
 		return CheckpointCreatedMsg{Checkpoint: cp}
+	}
+}
+
+// RotationConfirmResultMsg is sent after a rotation confirmation action completes.
+type RotationConfirmResultMsg struct {
+	AgentID string
+	Action  ctxmon.ConfirmAction
+	Success bool
+	Message string
+	Err     error
+}
+
+// executeRotationConfirmAction executes a rotation confirmation action.
+func (m Model) executeRotationConfirmAction(agentID string, action ctxmon.ConfirmAction) tea.Cmd {
+	return func() tea.Msg {
+		// Get the pending rotation
+		pending, err := ctxmon.GetPendingRotationByID(agentID)
+		if err != nil {
+			return RotationConfirmResultMsg{
+				AgentID: agentID,
+				Action:  action,
+				Success: false,
+				Err:     err,
+			}
+		}
+		if pending == nil {
+			return RotationConfirmResultMsg{
+				AgentID: agentID,
+				Action:  action,
+				Success: false,
+				Message: fmt.Sprintf("No pending rotation found for agent %s", agentID),
+			}
+		}
+
+		var resultMsg string
+		switch action {
+		case ctxmon.ConfirmRotate:
+			// Remove pending and mark for rotation on next check
+			if err := ctxmon.RemovePendingRotation(agentID); err != nil {
+				return RotationConfirmResultMsg{AgentID: agentID, Action: action, Success: false, Err: err}
+			}
+			resultMsg = fmt.Sprintf("Rotation confirmed for %s", agentID)
+
+		case ctxmon.ConfirmCompact:
+			// Remove pending and mark for compaction
+			if err := ctxmon.RemovePendingRotation(agentID); err != nil {
+				return RotationConfirmResultMsg{AgentID: agentID, Action: action, Success: false, Err: err}
+			}
+			resultMsg = fmt.Sprintf("Compaction requested for %s", agentID)
+
+		case ctxmon.ConfirmIgnore:
+			// Simply remove the pending rotation
+			if err := ctxmon.RemovePendingRotation(agentID); err != nil {
+				return RotationConfirmResultMsg{AgentID: agentID, Action: action, Success: false, Err: err}
+			}
+			resultMsg = fmt.Sprintf("Rotation cancelled for %s", agentID)
+
+		case ctxmon.ConfirmPostpone:
+			// Extend the timeout by 30 minutes
+			pending.TimeoutAt = pending.TimeoutAt.Add(30 * time.Minute)
+			if err := ctxmon.AddPendingRotation(pending); err != nil {
+				return RotationConfirmResultMsg{AgentID: agentID, Action: action, Success: false, Err: err}
+			}
+			resultMsg = fmt.Sprintf("Rotation postponed 30 minutes for %s", agentID)
+		}
+
+		return RotationConfirmResultMsg{
+			AgentID: agentID,
+			Action:  action,
+			Success: true,
+			Message: resultMsg,
+		}
 	}
 }
 
@@ -842,9 +1439,10 @@ type SessionDataWithOutputMsg struct {
 	Duration          time.Duration
 	NextCaptureCursor int
 	Err               error
+	Gen               uint64
 }
 
-func (m Model) fetchSessionDataWithOutputs() tea.Cmd {
+func (m *Model) fetchSessionDataWithOutputs() tea.Cmd {
 	return m.fetchSessionDataWithOutputsCtx(context.Background())
 }
 
@@ -950,7 +1548,88 @@ func (m *Model) finishScanFetch() tea.Cmd {
 	return m.startScanFetch()
 }
 
-func (m Model) fetchSessionDataWithOutputsCtx(ctx context.Context) tea.Cmd {
+func (m *Model) fullRefresh(cancelInFlight bool) []tea.Cmd {
+	var cmds []tea.Cmd
+	now := time.Now()
+
+	if cmd := m.requestSessionFetch(cancelInFlight); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := m.requestStatusesFetch(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := m.requestScanFetch(cancelInFlight); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if !m.fetchingBeads {
+		m.fetchingBeads = true
+		m.lastBeadsFetch = now
+		cmds = append(cmds, m.fetchBeadsCmd())
+	}
+	if !m.fetchingAlerts {
+		m.fetchingAlerts = true
+		m.lastAlertsFetch = now
+		cmds = append(cmds, m.fetchAlertsCmd())
+	}
+	if !m.fetchingMetrics {
+		m.fetchingMetrics = true
+		cmds = append(cmds, m.fetchMetricsCmd())
+	}
+	if !m.fetchingRouting {
+		m.fetchingRouting = true
+		cmds = append(cmds, m.fetchRoutingCmd())
+	}
+	if !m.fetchingHistory {
+		m.fetchingHistory = true
+		cmds = append(cmds, m.fetchHistoryCmd())
+	}
+	if !m.fetchingFileChanges {
+		m.fetchingFileChanges = true
+		cmds = append(cmds, m.fetchFileChangesCmd())
+	}
+	if !m.fetchingCassContext {
+		m.fetchingCassContext = true
+		m.lastCassContextFetch = now
+		cmds = append(cmds, m.fetchCASSContextCmd())
+	}
+	if !m.fetchingCheckpoint {
+		m.fetchingCheckpoint = true
+		m.lastCheckpointFetch = now
+		cmds = append(cmds, m.fetchCheckpointStatus())
+	}
+	if !m.fetchingHandoff {
+		m.fetchingHandoff = true
+		m.lastHandoffFetch = now
+		cmds = append(cmds, m.fetchHandoffCmd())
+	}
+	if !m.fetchingSpawn {
+		m.fetchingSpawn = true
+		m.lastSpawnFetch = now
+		cmds = append(cmds, m.fetchSpawnStateCmd())
+	}
+	if !m.fetchingPTHealth {
+		m.fetchingPTHealth = true
+		cmds = append(cmds, m.fetchPTHealthStatesCmd())
+	}
+	if !m.fetchingMailInbox {
+		m.fetchingMailInbox = true
+		m.lastMailInboxFetch = now
+		cmds = append(cmds, m.fetchAgentMailInboxes())
+	}
+	if !m.fetchingPendingRot {
+		m.fetchingPendingRot = true
+		m.lastPendingFetch = now
+		cmds = append(cmds, m.fetchPendingRotations())
+	}
+
+	// Agent mail status is light enough to refresh on demand.
+	cmds = append(cmds, m.fetchAgentMailStatus())
+
+	return cmds
+}
+
+func (m *Model) fetchSessionDataWithOutputsCtx(ctx context.Context) tea.Cmd {
+	gen := m.nextGen(refreshSession)
 	outputLines := m.paneOutputLines
 	budget := m.paneOutputCaptureBudget
 	startCursor := m.paneOutputCaptureCursor
@@ -971,7 +1650,7 @@ func (m Model) fetchSessionDataWithOutputsCtx(ctx context.Context) tea.Cmd {
 
 		panesWithActivity, err := tmux.GetPanesWithActivityContext(ctx, session)
 		if err != nil {
-			return SessionDataWithOutputMsg{Err: err, Duration: time.Since(start)}
+			return SessionDataWithOutputMsg{Err: err, Duration: time.Since(start), Gen: gen}
 		}
 
 		panes := make([]tmux.Pane, 0, len(panesWithActivity))
@@ -984,13 +1663,13 @@ func (m Model) fetchSessionDataWithOutputsCtx(ctx context.Context) tea.Cmd {
 		var outputs []PaneOutputData
 		for _, pane := range plan.Targets {
 			if err := ctx.Err(); err != nil {
-				return SessionDataWithOutputMsg{Err: err, Duration: time.Since(start)}
+				return SessionDataWithOutputMsg{Err: err, Duration: time.Since(start), Gen: gen}
 			}
 
 			out, err := tmux.CapturePaneOutputContext(ctx, pane.Pane.ID, outputLines)
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
-					return SessionDataWithOutputMsg{Err: ctxErr, Duration: time.Since(start)}
+					return SessionDataWithOutputMsg{Err: ctxErr, Duration: time.Since(start), Gen: gen}
 				}
 				continue
 			}
@@ -1005,7 +1684,7 @@ func (m Model) fetchSessionDataWithOutputsCtx(ctx context.Context) tea.Cmd {
 		}
 
 		if err := ctx.Err(); err != nil {
-			return SessionDataWithOutputMsg{Err: err, Duration: time.Since(start)}
+			return SessionDataWithOutputMsg{Err: err, Duration: time.Since(start), Gen: gen}
 		}
 
 		return SessionDataWithOutputMsg{
@@ -1013,6 +1692,7 @@ func (m Model) fetchSessionDataWithOutputsCtx(ctx context.Context) tea.Cmd {
 			Outputs:           outputs,
 			Duration:          time.Since(start),
 			NextCaptureCursor: plan.NextCursor,
+			Gen:               gen,
 		}
 	}
 }
@@ -1136,7 +1816,8 @@ func copyTimeMap(src map[string]time.Time) map[string]time.Time {
 }
 
 // fetchStatuses runs unified status detection across all panes
-func (m Model) fetchStatuses() tea.Cmd {
+func (m *Model) fetchStatuses() tea.Cmd {
+	gen := m.nextGen(refreshStatus)
 	return func() tea.Msg {
 		start := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
@@ -1146,9 +1827,9 @@ func (m Model) fetchStatuses() tea.Cmd {
 		duration := time.Since(start)
 		if err != nil {
 			// Keep UI responsive even if detection fails
-			return StatusUpdateMsg{Statuses: nil, Time: time.Now(), Duration: duration, Err: err}
+			return StatusUpdateMsg{Statuses: nil, Time: time.Now(), Duration: duration, Err: err, Gen: gen}
 		}
-		return StatusUpdateMsg{Statuses: statuses, Time: time.Now(), Duration: duration}
+		return StatusUpdateMsg{Statuses: statuses, Time: time.Now(), Duration: duration, Gen: gen}
 	}
 }
 
@@ -1212,28 +1893,61 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.healthMessage = fmt.Sprintf("Selected: %s", msg.Hit.Title)
 		return m, tea.Batch(cmds...)
 
+	case panels.ReplayMsg:
+		// Handle replay request from history panel
+		return m, m.executeReplay(msg.Entry)
+
 	case BeadsUpdateMsg:
+		if !m.acceptUpdate(refreshBeads, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingBeads = false
 		m.beadsError = msg.Err
 		if msg.Err == nil {
 			m.beadsSummary = msg.Summary
 			m.beadsReady = msg.Ready
+			m.markUpdated(refreshBeads, time.Now())
 		}
 		m.beadsPanel.SetData(m.beadsSummary, m.beadsReady, m.beadsError)
 		return m, nil
 
 	case AlertsUpdateMsg:
+		if !m.acceptUpdate(refreshAlerts, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingAlerts = false
 		m.alertsError = msg.Err
 		if msg.Err == nil {
 			m.activeAlerts = msg.Alerts
+			m.markUpdated(refreshAlerts, time.Now())
 		}
 		m.alertsPanel.SetData(m.activeAlerts, m.alertsError)
 		return m, nil
 
+	case FileConflictMsg:
+		// Add the conflict to the conflicts panel
+		m.conflictsPanel.AddConflict(msg.Conflict)
+		return m, nil
+
+	case panels.ConflictActionResultMsg:
+		// Handle conflict action result
+		if msg.Err != nil {
+			// Log error but don't block
+			log.Printf("[Dashboard] Conflict action error: %v", msg.Err)
+		}
+		// Remove the conflict from the panel if action was successful or dismissed
+		if msg.Err == nil {
+			m.conflictsPanel.RemoveConflict(msg.Conflict.Path, msg.Conflict.RequestorAgent)
+		}
+		return m, nil
+
 	case SpawnUpdateMsg:
+		if !m.acceptUpdate(refreshSpawn, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingSpawn = false
 		m.spawnPanel.SetData(msg.Data)
+		m.markUpdated(refreshSpawn, time.Now())
 
 		// Adaptive polling: faster when spawn is active for smooth countdown display,
 		// slower when idle to reduce CPU/render churn
@@ -1251,7 +1965,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case PTHealthStatesMsg:
+		if !m.acceptUpdate(refreshPTHealth, msg.Gen) {
+			return m, nil
+		}
+		m.fetchingPTHealth = false
+		if msg.States != nil {
+			m.healthStates = msg.States
+			m.markUpdated(refreshPTHealth, time.Now())
+		}
+		return m, nil
+
 	case MetricsUpdateMsg:
+		if !m.acceptUpdate(refreshMetrics, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingMetrics = false
 		if msg.Err != nil && errors.Is(msg.Err, context.Canceled) {
 			return m, nil
@@ -1261,11 +1989,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.metricsTokens = msg.Data.TotalTokens
 			m.metricsCost = msg.Data.TotalCost
 			m.metricsData = msg.Data
+			m.markUpdated(refreshMetrics, time.Now())
 		}
 		m.metricsPanel.SetData(m.metricsData, m.metricsError)
 		return m, nil
 
 	case HistoryUpdateMsg:
+		if !m.acceptUpdate(refreshHistory, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingHistory = false
 		if msg.Err != nil && errors.Is(msg.Err, context.Canceled) {
 			return m, nil
@@ -1273,11 +2005,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.historyError = msg.Err
 		if msg.Err == nil {
 			m.cmdHistory = msg.Entries
+			m.markUpdated(refreshHistory, time.Now())
 		}
 		m.historyPanel.SetEntries(m.cmdHistory, m.historyError)
 		return m, nil
 
 	case FileChangeMsg:
+		if !m.acceptUpdate(refreshFiles, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingFileChanges = false
 		if msg.Err != nil && errors.Is(msg.Err, context.Canceled) {
 			return m, nil
@@ -1285,6 +2021,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fileChangesError = msg.Err
 		if msg.Err == nil {
 			m.fileChanges = msg.Changes
+			m.markUpdated(refreshFiles, time.Now())
 		}
 		if m.filesPanel != nil {
 			m.filesPanel.SetData(m.fileChanges, m.fileChangesError)
@@ -1292,15 +2029,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case CASSContextMsg:
+		if !m.acceptUpdate(refreshCass, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingCassContext = false
 		m.cassError = msg.Err
 		m.cassContext = msg.Hits
 		if m.cassPanel != nil {
 			m.cassPanel.SetData(m.cassContext, m.cassError)
 		}
+		if msg.Err == nil {
+			m.markUpdated(refreshCass, time.Now())
+		}
 		return m, nil
 
 	case RoutingUpdateMsg:
+		if !m.acceptUpdate(refreshRouting, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingRouting = false
 		m.routingError = msg.Err
 		if msg.Err == nil && msg.Scores != nil {
@@ -1308,13 +2054,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Merge routing data into metrics data
 			m.metricsData = m.mergeRoutingIntoMetrics(m.metricsData, msg.Scores)
 			m.metricsPanel.SetData(m.metricsData, m.metricsError)
+			m.markUpdated(refreshRouting, time.Now())
 		}
 		return m, nil
 
 	case tea.WindowSizeMsg:
+		prevWidth := m.width
+		prevHeight := m.height
+		prevTier := m.tier
+
 		m.width = msg.Width
 		m.height = msg.Height
-		m.tier = layout.TierForWidth(msg.Width)
+		m.tier = layout.TierForWidthWithHysteresis(msg.Width, prevTier)
+
+		m.cycleFocus(0)
 
 		_, detailWidth := layout.SplitProportions(msg.Width)
 		contentWidth := detailWidth - 4
@@ -1323,9 +2076,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.initRenderer(contentWidth)
 
+		if prevWidth != m.width || prevHeight != m.height {
+			m.renderedOutputCache = make(map[string]string)
+		}
+
 		searchW := int(float64(msg.Width) * 0.6)
 		searchH := int(float64(msg.Height) * 0.6)
 		m.cassSearch.SetSize(searchW, searchH)
+
+		m.resizePanelsForLayout()
+
+		if dashboardDebugEnabled(&m) {
+			contentHeight := contentHeightFor(m.height)
+			log.Printf("[dashboard] resize width=%d height=%d contentHeight=%d tier=%s",
+				m.width, m.height, contentHeight, tierLabel(m.tier))
+			log.Printf("[dashboard] panels %s %s %s %s %s %s %s",
+				logPanelSize("beads", m.beadsPanel),
+				logPanelSize("alerts", m.alertsPanel),
+				logPanelSize("metrics", m.metricsPanel),
+				logPanelSize("history", m.historyPanel),
+				logPanelSize("files", m.filesPanel),
+				logPanelSize("cass", m.cassPanel),
+				logPanelSize("spawn", m.spawnPanel),
+			)
+		}
+
+		if prevTier != m.tier {
+			log.Printf("[dashboard] tier transition %s -> %s (width=%d height=%d)",
+				tierLabel(prevTier), tierLabel(m.tier), m.width, m.height)
+		}
 
 		return m, tea.Batch(cmds...)
 
@@ -1338,110 +2117,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Drive staggered refreshes on the animation ticker to avoid a single heavy burst.
 		now := time.Now()
 		if !m.refreshPaused {
-			if now.Sub(m.lastPaneFetch) >= m.paneRefreshInterval && !m.fetchingSession {
-				if cmd := m.requestSessionFetch(false); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			}
-			if !m.scanDisabled && m.scanRefreshInterval > 0 && now.Sub(m.lastScanFetch) >= m.scanRefreshInterval && !m.fetchingScan {
-				m.lastScanFetch = now
-				if cmd := m.requestScanFetch(false); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			}
-			if now.Sub(m.lastContextFetch) >= m.contextRefreshInterval && !m.fetchingContext {
-				if cmd := m.requestStatusesFetch(); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-
-				if !m.fetchingMetrics {
-					m.fetchingMetrics = true
-					cmds = append(cmds, m.fetchMetricsCmd())
-				}
-				if !m.fetchingRouting {
-					m.fetchingRouting = true
-					cmds = append(cmds, m.fetchRoutingCmd())
-				}
-				if !m.fetchingHistory {
-					m.fetchingHistory = true
-					cmds = append(cmds, m.fetchHistoryCmd())
-				}
-				if !m.fetchingFileChanges {
-					m.fetchingFileChanges = true
-					cmds = append(cmds, m.fetchFileChangesCmd())
-				}
-			}
-			if now.Sub(m.lastAlertsFetch) >= m.alertsRefreshInterval && !m.fetchingAlerts {
-				m.fetchingAlerts = true
-				cmds = append(cmds, m.fetchAlertsCmd())
-				m.lastAlertsFetch = now
-			}
-			if now.Sub(m.lastBeadsFetch) >= m.beadsRefreshInterval && !m.fetchingBeads {
-				m.fetchingBeads = true
-				m.lastBeadsFetch = now
-				cmds = append(cmds, m.fetchBeadsCmd())
-			}
-			if now.Sub(m.lastCassContextFetch) >= m.cassContextRefreshInterval && !m.fetchingCassContext {
-				m.fetchingCassContext = true
-				m.lastCassContextFetch = now
-				cmds = append(cmds, m.fetchCASSContextCmd())
-			}
-			if now.Sub(m.lastCheckpointFetch) >= m.checkpointRefreshInterval && !m.fetchingCheckpoint {
-				m.fetchingCheckpoint = true
-				m.lastCheckpointFetch = now
-				cmds = append(cmds, m.fetchCheckpointStatus())
-			}
-		}
-
-		// Poll spawn state at adaptive rate (faster when active, slower when idle)
-		// This prevents jitter from polling 10x/sec when no spawn is happening
-		if now.Sub(m.lastSpawnFetch) >= m.spawnRefreshInterval && !m.fetchingSpawn {
-			m.fetchingSpawn = true
-			m.lastSpawnFetch = now
-			cmds = append(cmds, m.fetchSpawnStateCmd())
+			cmds = append(cmds, m.scheduleRefreshes(now)...)
 		}
 
 		cmds = append(cmds, m.tick())
 		return m, tea.Batch(cmds...)
 
 	case RefreshMsg:
-		// Trigger async fetches across subsystems (coalesced to avoid pile-up).
-		if cmd := m.requestSessionFetch(false); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		if cmd := m.requestStatusesFetch(); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		if !m.fetchingBeads {
-			m.fetchingBeads = true
-			m.lastBeadsFetch = time.Now()
-			cmds = append(cmds, m.fetchBeadsCmd())
-		}
-		if !m.fetchingAlerts {
-			m.fetchingAlerts = true
-			m.lastAlertsFetch = time.Now()
-			cmds = append(cmds, m.fetchAlertsCmd())
-		}
-		if !m.fetchingMetrics {
-			m.fetchingMetrics = true
-			cmds = append(cmds, m.fetchMetricsCmd())
-		}
-		if !m.fetchingHistory {
-			m.fetchingHistory = true
-			cmds = append(cmds, m.fetchHistoryCmd())
-		}
-		if !m.fetchingFileChanges {
-			m.fetchingFileChanges = true
-			cmds = append(cmds, m.fetchFileChangesCmd())
-		}
-		if !m.fetchingCassContext {
-			m.fetchingCassContext = true
-			m.lastCassContextFetch = time.Now()
-			cmds = append(cmds, m.fetchCASSContextCmd())
-		}
-		return m, tea.Batch(cmds...)
+		// Trigger a coordinated refresh across subsystems (coalesced to avoid pile-up).
+		return m, tea.Batch(m.fullRefresh(false)...)
 
 	case SessionDataWithOutputMsg:
+		if !m.acceptUpdate(refreshSession, msg.Gen) {
+			return m, nil
+		}
 		followUp := m.finishSessionFetch()
 		m.sessionFetchLatency = msg.Duration
 
@@ -1454,6 +2143,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = nil
 		m.lastRefresh = time.Now()
+		m.markUpdated(refreshSession, time.Now())
 
 		{
 			prevSelectedID := ""
@@ -1461,11 +2151,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				prevSelectedID = m.panes[m.cursor].ID
 			}
 
+			// Build old pane ID to index lookup BEFORE updating panes
+			// This is used to migrate paneStatus entries to new indices
+			oldPaneIDToIdx := make(map[string]int, len(m.panes))
+			for _, p := range m.panes {
+				oldPaneIDToIdx[p.ID] = p.Index
+			}
+
 			sort.Slice(msg.Panes, func(i, j int) bool {
 				return msg.Panes[i].Index < msg.Panes[j].Index
 			})
 
 			m.panes = msg.Panes
+
+			// Migrate paneStatus entries from old indices to new indices by pane ID
+			// This prevents stale data when pane indices change (add/remove/reorder)
+			newPaneIDToIdx := make(map[string]int, len(m.panes))
+			for _, p := range m.panes {
+				newPaneIDToIdx[p.ID] = p.Index
+			}
+			newPaneStatus := make(map[int]PaneStatus, len(m.panes))
+			for paneID, newIdx := range newPaneIDToIdx {
+				if oldIdx, exists := oldPaneIDToIdx[paneID]; exists {
+					// Pane still exists - migrate its status to new index
+					if ps, ok := m.paneStatus[oldIdx]; ok {
+						newPaneStatus[newIdx] = ps
+					}
+				}
+			}
+			m.paneStatus = newPaneStatus
+
 			m.updateStats()
 			m.paneOutputCaptureCursor = msg.NextCaptureCursor
 
@@ -1494,6 +2209,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.renderedOutputCache = make(map[string]string)
 			}
 
+			// Cleanup caches for stale panes
+			validPaneIDs := make(map[string]bool, len(m.panes))
+			for _, p := range m.panes {
+				validPaneIDs[p.ID] = true
+			}
+			for id := range m.paneOutputCache {
+				if !validPaneIDs[id] {
+					delete(m.paneOutputCache, id)
+				}
+			}
+			for id := range m.paneOutputLastCaptured {
+				if !validPaneIDs[id] {
+					delete(m.paneOutputLastCaptured, id)
+				}
+			}
+			for id := range m.renderedOutputCache {
+				if !validPaneIDs[id] {
+					delete(m.renderedOutputCache, id)
+				}
+			}
+
 			// Process compaction checks, context tracking, AND live status updates
 			for _, data := range msg.Outputs {
 				if data.PaneID != "" {
@@ -1515,25 +2251,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				// Map type string to model name for context limits
-				agentType := "unknown"
+				statusAgentType := data.AgentType
 				modelName := ""
 				switch data.AgentType {
 				case string(tmux.AgentClaude):
-					agentType = "claude"
 					if m.cfg != nil {
 						modelName = m.cfg.Models.DefaultClaude
 					} else {
 						modelName = "claude-sonnet-4-20250514"
 					}
 				case string(tmux.AgentCodex):
-					agentType = "codex"
 					if m.cfg != nil {
 						modelName = m.cfg.Models.DefaultCodex
 					} else {
 						modelName = "gpt-4"
 					}
 				case string(tmux.AgentGemini):
-					agentType = "gemini"
 					if m.cfg != nil {
 						modelName = m.cfg.Models.DefaultGemini
 					} else {
@@ -1550,7 +2283,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				ps := m.paneStatus[data.PaneIndex]
 
 				// Update LIVE STATUS using local analysis (avoid waiting for slow full fetch)
-				st := m.detector.Analyze(data.PaneID, currentPane.Title, agentType, data.Output, data.LastActivity)
+				st := m.detector.Analyze(data.PaneID, currentPane.Title, statusAgentType, data.Output, data.LastActivity)
 
 				state := string(st.State)
 				// Rate limit check
@@ -1573,7 +2306,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				// Compaction check
-				event, recoverySent, _ := m.compaction.CheckAndRecover(data.Output, agentType, m.session, data.PaneIndex)
+				event, recoverySent, _ := m.compaction.CheckAndRecover(data.Output, statusAgentType, m.session, data.PaneIndex)
 
 				if event != nil {
 					now := time.Now()
@@ -1588,6 +2321,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, followUp
 
 	case StatusUpdateMsg:
+		if !m.acceptUpdate(refreshStatus, msg.Gen) {
+			return m, nil
+		}
 		followUp := m.finishStatusesFetch()
 		m.statusFetchLatency = msg.Duration
 		m.statusFetchErr = msg.Err
@@ -1630,6 +2366,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.renderedOutputCache[st.PaneID] = rendered
 				}
 			}
+		}
+		if msg.Err == nil {
+			m.markUpdated(refreshStatus, msg.Time)
 		}
 		m.lastRefresh = msg.Time
 		// Also refresh health data after status update
@@ -1684,6 +2423,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ScanStatusMsg:
+		if !m.acceptUpdate(refreshScan, msg.Gen) {
+			return m, nil
+		}
 		followUp := m.finishScanFetch()
 		if msg.Err != nil && errors.Is(msg.Err, context.Canceled) {
 			return m, followUp
@@ -1694,17 +2436,83 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scanStatus = msg.Status
 			m.scanTotals = msg.Totals
 			m.scanDuration = msg.Duration
+			m.markUpdated(refreshScan, time.Now())
 		}
 		return m, followUp
 
 	case AgentMailUpdateMsg:
+		if !m.acceptUpdate(refreshAgentMail, msg.Gen) {
+			return m, nil
+		}
 		m.agentMailAvailable = msg.Available
 		m.agentMailConnected = msg.Connected
+		m.agentMailArchiveFound = msg.ArchiveFound
 		m.agentMailLocks = msg.Locks
 		m.agentMailLockInfo = msg.LockInfo
+		m.markUpdated(refreshAgentMail, time.Now())
+		return m, nil
+
+	case AgentMailInboxSummaryMsg:
+		if !m.acceptUpdate(refreshAgentMailInbox, msg.Gen) {
+			return m, nil
+		}
+		m.fetchingMailInbox = false
+		m.lastMailInboxFetch = time.Now()
+
+		if msg.Err == nil {
+			m.agentMailInbox = msg.Inboxes
+			m.agentMailAgents = msg.AgentMap
+
+			// Build index lookup for current panes
+			paneIndexByID := make(map[string]int)
+			for _, p := range m.panes {
+				paneIndexByID[p.ID] = p.Index
+			}
+
+			// Calculate totals and update per-pane status
+			unread := 0
+			urgent := 0
+			for paneID, msgs := range msg.Inboxes {
+				paneUnread := len(msgs)
+				paneUrgent := 0
+				for _, mm := range msgs {
+					if strings.EqualFold(mm.Importance, "urgent") {
+						paneUrgent++
+					}
+				}
+				unread += paneUnread
+				urgent += paneUrgent
+
+				// Update pane status
+				if idx, ok := paneIndexByID[paneID]; ok {
+					ps := m.paneStatus[idx]
+					ps.MailUnread = paneUnread
+					ps.MailUrgent = paneUrgent
+					m.paneStatus[idx] = ps
+				}
+			}
+			m.agentMailUnread = unread
+			m.agentMailUrgent = urgent
+			m.markUpdated(refreshAgentMailInbox, time.Now())
+		}
+		return m, nil
+
+	case AgentMailInboxDetailMsg:
+		if !m.acceptUpdate(refreshAgentMailInbox, msg.Gen) {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.agentMailInboxErrors[msg.PaneID] = msg.Err
+		} else {
+			delete(m.agentMailInboxErrors, msg.PaneID)
+			m.agentMailInbox[msg.PaneID] = msg.Messages
+		}
 		return m, nil
 
 	case CheckpointUpdateMsg:
+		if !m.acceptUpdate(refreshCheckpoint, msg.Gen) {
+			return m, nil
+		}
 		m.fetchingCheckpoint = false
 		m.lastCheckpointFetch = time.Now()
 		if msg.Err != nil {
@@ -1718,6 +2526,76 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.latestCheckpoint = msg.Latest
 			m.checkpointStatus = msg.Status
 			m.checkpointError = nil
+			m.markUpdated(refreshCheckpoint, time.Now())
+		}
+		return m, nil
+
+	case DCGStatusUpdateMsg:
+		if !m.acceptUpdate(refreshDCG, msg.Gen) {
+			return m, nil
+		}
+		m.fetchingDCG = false
+		m.lastDCGFetch = time.Now()
+		if msg.Err != nil {
+			m.dcgError = msg.Err
+		} else {
+			m.dcgEnabled = msg.Enabled
+			m.dcgAvailable = msg.Available
+			m.dcgVersion = msg.Version
+			m.dcgBlocked = msg.Blocked
+			m.dcgLastBlocked = msg.LastBlocked
+			m.dcgError = nil
+			m.markUpdated(refreshDCG, time.Now())
+		}
+		return m, nil
+
+	case PendingRotationsUpdateMsg:
+		if !m.acceptUpdate(refreshPendingRotations, msg.Gen) {
+			return m, nil
+		}
+		m.fetchingPendingRot = false
+		m.lastPendingFetch = time.Now()
+		m.pendingRotationsErr = msg.Err
+		if msg.Err == nil {
+			m.pendingRotations = msg.Pending
+			m.markUpdated(refreshPendingRotations, time.Now())
+		}
+		// Update the panel with the new data
+		if m.rotationConfirmPanel != nil {
+			m.rotationConfirmPanel.SetData(m.pendingRotations, m.pendingRotationsErr)
+		}
+		return m, nil
+
+	case panels.RotationConfirmActionMsg:
+		// Handle rotation confirmation action from the panel
+		return m, m.executeRotationConfirmAction(msg.AgentID, msg.Action)
+
+	case RotationConfirmResultMsg:
+		// Handle the result of a rotation confirmation action
+		if msg.Err != nil {
+			m.healthMessage = fmt.Sprintf("Rotation action failed: %v", msg.Err)
+		} else if !msg.Success {
+			m.healthMessage = msg.Message
+		} else {
+			m.healthMessage = msg.Message
+		}
+		// Refresh the pending rotations list
+		return m, m.fetchPendingRotations()
+
+	case HandoffUpdateMsg:
+		if !m.acceptUpdate(refreshHandoff, msg.Gen) {
+			return m, nil
+		}
+		m.fetchingHandoff = false
+		m.lastHandoffFetch = time.Now()
+		m.handoffError = msg.Err
+		m.handoffGoal = msg.Goal
+		m.handoffNow = msg.Now
+		m.handoffAge = msg.Age
+		m.handoffPath = msg.Path
+		m.handoffStatus = msg.Status
+		if msg.Err == nil {
+			m.markUpdated(refreshHandoff, time.Now())
 		}
 		return m, nil
 
@@ -1791,35 +2669,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, dashKeys.Refresh):
 			// Manual refresh (coalesced; cancels in-flight where supported)
-			var refreshCmds []tea.Cmd
-			if cmd := m.requestSessionFetch(true); cmd != nil {
-				refreshCmds = append(refreshCmds, cmd)
-			}
-			if cmd := m.requestStatusesFetch(); cmd != nil {
-				refreshCmds = append(refreshCmds, cmd)
-			}
-			if cmd := m.requestScanFetch(true); cmd != nil {
-				refreshCmds = append(refreshCmds, cmd)
-			}
-			return m, tea.Batch(refreshCmds...)
+			return m, tea.Batch(m.fullRefresh(true)...)
 
 		case key.Matches(msg, dashKeys.ContextRefresh):
 			// Force context refresh (same as regular refresh but with user intent to see context)
-			var refreshCmds []tea.Cmd
-			if cmd := m.requestSessionFetch(true); cmd != nil {
-				refreshCmds = append(refreshCmds, cmd)
-			}
-			if cmd := m.requestStatusesFetch(); cmd != nil {
-				refreshCmds = append(refreshCmds, cmd)
-			}
-			if cmd := m.requestScanFetch(true); cmd != nil {
-				refreshCmds = append(refreshCmds, cmd)
-			}
-			return m, tea.Batch(refreshCmds...)
+			return m, tea.Batch(m.fullRefresh(true)...)
 
 		case key.Matches(msg, dashKeys.MailRefresh):
 			// Refresh Agent Mail data
 			return m, m.fetchAgentMailStatus()
+
+		case key.Matches(msg, dashKeys.InboxToggle):
+			if m.cursor >= 0 && m.cursor < len(m.panes) {
+				p := m.panes[m.cursor]
+				return m, m.fetchAgentMailInboxDetails(p)
+			}
 
 		case key.Matches(msg, dashKeys.Checkpoint):
 			// Create a new checkpoint for the session
@@ -1855,6 +2719,84 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Forward keyboard events to focused panels for panel-specific actions
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		// Only forward if not handled by global shortcuts above
+		switch m.focusedPanel {
+		case PanelHistory:
+			if m.historyPanel != nil {
+				var cmd tea.Cmd
+				_, cmd = m.historyPanel.Update(keyMsg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			}
+		case PanelSidebar:
+			// For sidebar, forward to the focused sub-panel
+			if m.historyPanel != nil && m.historyPanel.IsFocused() {
+				var cmd tea.Cmd
+				_, cmd = m.historyPanel.Update(keyMsg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			} else if m.filesPanel != nil && m.filesPanel.IsFocused() {
+				var cmd tea.Cmd
+				_, cmd = m.filesPanel.Update(keyMsg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			} else if m.cassPanel != nil && m.cassPanel.IsFocused() {
+				var cmd tea.Cmd
+				_, cmd = m.cassPanel.Update(keyMsg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			} else if m.metricsPanel != nil && m.metricsPanel.IsFocused() {
+				var cmd tea.Cmd
+				_, cmd = m.metricsPanel.Update(keyMsg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			}
+		case PanelBeads:
+			if m.beadsPanel != nil {
+				var cmd tea.Cmd
+				_, cmd = m.beadsPanel.Update(keyMsg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			}
+		case PanelAlerts:
+			if m.alertsPanel != nil {
+				var cmd tea.Cmd
+				_, cmd = m.alertsPanel.Update(keyMsg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			}
+		case PanelConflicts:
+			if m.conflictsPanel != nil {
+				var cmd tea.Cmd
+				_, cmd = m.conflictsPanel.Update(keyMsg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			}
+		}
+
+		// Also forward to rotation confirm panel when it has pending rotations
+		if m.rotationConfirmPanel != nil && m.rotationConfirmPanel.HasPending() && m.rotationConfirmPanel.IsFocused() {
+			var cmd tea.Cmd
+			_, cmd = m.rotationConfirmPanel.Update(keyMsg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+
+	if len(cmds) > 0 {
+		return m, tea.Batch(cmds...)
+	}
 	return m, nil
 }
 
@@ -1869,7 +2811,12 @@ func (m *Model) cycleFocus(dir int) {
 	var visiblePanes []PanelID
 	switch {
 	case m.tier >= layout.TierMega:
-		visiblePanes = []PanelID{PanelPaneList, PanelDetail, PanelBeads, PanelAlerts, PanelSidebar}
+		// Use PanelConflicts instead of PanelAlerts when conflicts are present
+		if m.conflictsPanel.HasConflicts() {
+			visiblePanes = []PanelID{PanelPaneList, PanelDetail, PanelBeads, PanelConflicts, PanelSidebar}
+		} else {
+			visiblePanes = []PanelID{PanelPaneList, PanelDetail, PanelBeads, PanelAlerts, PanelSidebar}
+		}
 	case m.tier >= layout.TierUltra:
 		visiblePanes = []PanelID{PanelPaneList, PanelDetail, PanelSidebar}
 	case m.tier >= layout.TierSplit:
@@ -1919,12 +2866,25 @@ func (m *Model) updateStats() {
 
 // updateTickerData updates the ticker panel with current dashboard data
 func (m *Model) updateTickerData() {
-	// Count active agents (those with "working" state)
+	// Count active agents (those with any known status, not just "working")
+	// "Active" means status has been determined - could be working, idle, error, or compacted
+	// This gives a more accurate picture than only counting actively working agents
 	activeAgents := 0
 	for _, ps := range m.paneStatus {
-		if ps.State == "working" {
+		// Count as active if state is known (non-empty)
+		// Empty or missing state means status detection hasn't run yet
+		if ps.State != "" {
 			activeAgents++
 		}
+	}
+	// Fallback: if no panes have determined status yet but we have panes, count agent panes
+	// (excludes user panes which are type "user" or empty)
+	// Note: We check activeAgents==0 rather than len(paneStatus)==0 because paneStatus
+	// may have entries with empty State when status detection is still pending
+	if activeAgents == 0 && len(m.panes) > 0 {
+		// Status detection hasn't populated yet; show total agents as placeholder
+		// This prevents showing "0/17" when we simply haven't fetched status yet
+		activeAgents = m.claudeCount + m.codexCount + m.geminiCount
 	}
 
 	// Count alerts by severity
@@ -1947,6 +2907,7 @@ func (m *Model) updateTickerData() {
 		ClaudeCount:      m.claudeCount,
 		CodexCount:       m.codexCount,
 		GeminiCount:      m.geminiCount,
+		UserCount:        m.userCount,
 		CriticalAlerts:   critAlerts,
 		WarningAlerts:    warnAlerts,
 		InfoAlerts:       infoAlerts,
@@ -1956,6 +2917,8 @@ func (m *Model) updateTickerData() {
 		UnreadMessages:   m.agentMailUnread,
 		ActiveLocks:      m.agentMailLocks,
 		MailConnected:    m.agentMailConnected,
+		MailAvailable:    m.agentMailAvailable,
+		MailArchiveFound: m.agentMailArchiveFound,
 		CheckpointCount:  m.checkpointCount,
 		CheckpointStatus: m.checkpointStatus,
 		BugsCritical:     m.bugsCritical,
@@ -1970,11 +2933,49 @@ func (m *Model) updateTickerData() {
 
 // View implements tea.Model
 func (m Model) View() string {
+	if m.showHelp {
+		helpOverlay := components.HelpOverlay(components.HelpOverlayOptions{
+			Title:    "Dashboard Shortcuts",
+			Sections: components.DashboardHelpSections(),
+			MaxWidth: 60,
+		})
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpOverlay)
+	}
+
+	if m.showCassSearch {
+		searchView := m.cassSearch.View()
+		modalStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(m.theme.Primary).
+			Background(m.theme.Base).
+			Padding(1, 2)
+		modal := modalStyle.Render(searchView)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	}
+
+	header := m.renderHeaderSection()
+	footer := m.renderFooterSection()
+	content := m.renderMainContentSection()
+
+	if m.height > 0 {
+		available := m.height - lipgloss.Height(header) - lipgloss.Height(footer)
+		if available < 1 {
+			available = 1
+		}
+		// Truncate content to fit within available height.
+		// lipgloss Height/MaxHeight don't truncate - they're CSS-like properties.
+		content = truncateToHeight(content, available)
+		// Apply height style to ensure consistent spacing
+		content = lipgloss.NewStyle().Height(available).MaxHeight(available).Render(content)
+	}
+
+	return header + content + footer
+}
+
+func (m Model) renderHeaderSection() string {
 	t := m.theme
-	ic := m.icons
 
 	var b strings.Builder
-
 	b.WriteString("\n")
 
 	// ═══════════════════════════════════════════════════════════════
@@ -1985,12 +2986,18 @@ func (m Model) View() string {
 	b.WriteString(center.Render(bannerText) + "\n")
 
 	// Session title with gradient
-	sessionTitle := ic.Session + "  " + m.session
+	sessionTitle := m.icons.Session + "  " + m.session
 	animatedSession := styles.Shimmer(sessionTitle, m.animTick,
 		string(t.Blue), string(t.Lavender), string(t.Mauve))
 	b.WriteString(center.Render(animatedSession) + "\n")
 	if contextLine := m.renderHeaderContextLine(m.width); contextLine != "" {
 		b.WriteString(center.Render(contextLine) + "\n")
+	}
+	if handoffLine := m.renderHeaderHandoffLine(m.width); handoffLine != "" {
+		b.WriteString(center.Render(handoffLine) + "\n")
+	}
+	if contextWarnLine := m.renderHeaderContextWarningLine(m.width); contextWarnLine != "" {
+		b.WriteString(center.Render(contextWarnLine) + "\n")
 	}
 	b.WriteString(styles.GradientDivider(m.width,
 		string(t.Blue), string(t.Mauve)) + "\n\n")
@@ -2015,6 +3022,12 @@ func (m Model) View() string {
 	if alert := m.renderRateLimitAlert(); alert != "" {
 		b.WriteString(alert + "\n\n")
 	}
+
+	return b.String()
+}
+
+func (m Model) renderMainContentSection() string {
+	var b strings.Builder
 
 	// ═══════════════════════════════════════════════════════════════
 	// PANE GRID VISUALIZATION
@@ -2062,6 +3075,14 @@ func (m Model) View() string {
 		}
 	}
 
+	return b.String()
+}
+
+func (m Model) renderFooterSection() string {
+	t := m.theme
+
+	var b strings.Builder
+
 	// ═══════════════════════════════════════════════════════════════
 	// TICKER BAR (scrolling status summary)
 	// ═══════════════════════════════════════════════════════════════
@@ -2083,30 +3104,7 @@ func (m Model) View() string {
 		string(t.Surface2), string(t.Surface1)) + "\n")
 	b.WriteString("  " + m.renderHelpBar() + "\n")
 
-	content := b.String()
-
-	// Show help overlay if toggled
-	if m.showHelp {
-		helpOverlay := components.HelpOverlay(components.HelpOverlayOptions{
-			Title:    "Dashboard Shortcuts",
-			Sections: components.DashboardHelpSections(),
-			MaxWidth: 60,
-		})
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpOverlay)
-	}
-
-	if m.showCassSearch {
-		searchView := m.cassSearch.View()
-		modalStyle := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(t.Primary).
-			Background(t.Base).
-			Padding(1, 2)
-		modal := modalStyle.Render(searchView)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
-	}
-
-	return content
+	return b.String()
 }
 
 func (m Model) renderStatsBar() string {
@@ -2189,6 +3187,12 @@ func (m Model) renderStatsBar() string {
 	cpBadge := m.renderCheckpointBadge()
 	if cpBadge != "" {
 		parts = append(parts, cpBadge)
+	}
+
+	// DCG status badge
+	dcgBadge := m.renderDCGBadge()
+	if dcgBadge != "" {
+		parts = append(parts, dcgBadge)
 	}
 
 	return strings.Join(parts, "  ")
@@ -2366,6 +3370,46 @@ func (m Model) renderCheckpointBadge() string {
 		Render(fmt.Sprintf("%s %s", icon, label))
 }
 
+// renderDCGBadge renders the DCG (Destructive Command Guard) status badge
+func (m Model) renderDCGBadge() string {
+	t := m.theme
+
+	// Don't show badge if DCG is not enabled in config
+	if !m.dcgEnabled {
+		return ""
+	}
+
+	var bgColor, fgColor lipgloss.Color
+	var icon, label string
+
+	if !m.dcgAvailable {
+		// DCG enabled but binary not found
+		bgColor = t.Yellow
+		fgColor = t.Base
+		icon = "⚠"
+		label = "DCG missing"
+	} else if m.dcgBlocked > 0 {
+		// DCG active with blocked commands
+		bgColor = t.Lavender
+		fgColor = t.Base
+		icon = "🛡️"
+		label = fmt.Sprintf("DCG %d blocked", m.dcgBlocked)
+	} else {
+		// DCG active and protecting
+		bgColor = t.Green
+		fgColor = t.Base
+		icon = "🛡️"
+		label = "DCG"
+	}
+
+	return lipgloss.NewStyle().
+		Background(bgColor).
+		Foreground(fgColor).
+		Bold(true).
+		Padding(0, 1).
+		Render(fmt.Sprintf("%s %s", icon, label))
+}
+
 // renderRateLimitAlert renders a prominent alert banner if any agent is rate limited
 func (m Model) renderRateLimitAlert() string {
 	t := m.theme
@@ -2442,272 +3486,145 @@ func (m Model) renderContextBar(percent float64, width int) string {
 	return bar
 }
 
-func (m Model) renderPaneGrid() string {
-	t := m.theme
-	ic := m.icons
-
-	var lines []string
-
-	// Calculate adaptive card dimensions based on terminal width
-	// Uses beads_viewer-inspired algorithm with min/max constraints
-	const (
-		minCardWidth = 22 // Minimum usable card width
-		maxCardWidth = 45 // Maximum card width for readability
-		cardGap      = 2  // Gap between cards
-	)
-
-	availableWidth := m.width - 4 // Account for margins
-	cardWidth, cardsPerRow := styles.AdaptiveCardDimensions(availableWidth, minCardWidth, maxCardWidth, cardGap)
-
-	// In grid mode (used below Split threshold), show more detail when card width allows it.
-	showExtendedInfo := cardWidth >= 24
-
-	rows := BuildPaneTableRows(m.panes, m.agentStatuses, m.paneStatus, &m.beadsSummary, m.fileChanges, m.animTick, t)
-	if summary := activitySummaryLine(rows, t); summary != "" {
-		lines = append(lines, "  "+summary)
+// formatTokenDisplay formats token counts for display (e.g., "142.5K / 200K")
+func formatTokenDisplay(used, limit int) string {
+	formatTokens := func(n int) string {
+		if n >= 1000000 {
+			return fmt.Sprintf("%.1fM", float64(n)/1000000)
+		}
+		if n >= 1000 {
+			return fmt.Sprintf("%.1fK", float64(n)/1000)
+		}
+		return fmt.Sprintf("%d", n)
 	}
-	contextRanks := m.computeContextRanks()
-
-	var cards []string
-
-	for i, p := range m.panes {
-		row := rows[i]
-		isSelected := i == m.cursor
-
-		// Determine card colors based on agent type
-		var borderColor, iconColor lipgloss.Color
-		var agentIcon string
-
-		switch p.Type {
-		case tmux.AgentClaude:
-			borderColor = t.Claude
-			iconColor = t.Claude
-			agentIcon = ic.Claude
-		case tmux.AgentCodex:
-			borderColor = t.Codex
-			iconColor = t.Codex
-			agentIcon = ic.Codex
-		case tmux.AgentGemini:
-			borderColor = t.Gemini
-			iconColor = t.Gemini
-			agentIcon = ic.Gemini
-		default:
-			borderColor = t.Green
-			iconColor = t.Green
-			agentIcon = ic.User
-		}
-
-		// Selection highlight
-		if isSelected {
-			borderColor = t.Pink
-		}
-
-		// Pulse border for active/working panes (if not selected)
-		if !isSelected && row.Status == "working" && m.animTick > 0 {
-			borderColor = styles.Pulse(string(borderColor), m.animTick)
-		}
-
-		// Build card content
-		var cardContent strings.Builder
-
-		// Header line with icon and title
-		statusIcon := "•"
-		statusColor := t.Overlay
-		switch row.Status {
-		case "working":
-			statusIcon = WorkingSpinnerFrame(m.animTick)
-			statusColor = t.Green
-		case "idle":
-			statusIcon = "○"
-			statusColor = t.Yellow
-		case "error":
-			statusIcon = "✗"
-			statusColor = t.Red
-		case "compacted":
-			statusIcon = "⚠"
-			statusColor = t.Peach
-		case "rate_limited":
-			statusIcon = "⏳"
-			statusColor = t.Maroon
-		}
-		statusStyled := lipgloss.NewStyle().Foreground(statusColor).Bold(true).Render(statusIcon)
-
-		iconStyled := lipgloss.NewStyle().Foreground(iconColor).Bold(true).Render(agentIcon)
-		// Show profile name as primary identifier
-		profileName := p.Type.ProfileName()
-		profileStyled := lipgloss.NewStyle().Foreground(t.Text).Bold(true).Render(profileName)
-		cardContent.WriteString(statusStyled + " " + iconStyled + " " + profileStyled + "\n")
-
-		// Index badge + compact badges
-		numBadge := lipgloss.NewStyle().
-			Foreground(t.Overlay).
-			Render(fmt.Sprintf("#%d", p.Index))
-
-		var line2Parts []string
-		line2Parts = append(line2Parts, numBadge)
-		if p.Variant != "" {
-			label := layout.TruncateRunes(p.Variant, 12, "…")
-			modelBadge := styles.TextBadge(label, iconColor, t.Base, styles.BadgeOptions{
-				Style:    styles.BadgeStyleCompact,
-				Bold:     false,
-				ShowIcon: false,
-			})
-			line2Parts = append(line2Parts, modelBadge)
-		}
-		if showExtendedInfo {
-			if rank, ok := contextRanks[p.Index]; ok && rank > 0 {
-				rankBadge := styles.RankBadge(rank, styles.BadgeOptions{
-					Style:    styles.BadgeStyleCompact,
-					Bold:     false,
-					ShowIcon: false,
-				})
-				line2Parts = append(line2Parts, rankBadge)
-			}
-		}
-		cardContent.WriteString(strings.Join(line2Parts, " ") + "\n")
-
-		// Bead + activity badges (best-effort)
-		if row.CurrentBead != "" {
-			beadID := row.CurrentBead
-			if parts := strings.SplitN(row.CurrentBead, ": ", 2); len(parts) > 0 {
-				beadID = parts[0]
-			}
-			beadBadge := styles.TextBadge(beadID, t.Mauve, t.Base, styles.BadgeOptions{
-				Style:    styles.BadgeStyleCompact,
-				Bold:     false,
-				ShowIcon: false,
-			})
-			cardContent.WriteString(beadBadge + "\n")
-		}
-
-		var activityBadges []string
-		if badge := activityBadge(row.Status, t); badge != "" {
-			activityBadges = append(activityBadges, badge)
-		}
-		if row.FileChanges > 0 {
-			activityBadges = append(activityBadges, styles.TextBadge(fmt.Sprintf("Δ%d", row.FileChanges), t.Blue, t.Base, styles.BadgeOptions{
-				Style:    styles.BadgeStyleCompact,
-				Bold:     false,
-				ShowIcon: false,
-			}))
-		}
-		if row.TokenVelocity > 0 && showExtendedInfo {
-			activityBadges = append(activityBadges, styles.TokenVelocityBadge(row.TokenVelocity, styles.BadgeOptions{
-				Style:    styles.BadgeStyleCompact,
-				Bold:     false,
-				ShowIcon: true,
-			}))
-		}
-		if len(activityBadges) > 0 {
-			cardContent.WriteString(strings.Join(activityBadges, " ") + "\n")
-		}
-
-		// Health badges - show warning/error status and restart count
-		if ps, ok := m.paneStatus[p.Index]; ok {
-			var healthBadges []string
-
-			// Health status badge
-			if ps.HealthStatus == "warning" {
-				healthBadges = append(healthBadges, styles.TextBadge("⚠ WARN", t.Yellow, t.Base, styles.BadgeOptions{
-					Style:    styles.BadgeStyleCompact,
-					Bold:     true,
-					ShowIcon: false,
-				}))
-			} else if ps.HealthStatus == "error" {
-				healthBadges = append(healthBadges, styles.TextBadge("✗ ERR", t.Red, t.Base, styles.BadgeOptions{
-					Style:    styles.BadgeStyleCompact,
-					Bold:     true,
-					ShowIcon: false,
-				}))
-			}
-
-			// Restart count badge
-			if ps.RestartCount > 0 {
-				healthBadges = append(healthBadges, styles.TextBadge(fmt.Sprintf("↻%d", ps.RestartCount), t.Peach, t.Base, styles.BadgeOptions{
-					Style:    styles.BadgeStyleCompact,
-					Bold:     false,
-					ShowIcon: false,
-				}))
-			}
-
-			// Show first health issue as tooltip
-			if len(ps.HealthIssues) > 0 && showExtendedInfo {
-				issueStyle := lipgloss.NewStyle().Foreground(t.Overlay).Italic(true)
-				issue := layout.TruncateRunes(ps.HealthIssues[0], maxInt(cardWidth-4, 10), "…")
-				healthBadges = append(healthBadges, issueStyle.Render(issue))
-			}
-
-			if len(healthBadges) > 0 {
-				cardContent.WriteString(strings.Join(healthBadges, " ") + "\n")
-			}
-		}
-
-		// Size info - on wide displays show more detail
-		sizeStyle := lipgloss.NewStyle().Foreground(t.Subtext)
-		if showExtendedInfo {
-			cardContent.WriteString(sizeStyle.Render(fmt.Sprintf("%dx%d cols×rows", p.Width, p.Height)) + "\n")
-		} else {
-			cardContent.WriteString(sizeStyle.Render(fmt.Sprintf("%dx%d", p.Width, p.Height)) + "\n")
-		}
-
-		// Command running (if any) - only when there is room
-		if p.Command != "" && showExtendedInfo {
-			cmdStyle := lipgloss.NewStyle().Foreground(t.Overlay).Italic(true)
-			cmd := layout.TruncateRunes(p.Command, maxInt(cardWidth-4, 8), "…")
-			cardContent.WriteString(cmdStyle.Render(cmd))
-		}
-
-		// Context usage bar (best-effort; show in grid when available)
-		if ps, ok := m.paneStatus[p.Index]; ok && ps.ContextLimit > 0 {
-			cardContent.WriteString("\n")
-			contextBar := m.renderContextBar(ps.ContextPercent, cardWidth-4)
-			cardContent.WriteString(contextBar)
-		}
-
-		// Compaction indicator
-		if ps, ok := m.paneStatus[p.Index]; ok && ps.LastCompaction != nil {
-			cardContent.WriteString("\n")
-			compactStyle := lipgloss.NewStyle().Foreground(t.Warning).Bold(true)
-			indicator := "⚠ compacted"
-			if ps.RecoverySent {
-				indicator = "↻ recovering"
-			}
-			cardContent.WriteString(compactStyle.Render(indicator))
-		}
-
-		// Create card box
-		cardStyle := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(borderColor).
-			Width(cardWidth).
-			Padding(0, 1)
-
-		if isSelected {
-			// Add glow effect for selected card
-			cardStyle = cardStyle.
-				Background(t.Surface0)
-		}
-
-		cards = append(cards, cardStyle.Render(cardContent.String()))
-	}
-
-	// Arrange cards in rows
-	for i := 0; i < len(cards); i += cardsPerRow {
-		end := i + cardsPerRow
-		if end > len(cards) {
-			end = len(cards)
-		}
-		row := lipgloss.JoinHorizontal(lipgloss.Top, cards[i:end]...)
-		lines = append(lines, "  "+row)
-	}
-
-	return strings.Join(lines, "\n")
+	return fmt.Sprintf("%s / %s", formatTokens(used), formatTokens(limit))
 }
 
-// renderQuickActions renders actionable buttons for common operations.
-// Only shows in TierWide and above to avoid cluttering narrow terminals.
+// formatRelativeTime formats a duration for display (e.g., "2m", "45s")
+func formatRelativeTime(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%dh", int(d.Hours()))
+}
+
+// formatDuration formats a duration for display (e.g., "1m 30s", "45s").
+func formatDuration(d time.Duration) string {
+	if d <= 0 {
+		return "now"
+	}
+
+	d = d.Round(time.Second)
+	minutes := int(d.Minutes())
+	seconds := int(d.Seconds()) % 60
+
+	if minutes > 0 {
+		return fmt.Sprintf("%dm %02ds", minutes, seconds)
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
+func (m Model) renderDiagnosticsBar(width int) string {
+	t := m.theme
+
+	labelStyle := lipgloss.NewStyle().Foreground(t.Subtext).Bold(true)
+	valueStyle := lipgloss.NewStyle().Foreground(t.Text)
+	warnStyle := lipgloss.NewStyle().Foreground(t.Warning)
+	errStyle := lipgloss.NewStyle().Foreground(t.Error)
+
+	sessionPart := valueStyle.Render("ok")
+	if m.fetchingSession {
+		elapsed := time.Since(m.lastPaneFetch).Round(100 * time.Millisecond)
+		sessionPart = warnStyle.Render("fetching " + elapsed.String())
+	} else if m.sessionFetchLatency > 0 {
+		sessionPart = valueStyle.Render(m.sessionFetchLatency.Round(time.Millisecond).String())
+	}
+	if m.err != nil {
+		sessionPart = errStyle.Render("error")
+	}
+
+	statusPart := valueStyle.Render("ok")
+	if m.fetchingContext {
+		elapsed := time.Since(m.lastContextFetch).Round(100 * time.Millisecond)
+		statusPart = warnStyle.Render("fetching " + elapsed.String())
+	} else if m.statusFetchLatency > 0 {
+		statusPart = valueStyle.Render(m.statusFetchLatency.Round(time.Millisecond).String())
+	}
+	if m.statusFetchErr != nil {
+		statusPart = errStyle.Render("error")
+	}
+
+	parts := []string{
+		labelStyle.Render("diag"),
+		labelStyle.Render("tmux") + ":" + sessionPart,
+		labelStyle.Render("status") + ":" + statusPart,
+	}
+	if width >= 120 {
+		age := func(src refreshSource) string {
+			t := m.lastUpdated[src]
+			if t.IsZero() {
+				return "n/a"
+			}
+			return formatAgeShort(time.Since(t))
+		}
+		agePart := valueStyle.Render(fmt.Sprintf("panes %s, status %s, beads %s", age(refreshSession), age(refreshStatus), age(refreshBeads)))
+		parts = append(parts, labelStyle.Render("age")+":"+agePart)
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(t.Surface1).
+		Padding(0, 1).
+		Width(width)
+
+	return box.Render(strings.Join(parts, "  "))
+}
+
+func hintForSessionFetchError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "tmux is responding slowly. Press r to retry, p to pause auto-refresh, or try running ntm outside of tmux"
+	}
+
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "tmux is not installed"):
+		return "Install tmux, then run: ntm deps -v"
+	case strings.Contains(msg, "executable file not found"):
+		return "Install tmux, then run: ntm deps -v"
+	case strings.Contains(msg, "no server running"):
+		return "Start tmux or create a session with: ntm spawn <name>"
+	case strings.Contains(msg, "failed to connect to server"):
+		return "Start tmux or create a session with: ntm spawn <name>"
+	case strings.Contains(msg, "can't find session"), strings.Contains(msg, "session not found"):
+		return "Session may have ended. Create a new one with: ntm spawn <name>"
+	}
+
+	return "Press r to retry"
+}
+
+func formatAgeShort(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	d = d.Round(time.Second)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+}
+
 func (m Model) renderQuickActions() string {
-	// Only show in wide modes (TierWide = 200+ cols)
 	if m.tier < layout.TierWide {
 		return ""
 	}
@@ -2903,122 +3820,452 @@ func (m Model) renderHeaderContextLine(width int) string {
 	}
 
 	line := strings.Join(parts, " · ")
-	line = truncateRunes(line, width-4)
+	line = layout.TruncateWidthDefault(line, width-4)
 
 	return lipgloss.NewStyle().
 		Foreground(t.Subtext).
 		Render(line)
 }
 
-func formatRelativeTime(d time.Duration) string {
-	if d < 0 {
-		d = 0
-	}
-	if d < 5*time.Second {
-		return "just now"
-	}
-
-	d = d.Round(time.Second)
-	if d < time.Minute {
-		return fmt.Sprintf("%ds ago", int(d.Seconds()))
-	}
-	if d < time.Hour {
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	}
-
-	hours := int(d.Hours())
-	if hours < 48 {
-		return fmt.Sprintf("%dh ago", hours)
-	}
-
-	days := hours / 24
-	return fmt.Sprintf("%dd ago", days)
-}
-
-func truncateRunes(s string, maxLen int) string {
-	if maxLen <= 0 {
+func (m Model) renderHeaderHandoffLine(width int) string {
+	if width < 20 {
 		return ""
 	}
 
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
+	goal := strings.TrimSpace(m.handoffGoal)
+	now := strings.TrimSpace(m.handoffNow)
+	status := strings.TrimSpace(m.handoffStatus)
+
+	if goal == "" && now == "" && status == "" {
+		return ""
 	}
-	if maxLen == 1 {
-		return "…"
+
+	var parts []string
+	if goal != "" {
+		parts = append(parts, "goal: "+layout.TruncateWidthDefault(goal, 60))
 	}
-	return string(runes[:maxLen-1]) + "…"
+	if now != "" {
+		parts = append(parts, "now: "+layout.TruncateWidthDefault(now, 40))
+	}
+	if m.handoffAge > 0 {
+		parts = append(parts, formatRelativeTime(m.handoffAge))
+	}
+	if status != "" {
+		parts = append(parts, status)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+
+	line := "handoff · " + strings.Join(parts, " · ")
+	line = layout.TruncateWidthDefault(line, width-4)
+
+	return lipgloss.NewStyle().
+		Foreground(m.theme.Subtext).
+		Render(line)
 }
 
-func (m Model) renderDiagnosticsBar(width int) string {
+func (m Model) renderHeaderContextWarningLine(width int) string {
+	if width < 20 {
+		return ""
+	}
+
+	type contextAlert struct {
+		label   string
+		percent float64
+		model   string
+	}
+
+	paneByIndex := make(map[int]tmux.Pane, len(m.panes))
+	for _, pane := range m.panes {
+		paneByIndex[pane.Index] = pane
+	}
+
+	var alerts []contextAlert
+	for idx, ps := range m.paneStatus {
+		if ps.ContextLimit <= 0 || ps.ContextPercent < 70 {
+			continue
+		}
+		pane, ok := paneByIndex[idx]
+		if !ok {
+			continue
+		}
+		model := ps.ContextModel
+		if model == "" {
+			model = pane.Variant
+		}
+		if model == "" {
+			model = "unknown"
+		}
+		model = layout.TruncateWidthDefault(model, 24)
+		label := formatPaneLabel(m.session, pane)
+		label = layout.TruncateWidthDefault(label, 12)
+		alerts = append(alerts, contextAlert{
+			label:   label,
+			percent: ps.ContextPercent,
+			model:   model,
+		})
+	}
+
+	if len(alerts) == 0 {
+		return ""
+	}
+
+	sort.Slice(alerts, func(i, j int) bool {
+		return alerts[i].percent > alerts[j].percent
+	})
+
 	t := m.theme
+	prefix := "context"
+	if m.icons.Warning != "" {
+		prefix = m.icons.Warning + " " + prefix
+	}
 
-	labelStyle := lipgloss.NewStyle().Foreground(t.Subtext).Bold(true)
-	valueStyle := lipgloss.NewStyle().Foreground(t.Text)
 	warnStyle := lipgloss.NewStyle().Foreground(t.Warning)
-	errStyle := lipgloss.NewStyle().Foreground(t.Error)
+	criticalStyle := lipgloss.NewStyle().Foreground(t.Error).Bold(true)
 
-	sessionPart := valueStyle.Render("ok")
-	if m.fetchingSession {
-		elapsed := time.Since(m.lastPaneFetch).Round(100 * time.Millisecond)
-		sessionPart = warnStyle.Render("fetching " + elapsed.String())
-	} else if m.sessionFetchLatency > 0 {
-		sessionPart = valueStyle.Render(m.sessionFetchLatency.Round(time.Millisecond).String())
-	}
-	if m.err != nil {
-		sessionPart = errStyle.Render("error")
-	}
+	sep := " · "
+	sepWidth := lipgloss.Width(sep)
+	maxWidth := width - 4
 
-	statusPart := valueStyle.Render("ok")
-	if m.fetchingContext {
-		elapsed := time.Since(m.lastContextFetch).Round(100 * time.Millisecond)
-		statusPart = warnStyle.Render("fetching " + elapsed.String())
-	} else if m.statusFetchLatency > 0 {
-		statusPart = valueStyle.Render(m.statusFetchLatency.Round(time.Millisecond).String())
-	}
-	if m.statusFetchErr != nil {
-		statusPart = errStyle.Render("error")
-	}
+	prefixText := prefix + ":"
+	rendered := []string{warnStyle.Render(prefixText)}
+	currentWidth := lipgloss.Width(prefixText)
 
-	parts := []string{
-		labelStyle.Render("diag"),
-		labelStyle.Render("tmux") + ":" + sessionPart,
-		labelStyle.Render("status") + ":" + statusPart,
+	for _, alert := range alerts {
+		segmentText := fmt.Sprintf("%s %.0f%% of %s context", alert.label, alert.percent, alert.model)
+		segmentWidth := lipgloss.Width(segmentText)
+		if currentWidth+sepWidth+segmentWidth > maxWidth {
+			break
+		}
+
+		style := warnStyle
+		if alert.percent >= 85 {
+			style = criticalStyle
+		}
+		rendered = append(rendered, style.Render(segmentText))
+		currentWidth += sepWidth + segmentWidth
 	}
 
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.Surface1).
-		Padding(0, 1).
-		Width(width)
-
-	return box.Render(strings.Join(parts, "  "))
-}
-
-func hintForSessionFetchError(err error) string {
-	if err == nil {
+	if len(rendered) == 1 {
 		return ""
 	}
 
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "tmux is responding slowly. Press r to retry, p to pause auto-refresh, or try running ntm outside of tmux"
+	return strings.Join(rendered, sep)
+}
+
+func formatPaneLabel(session string, pane tmux.Pane) string {
+	label := strings.TrimSpace(pane.Title)
+	prefix := session + "__"
+	if strings.HasPrefix(label, prefix) {
+		label = strings.TrimPrefix(label, prefix)
+	}
+	if label == "" {
+		label = fmt.Sprintf("pane %d", pane.Index)
+	}
+	return label
+}
+
+func (m Model) renderPaneGrid() string {
+	t := m.theme
+	ic := m.icons
+
+	var lines []string
+
+	// Calculate adaptive card dimensions based on terminal width
+	// Uses beads_viewer-inspired algorithm with min/max constraints
+	const (
+		minCardWidth = 22 // Minimum usable card width
+		maxCardWidth = 45 // Maximum card width for readability
+		cardGap      = 2  // Gap between cards
+	)
+
+	availableWidth := m.width - 4 // Account for margins
+	cardWidth, cardsPerRow := styles.AdaptiveCardDimensions(availableWidth, minCardWidth, maxCardWidth, cardGap)
+
+	// In grid mode (used below Split threshold), show more detail when card width allows it.
+	showExtendedInfo := cardWidth >= 24
+
+	rows := BuildPaneTableRows(m.panes, m.agentStatuses, m.paneStatus, &m.beadsSummary, m.fileChanges, m.healthStates, m.animTick, t)
+	if summary := activitySummaryLine(rows, t); summary != "" {
+		lines = append(lines, "  "+summary)
+	}
+	contextRanks := m.computeContextRanks()
+
+	var cards []string
+
+	for i, p := range m.panes {
+		row := rows[i]
+		isSelected := i == m.cursor
+
+		// Determine card colors based on agent type
+		var borderColor, iconColor lipgloss.Color
+		var agentIcon string
+
+		switch p.Type {
+		case tmux.AgentClaude:
+			borderColor = t.Claude
+			iconColor = t.Claude
+			agentIcon = ic.Claude
+		case tmux.AgentCodex:
+			borderColor = t.Codex
+			iconColor = t.Codex
+			agentIcon = ic.Codex
+		case tmux.AgentGemini:
+			borderColor = t.Gemini
+			iconColor = t.Gemini
+			agentIcon = ic.Gemini
+		default:
+			borderColor = t.Green
+			iconColor = t.Green
+			agentIcon = ic.User
+		}
+
+		// Selection highlight
+		if isSelected {
+			borderColor = t.Pink
+		}
+
+		// Pulse border for active/working panes (if not selected)
+		if !isSelected && row.Status == "working" && m.animTick > 0 {
+			borderColor = styles.Pulse(string(borderColor), m.animTick)
+		}
+
+		// Build card content
+		var cardContent strings.Builder
+
+		// Header line with icon and title
+		statusIcon := "•"
+		statusColor := t.Overlay
+		switch row.Status {
+		case "working":
+			statusIcon = WorkingSpinnerFrame(m.animTick)
+			statusColor = t.Green
+		case "idle":
+			statusIcon = "○"
+			statusColor = t.Yellow
+		case "error":
+			statusIcon = "✗"
+			statusColor = t.Red
+		case "compacted":
+			statusIcon = "⚠"
+			statusColor = t.Peach
+		case "rate_limited":
+			statusIcon = "⏳"
+			statusColor = t.Maroon
+		}
+		statusStyled := lipgloss.NewStyle().Foreground(statusColor).Bold(true).Render(statusIcon)
+
+		iconStyled := lipgloss.NewStyle().Foreground(iconColor).Bold(true).Render(agentIcon)
+		// Show profile name as primary identifier
+		profileName := p.Type.ProfileName()
+		profileStyled := lipgloss.NewStyle().Foreground(t.Text).Bold(true).Render(profileName)
+		cardContent.WriteString(statusStyled + " " + iconStyled + " " + profileStyled + "\n")
+
+		// Index badge + compact badges
+		numBadge := lipgloss.NewStyle().
+			Foreground(t.Overlay).
+			Render(fmt.Sprintf("#%d", p.Index))
+
+		var line2Parts []string
+		line2Parts = append(line2Parts, numBadge)
+		if p.Variant != "" {
+			label := layout.TruncateWidthDefault(p.Variant, 12)
+			modelBadge := styles.TextBadge(label, iconColor, t.Base, styles.BadgeOptions{
+				Style:    styles.BadgeStyleCompact,
+				Bold:     false,
+				ShowIcon: false,
+			})
+			line2Parts = append(line2Parts, modelBadge)
+		}
+		if showExtendedInfo {
+			if rank, ok := contextRanks[p.Index]; ok && rank > 0 {
+				rankBadge := styles.TextBadge(fmt.Sprintf("rank%d", rank), t.Mauve, t.Base, styles.BadgeOptions{
+					Style:    styles.BadgeStyleCompact,
+					Bold:     false,
+					ShowIcon: false,
+				})
+				line2Parts = append(line2Parts, rankBadge)
+			}
+		}
+		cardContent.WriteString(strings.Join(line2Parts, " ") + "\n")
+
+		// Bead + activity badges (best-effort)
+		if row.CurrentBead != "" {
+			beadID := row.CurrentBead
+			if parts := strings.SplitN(row.CurrentBead, ": ", 2); len(parts) > 0 {
+				beadID = parts[0]
+			}
+			beadBadge := styles.TextBadge(beadID, t.Mauve, t.Base, styles.BadgeOptions{
+				Style:    styles.BadgeStyleCompact,
+				Bold:     false,
+				ShowIcon: false,
+			})
+			cardContent.WriteString(beadBadge + "\n")
+		}
+
+		var activityBadges []string
+		if badge := activityBadge(row.Status, t); badge != "" {
+			activityBadges = append(activityBadges, badge)
+		}
+		if row.FileChanges > 0 {
+			activityBadges = append(activityBadges, styles.TextBadge(fmt.Sprintf("Δ%d", row.FileChanges), t.Blue, t.Base, styles.BadgeOptions{
+				Style:    styles.BadgeStyleCompact,
+				Bold:     false,
+				ShowIcon: false,
+			}))
+		}
+		if row.TokenVelocity > 0 && showExtendedInfo {
+			activityBadges = append(activityBadges, styles.TokenVelocityBadge(row.TokenVelocity, styles.BadgeOptions{
+				Style:    styles.BadgeStyleCompact,
+				Bold:     false,
+				ShowIcon: true,
+			}))
+		}
+		if len(activityBadges) > 0 {
+			cardContent.WriteString(strings.Join(activityBadges, " ") + "\n")
+		}
+
+		// Mail badges
+		if ps, ok := m.paneStatus[p.Index]; ok && ps.MailUnread > 0 {
+			label := fmt.Sprintf("✉ %d new", ps.MailUnread)
+			if ps.MailUrgent > 0 {
+				label = fmt.Sprintf("✉ %d new (%d urgent)", ps.MailUnread, ps.MailUrgent)
+			}
+
+			style := t.Green
+			if ps.MailUrgent > 0 {
+				style = t.Red
+			}
+
+			mailBadge := styles.TextBadge(label, style, t.Base, styles.BadgeOptions{
+				Style:    styles.BadgeStyleCompact,
+				Bold:     ps.MailUrgent > 0,
+				ShowIcon: false,
+			})
+			cardContent.WriteString(mailBadge + "\n")
+		}
+
+		// Health badges - show warning/error status and restart count
+		if ps, ok := m.paneStatus[p.Index]; ok {
+			// Health status badge
+			if ps.HealthStatus == "warning" {
+				healthBadge := styles.TextBadge("⚠ WARN", t.Yellow, t.Base, styles.BadgeOptions{
+					Style:    styles.BadgeStyleCompact,
+					Bold:     true,
+					ShowIcon: false,
+				})
+				cardContent.WriteString(healthBadge + "\n")
+			} else if ps.HealthStatus == "error" {
+				healthBadge := styles.TextBadge("✗ ERR", t.Red, t.Base, styles.BadgeOptions{
+					Style:    styles.BadgeStyleCompact,
+					Bold:     true,
+					ShowIcon: false,
+				})
+				cardContent.WriteString(healthBadge + "\n")
+			}
+
+			// Restart count badge
+			if ps.RestartCount > 0 {
+				restartBadge := styles.TextBadge(fmt.Sprintf("↻%d", ps.RestartCount), t.Peach, t.Base, styles.BadgeOptions{
+					Style:    styles.BadgeStyleCompact,
+					Bold:     false,
+					ShowIcon: false,
+				})
+				cardContent.WriteString(restartBadge + "\n")
+			}
+
+			// Show first health issue as tooltip
+			if len(ps.HealthIssues) > 0 && showExtendedInfo {
+				issueStyle := lipgloss.NewStyle().Foreground(t.Overlay).Italic(true)
+				issue := layout.TruncateWidthDefault(ps.HealthIssues[0], maxInt(cardWidth-4, 10))
+				healthBadge := issueStyle.Render(issue)
+				cardContent.WriteString(healthBadge + "\n")
+			}
+		}
+
+		// Size info - on wide displays show more detail
+		sizeStyle := lipgloss.NewStyle().Foreground(t.Subtext)
+		if showExtendedInfo {
+			cardContent.WriteString(sizeStyle.Render(fmt.Sprintf("%dx%d cols×rows", p.Width, p.Height)) + "\n")
+		} else {
+			cardContent.WriteString(sizeStyle.Render(fmt.Sprintf("%dx%d", p.Width, p.Height)) + "\n")
+		}
+
+		// Command running (if any) - only when there is room
+		if p.Command != "" && showExtendedInfo {
+			cmdStyle := lipgloss.NewStyle().Foreground(t.Overlay).Italic(true)
+			cmd := layout.TruncateWidthDefault(p.Command, maxInt(cardWidth-4, 8))
+			cardContent.WriteString(cmdStyle.Render(cmd))
+		}
+
+		// Context usage bar (best-effort; show in grid when available)
+		if ps, ok := m.paneStatus[p.Index]; ok && ps.ContextLimit > 0 {
+			cardContent.WriteString("\n")
+			// Show token counts in extended view (e.g., "142.5K / 200K")
+			if showExtendedInfo && ps.ContextTokens > 0 {
+				tokenInfo := formatTokenDisplay(ps.ContextTokens, ps.ContextLimit)
+				tokenStyle := lipgloss.NewStyle().Foreground(t.Subtext)
+				cardContent.WriteString(tokenStyle.Render(tokenInfo) + "\n")
+			}
+			contextBar := m.renderContextBar(ps.ContextPercent, cardWidth-4)
+			cardContent.WriteString(contextBar)
+		}
+
+		// Rotation in-progress indicator
+		if ps, ok := m.paneStatus[p.Index]; ok && ps.IsRotating {
+			cardContent.WriteString("\n")
+			rotateIcon := styles.Shimmer("🔄", m.animTick, string(t.Blue), string(t.Sapphire), string(t.Blue))
+			rotateStyle := lipgloss.NewStyle().Foreground(t.Blue).Bold(true)
+			cardContent.WriteString(rotateIcon + rotateStyle.Render(" Rotating..."))
+		} else if ps, ok := m.paneStatus[p.Index]; ok && ps.RotatedAt != nil {
+			// Show "rotated Xm ago" indicator for recently rotated agents
+			elapsed := time.Since(*ps.RotatedAt)
+			if elapsed < 5*time.Minute {
+				cardContent.WriteString("\n")
+				rotatedStyle := lipgloss.NewStyle().Foreground(t.Overlay).Italic(true)
+				cardContent.WriteString(rotatedStyle.Render(fmt.Sprintf("↻ rotated %s ago", formatRelativeTime(elapsed))))
+			}
+		}
+
+		// Compaction indicator
+		if ps, ok := m.paneStatus[p.Index]; ok && ps.LastCompaction != nil {
+			cardContent.WriteString("\n")
+			compactStyle := lipgloss.NewStyle().Foreground(t.Warning).Bold(true)
+			indicator := "⚠ compacted"
+			if ps.RecoverySent {
+				indicator = "↻ recovering"
+			}
+			cardContent.WriteString(compactStyle.Render(indicator))
+		}
+
+		// Create card box
+		cardStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(borderColor).
+			Width(cardWidth).
+			Padding(0, 1)
+
+		if isSelected {
+			// Add glow effect for selected card
+			cardStyle = cardStyle.
+				Background(t.Surface0)
+		}
+
+		cards = append(cards, cardStyle.Render(cardContent.String()))
 	}
 
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "tmux is not installed"):
-		return "Install tmux, then run: ntm deps -v"
-	case strings.Contains(msg, "executable file not found"):
-		return "Install tmux, then run: ntm deps -v"
-	case strings.Contains(msg, "no server running"):
-		return "Start tmux or create a session with: ntm spawn <name>"
-	case strings.Contains(msg, "failed to connect to server"):
-		return "Start tmux or create a session with: ntm spawn <name>"
-	case strings.Contains(msg, "can't find session"), strings.Contains(msg, "session not found"):
-		return "Session may have ended. Create a new one with: ntm spawn <name>"
+	// Arrange cards in rows
+	for i := 0; i < len(cards); i += cardsPerRow {
+		end := i + cardsPerRow
+		if end > len(cards) {
+			end = len(cards)
+		}
+		row := lipgloss.JoinHorizontal(lipgloss.Top, cards[i:end]...)
+		lines = append(lines, "  "+row)
 	}
 
-	return "Press r to retry"
+	return strings.Join(lines, "\n")
 }
 
 func maxInt(a, b int) int {
@@ -3026,6 +4273,249 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func contentHeightFor(total int) int {
+	contentHeight := total - 14
+	if contentHeight < 5 {
+		contentHeight = 5
+	}
+	return contentHeight
+}
+
+// truncateToHeight truncates content to fit within maxLines.
+// If the content has more lines than maxLines, it truncates and optionally
+// shows a "more" indicator. This is needed because lipgloss's Height/MaxHeight
+// don't actually truncate content - they're CSS-like properties for layout.
+func truncateToHeight(content string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) <= maxLines {
+		return content
+	}
+	// Truncate to maxLines
+	return strings.Join(lines[:maxLines], "\n")
+}
+
+func dashboardDebugEnabled(m *Model) bool {
+	if m != nil && m.showDiagnostics {
+		return true
+	}
+	// Check NTM_TUI_DEBUG (preferred) or NTM_DASH_DEBUG (legacy alias)
+	for _, envVar := range []string{"NTM_TUI_DEBUG", "NTM_DASH_DEBUG"} {
+		value := strings.TrimSpace(os.Getenv(envVar))
+		if value == "" {
+			continue
+		}
+		switch strings.ToLower(value) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+	}
+	return false
+}
+
+type sizedPanel interface {
+	Width() int
+	Height() int
+}
+
+func logPanelSize(name string, panel sizedPanel) string {
+	if panel == nil {
+		return fmt.Sprintf("%s=0x0", name)
+	}
+	return fmt.Sprintf("%s=%dx%d", name, panel.Width(), panel.Height())
+}
+
+func tierLabel(tier layout.Tier) string {
+	switch tier {
+	case layout.TierNarrow:
+		return "narrow"
+	case layout.TierSplit:
+		return "split"
+	case layout.TierWide:
+		return "wide"
+	case layout.TierUltra:
+		return "ultra"
+	case layout.TierMega:
+		return "mega"
+	default:
+		return fmt.Sprintf("tier-%d", int(tier))
+	}
+}
+
+func (m *Model) resizeSidebarPanels(width, height int) {
+	if m.spawnPanel != nil {
+		m.spawnPanel.SetSize(width, height)
+	}
+	if m.metricsPanel != nil {
+		m.metricsPanel.SetSize(width, height)
+	}
+	if m.historyPanel != nil {
+		m.historyPanel.SetSize(width, height)
+	}
+	if m.filesPanel != nil {
+		m.filesPanel.SetSize(width, height)
+	}
+	if m.cassPanel != nil {
+		m.cassPanel.SetSize(width, height)
+	}
+}
+
+func (m *Model) resizePanelsForLayout() {
+	contentHeight := contentHeightFor(m.height)
+	panelHeight := maxInt(contentHeight-2, 0)
+
+	switch {
+	case m.tier >= layout.TierMega:
+		_, _, p3, p4, p5 := layout.MegaProportions(m.width)
+		p3Inner := maxInt(p3-4, 0)
+		p4Inner := maxInt(p4-4, 0)
+		p5Inner := maxInt(p5-4, 0)
+
+		if m.beadsPanel != nil {
+			m.beadsPanel.SetSize(p3Inner, panelHeight)
+		}
+		if m.alertsPanel != nil {
+			m.alertsPanel.SetSize(p4Inner, panelHeight)
+		}
+		m.resizeSidebarPanels(p5Inner, panelHeight)
+
+	case m.tier >= layout.TierUltra:
+		_, _, rightWidth := layout.UltraProportions(m.width)
+		rightWidth = maxInt(rightWidth-2, 0)
+		sidebarWidth := maxInt(rightWidth-4, 0)
+		m.resizeSidebarPanels(sidebarWidth, panelHeight)
+		if m.beadsPanel != nil {
+			m.beadsPanel.SetSize(0, 0)
+		}
+		if m.alertsPanel != nil {
+			m.alertsPanel.SetSize(0, 0)
+		}
+
+	default:
+		m.resizeSidebarPanels(0, 0)
+		if m.beadsPanel != nil {
+			m.beadsPanel.SetSize(0, 0)
+		}
+		if m.alertsPanel != nil {
+			m.alertsPanel.SetSize(0, 0)
+		}
+	}
+
+	if m.tickerPanel != nil {
+		m.tickerPanel.SetSize(maxInt(m.width-4, 0), 1)
+	}
+}
+
+func refreshDue(last time.Time, interval time.Duration) bool {
+	if interval <= 0 {
+		return false
+	}
+	if last.IsZero() {
+		return true
+	}
+	return time.Since(last) >= interval
+}
+
+func (m *Model) scheduleRefreshes(now time.Time) []tea.Cmd {
+	var cmds []tea.Cmd
+
+	paneDue := refreshDue(m.lastPaneFetch, m.paneRefreshInterval)
+	contextDue := refreshDue(m.lastContextFetch, m.contextRefreshInterval)
+	coreDue := paneDue || contextDue
+
+	if coreDue {
+		if cmd := m.requestSessionFetch(false); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if cmd := m.requestStatusesFetch(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
+	if contextDue && !m.fetchingContext {
+		if !m.fetchingMetrics {
+			m.fetchingMetrics = true
+			cmds = append(cmds, m.fetchMetricsCmd())
+		}
+		if !m.fetchingRouting {
+			m.fetchingRouting = true
+			cmds = append(cmds, m.fetchRoutingCmd())
+		}
+		if !m.fetchingHistory {
+			m.fetchingHistory = true
+			cmds = append(cmds, m.fetchHistoryCmd())
+		}
+		if !m.fetchingFileChanges {
+			m.fetchingFileChanges = true
+			cmds = append(cmds, m.fetchFileChangesCmd())
+		}
+		// Refresh Agent Mail status along with context updates.
+		cmds = append(cmds, m.fetchAgentMailStatus())
+	}
+
+	if !m.scanDisabled && refreshDue(m.lastScanFetch, m.scanRefreshInterval) && !m.fetchingScan {
+		m.lastScanFetch = now
+		if cmd := m.requestScanFetch(false); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
+	if refreshDue(m.lastMailInboxFetch, m.mailInboxRefreshInterval) && !m.fetchingMailInbox {
+		m.fetchingMailInbox = true
+		m.lastMailInboxFetch = now
+		cmds = append(cmds, m.fetchAgentMailInboxes())
+	}
+
+	if refreshDue(m.lastAlertsFetch, m.alertsRefreshInterval) && !m.fetchingAlerts {
+		m.fetchingAlerts = true
+		m.lastAlertsFetch = now
+		cmds = append(cmds, m.fetchAlertsCmd())
+	}
+
+	if refreshDue(m.lastBeadsFetch, m.beadsRefreshInterval) && !m.fetchingBeads {
+		m.fetchingBeads = true
+		m.lastBeadsFetch = now
+		cmds = append(cmds, m.fetchBeadsCmd())
+	}
+
+	if refreshDue(m.lastCassContextFetch, m.cassContextRefreshInterval) && !m.fetchingCassContext {
+		m.fetchingCassContext = true
+		m.lastCassContextFetch = now
+		cmds = append(cmds, m.fetchCASSContextCmd())
+	}
+
+	if refreshDue(m.lastCheckpointFetch, m.checkpointRefreshInterval) && !m.fetchingCheckpoint {
+		m.fetchingCheckpoint = true
+		m.lastCheckpointFetch = now
+		cmds = append(cmds, m.fetchCheckpointStatus())
+	}
+
+	if refreshDue(m.lastHandoffFetch, m.handoffRefreshInterval) && !m.fetchingHandoff {
+		m.fetchingHandoff = true
+		m.lastHandoffFetch = now
+		cmds = append(cmds, m.fetchHandoffCmd())
+	}
+
+	if refreshDue(m.lastDCGFetch, m.dcgRefreshInterval) && !m.fetchingDCG {
+		m.fetchingDCG = true
+		m.lastDCGFetch = now
+		cmds = append(cmds, m.fetchDCGStatus())
+	}
+
+	return cmds
+}
+
+func (m *Model) scheduleSpawnRefresh(now time.Time) tea.Cmd {
+	if refreshDue(m.lastSpawnFetch, m.spawnRefreshInterval) && !m.fetchingSpawn {
+		m.fetchingSpawn = true
+		m.lastSpawnFetch = now
+		return m.fetchSpawnStateCmd()
+	}
+	return nil
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3039,10 +4529,7 @@ func (m Model) renderSplitView() string {
 	leftWidth, rightWidth := layout.SplitProportions(m.width)
 
 	// Calculate content height (leave room for header/footer)
-	contentHeight := m.height - 14
-	if contentHeight < 5 {
-		contentHeight = 5
-	}
+	contentHeight := contentHeightFor(m.height)
 
 	listBorder := t.Surface1
 	if m.focusedPanel == PanelPaneList {
@@ -3088,10 +4575,7 @@ func (m Model) renderUltraLayout() string {
 	// rendered width stays within the terminal width at exact thresholds.
 	rightWidth = maxInt(rightWidth-2, 0)
 
-	contentHeight := m.height - 14
-	if contentHeight < 5 {
-		contentHeight = 5
-	}
+	contentHeight := contentHeightFor(m.height)
 
 	listBorder := t.Surface1
 	if m.focusedPanel == PanelPaneList {
@@ -3175,7 +4659,7 @@ func (m Model) renderSidebar(width, height int) string {
 	if len(m.agentMailLockInfo) > 0 {
 		lines = append(lines, lipgloss.NewStyle().Foreground(t.Lavender).Bold(true).Render("Active Locks"))
 		for _, lock := range m.agentMailLockInfo {
-			lines = append(lines, fmt.Sprintf("🔒 %s", layout.Truncate(lock.PathPattern, width-4)))
+			lines = append(lines, fmt.Sprintf("🔒 %s", layout.TruncateWidthDefault(lock.PathPattern, width-4)))
 			lines = append(lines, lipgloss.NewStyle().Foreground(t.Subtext).Render(fmt.Sprintf("  by %s (%s)", lock.AgentName, lock.ExpiresIn)))
 		}
 		lines = append(lines, "")
@@ -3288,10 +4772,7 @@ func (m Model) renderMegaLayout() string {
 	p4Inner := maxInt(p4-4, 0)
 	p5Inner := maxInt(p5-4, 0)
 
-	contentHeight := m.height - 14
-	if contentHeight < 5 {
-		contentHeight = 5
-	}
+	contentHeight := contentHeightFor(m.height)
 
 	listBorder := t.Surface1
 	if m.focusedPanel == PanelPaneList {
@@ -3311,6 +4792,11 @@ func (m Model) renderMegaLayout() string {
 	alertsBorder := t.Red
 	if m.focusedPanel == PanelAlerts {
 		alertsBorder = t.Primary
+	}
+
+	conflictsBorder := t.Red
+	if m.focusedPanel == PanelConflicts {
+		conflictsBorder = t.Primary
 	}
 
 	sidebarBorder := t.Lavender
@@ -3339,12 +4825,23 @@ func (m Model) renderMegaLayout() string {
 		Padding(0, 1).
 		Render(m.renderBeadsPanel(p3Inner, contentHeight-2))
 
-	panel4 := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(alertsBorder).
-		Width(p4).Height(contentHeight).MaxHeight(contentHeight).
-		Padding(0, 1).
-		Render(m.renderAlertsPanel(p4Inner, contentHeight-2))
+	// Show conflicts panel instead of alerts when there are active conflicts
+	var panel4 string
+	if m.conflictsPanel.HasConflicts() {
+		panel4 = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(conflictsBorder).
+			Width(p4).Height(contentHeight).MaxHeight(contentHeight).
+			Padding(0, 1).
+			Render(m.renderConflictsPanel(p4Inner, contentHeight-2))
+	} else {
+		panel4 = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(alertsBorder).
+			Width(p4).Height(contentHeight).MaxHeight(contentHeight).
+			Padding(0, 1).
+			Render(m.renderAlertsPanel(p4Inner, contentHeight-2))
+	}
 
 	panel5 := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -3369,6 +4866,16 @@ func (m Model) renderAlertsPanel(width, height int) string {
 		m.alertsPanel.Blur()
 	}
 	return m.alertsPanel.View()
+}
+
+func (m Model) renderConflictsPanel(width, height int) string {
+	m.conflictsPanel.SetSize(width, height)
+	if m.focusedPanel == PanelConflicts {
+		m.conflictsPanel.Focus()
+	} else {
+		m.conflictsPanel.Blur()
+	}
+	return m.conflictsPanel.View()
 }
 
 func (m Model) renderSpawnPanel(width, height int) string {
@@ -3407,8 +4914,8 @@ func (m Model) renderPaneList(width int) string {
 	// Header row
 	lines = append(lines, RenderTableHeader(dims, t))
 
-	// Pane rows (hydrated with status, beads, file changes, with per-agent border colors)
-	rows := BuildPaneTableRows(m.panes, m.agentStatuses, m.paneStatus, &m.beadsSummary, m.fileChanges, m.animTick, t)
+	// Pane rows (hydrated with status, beads, file changes, health states, with per-agent border colors)
+	rows := BuildPaneTableRows(m.panes, m.agentStatuses, m.paneStatus, &m.beadsSummary, m.fileChanges, m.healthStates, m.animTick, t)
 	if summary := activitySummaryLine(rows, t); summary != "" {
 		lines = append(lines, " "+summary)
 	}
@@ -3573,13 +5080,20 @@ func (m Model) renderPaneDetail(width int) string {
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(t.Lavender).Render("Status"))
 	lines = append(lines, "")
 
-	statusText := ps.State
+	statusState := ps.State
+	if statusState == "" || statusState == "unknown" {
+		if st, ok := m.agentStatuses[p.ID]; ok && st.State != status.StateUnknown {
+			statusState = st.State.String()
+		}
+	}
+	statusText := statusState
 	if statusText == "" {
 		statusText = "unknown"
+		statusState = statusText
 	}
 	var statusColor lipgloss.Color
 	var statusIcon string
-	switch ps.State {
+	switch statusState {
 	case "working":
 		// Animated spinner for working state
 		statusIcon = WorkingSpinnerFrame(m.animTick)
@@ -3618,7 +5132,7 @@ func (m Model) renderPaneDetail(width int) string {
 				lines = append(lines, fmt.Sprintf("  ...and %d more", len(m.agentMailLockInfo)-5))
 				break
 			}
-			lines = append(lines, fmt.Sprintf("  🔒 %s (%s)", layout.Truncate(lock.PathPattern, 20), lock.AgentName))
+			lines = append(lines, fmt.Sprintf("  🔒 %s (%s)", layout.TruncateWidthDefault(lock.PathPattern, 20), lock.AgentName))
 		}
 	}
 
@@ -3650,18 +5164,48 @@ func (m Model) renderPaneDetail(width int) string {
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(t.Lavender).Render("Recent Output"))
 		lines = append(lines, "")
 
-		// Use cached rendering if available
+		// Use cached rendering if available (cache is populated in Update, not here)
 		if cached, ok := m.renderedOutputCache[p.ID]; ok {
 			lines = append(lines, cached)
 		} else {
-			// Fallback (should be covered by cache update, but safe default)
+			// Fallback: render on demand but don't cache here (View must be pure)
+			// The Update handler will populate the cache on the next status update
 			rendered, err := m.renderer.Render(st.LastOutput)
 			if err == nil {
-				m.renderedOutputCache[p.ID] = rendered
 				lines = append(lines, rendered)
 			} else {
-				lines = append(lines, layout.Truncate(st.LastOutput, 500))
+				lines = append(lines, layout.TruncateWidthDefault(st.LastOutput, 500))
 			}
+		}
+	}
+
+	// Inbox
+	if msgs, ok := m.agentMailInbox[p.ID]; ok && len(msgs) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(t.Lavender).Render("Inbox"))
+		lines = append(lines, "")
+
+		count := 0
+		for _, msg := range msgs {
+			if count >= 5 {
+				break
+			}
+			icon := "•"
+			style := t.Text
+			if strings.EqualFold(msg.Importance, "urgent") {
+				icon = "!"
+				style = t.Red
+			} else if msg.ReadAt == nil {
+				icon = "*"
+				style = t.Green
+			}
+
+			subject := layout.TruncateWidthDefault(msg.Subject, width-4)
+			lines = append(lines, lipgloss.NewStyle().Foreground(style).Render(fmt.Sprintf("  %s %s", icon, subject)))
+			count++
+		}
+		if len(msgs) > 5 {
+			lines = append(lines, lipgloss.NewStyle().Foreground(t.Subtext).Render(fmt.Sprintf("  ...and %d more", len(msgs)-5)))
 		}
 	}
 
@@ -3700,8 +5244,8 @@ func activitySummaryLine(rows []PaneTableRow, t theme.Theme) string {
 		return ""
 	}
 
-	label := lipgloss.NewStyle().Foreground(t.Subtext).Render("Activity:")
-	return label + " " + strings.Join(compactBadges, " ")
+	label := lipgloss.NewStyle().Foreground(t.Subtext).Bold(true)
+	return label.Render("Activity:") + " " + strings.Join(compactBadges, " ")
 }
 
 // mergeRoutingIntoMetrics updates metrics data with routing scores.
@@ -3731,6 +5275,158 @@ func (m Model) mergeRoutingIntoMetrics(data panels.MetricsData, scores map[strin
 	}
 
 	return data
+}
+
+// handleConflictAction handles user actions on file reservation conflicts.
+// It integrates with Agent Mail to send messages or force-release reservations.
+func (m *Model) handleConflictAction(conflict watcher.FileConflict, action watcher.ConflictAction) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get project key from project directory or current working directory
+	projectKey := m.projectDir
+	if projectKey == "" {
+		var err error
+		projectKey, err = os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get project directory: %w", err)
+		}
+	}
+
+	client := agentmail.NewClient(agentmail.WithProjectKey(projectKey))
+
+	switch action {
+	case watcher.ConflictActionWait:
+		// Wait action: nothing to do, user will wait for reservation to expire
+		log.Printf("[ConflictAction] Waiting for reservation to expire: %s (held by %v)", conflict.Path, conflict.Holders)
+		return nil
+
+	case watcher.ConflictActionRequest:
+		// Request action: send a message to the holder requesting handoff
+		if len(conflict.Holders) == 0 {
+			return fmt.Errorf("no holders to request handoff from")
+		}
+
+		// Register ourselves if not already registered
+		agentName := m.session + "_dashboard"
+		_, err := client.RegisterAgent(ctx, agentmail.RegisterAgentOptions{
+			ProjectKey:      projectKey,
+			Program:         "ntm-dashboard",
+			Model:           "local",
+			Name:            agentName,
+			TaskDescription: "Dashboard conflict resolution",
+		})
+		if err != nil {
+			log.Printf("[ConflictAction] Warning: could not register agent for messaging: %v", err)
+			// Continue anyway - the agent might already be registered
+		}
+
+		// Send handoff request to each holder
+		for _, holder := range conflict.Holders {
+			subject := fmt.Sprintf("Handoff Request: %s", conflict.Path)
+			body := fmt.Sprintf("**File Handoff Request**\n\n"+
+				"Agent `%s` needs to edit the file:\n"+
+				"```\n%s\n```\n\n"+
+				"You currently hold the reservation for this file.\n"+
+				"Please release the reservation when you're done editing, or confirm you're still actively working on it.\n\n"+
+				"*Sent via NTM Dashboard conflict resolution*",
+				conflict.RequestorAgent, conflict.Path)
+
+			_, err := client.SendMessage(ctx, agentmail.SendMessageOptions{
+				ProjectKey:  projectKey,
+				SenderName:  agentName,
+				To:          []string{holder},
+				Subject:     subject,
+				BodyMD:      body,
+				Importance:  "high",
+				AckRequired: true,
+			})
+			if err != nil {
+				log.Printf("[ConflictAction] Failed to send handoff request to %s: %v", holder, err)
+				return fmt.Errorf("failed to send handoff request to %s: %w", holder, err)
+			}
+			log.Printf("[ConflictAction] Sent handoff request to %s for %s", holder, conflict.Path)
+		}
+		return nil
+
+	case watcher.ConflictActionForce:
+		// Force action: force-release the reservation via Agent Mail
+		if len(conflict.HolderReservationIDs) == 0 {
+			return fmt.Errorf("no reservation IDs available for force-release")
+		}
+
+		// Force-release each reservation
+		for _, reservationID := range conflict.HolderReservationIDs {
+			agentName := m.session + "_dashboard"
+			result, err := client.ForceReleaseReservation(ctx, agentmail.ForceReleaseOptions{
+				ProjectKey:     projectKey,
+				AgentName:      agentName,
+				ReservationID:  reservationID,
+				Note:           fmt.Sprintf("Force-released by %s via NTM dashboard", conflict.RequestorAgent),
+				NotifyPrevious: true,
+			})
+			if err != nil {
+				log.Printf("[ConflictAction] Failed to force-release reservation %d: %v", reservationID, err)
+				return fmt.Errorf("failed to force-release reservation %d: %w", reservationID, err)
+			}
+			log.Printf("[ConflictAction] Force-released reservation %d: success=%v", reservationID, result.Success)
+		}
+		return nil
+
+	case watcher.ConflictActionDismiss:
+		// Dismiss action: just remove the notification (handled by the panel)
+		log.Printf("[ConflictAction] Dismissed conflict notification: %s", conflict.Path)
+		return nil
+
+	default:
+		return fmt.Errorf("unknown conflict action: %v", action)
+	}
+}
+
+// executeReplay executes a replay of a history entry
+func (m Model) executeReplay(entry history.HistoryEntry) tea.Cmd {
+	return func() tea.Msg {
+		// Create a new history entry for the replay
+		replayEntry := history.NewEntry(m.session, entry.Targets, entry.Prompt, history.SourceReplay)
+
+		// Set template if the original entry used one
+		if entry.Template != "" {
+			replayEntry.Template = entry.Template
+		}
+
+		// Append to history
+		if err := history.Append(replayEntry); err != nil {
+			log.Printf("[Replay] Failed to append replay entry to history: %v", err)
+			replayEntry.SetError(err)
+		} else {
+			// Execute the replay using tmux client
+			client := tmux.DefaultClient
+
+			// Parse targets - for now, replay to the same targets as the original entry
+			// In the future, we could show a dialog to let user choose new targets
+			for _, targetStr := range entry.Targets {
+				target := fmt.Sprintf("%s:%s", m.session, targetStr)
+				if err := client.SendKeys(target, entry.Prompt, true); err != nil {
+					log.Printf("[Replay] Failed to send to target %s: %v", targetStr, err)
+					replayEntry.SetError(fmt.Errorf("failed to send to target %s: %w", targetStr, err))
+				}
+			}
+
+			// If no errors occurred, mark as successful
+			if replayEntry.Error == "" {
+				replayEntry.SetSuccess()
+			}
+		}
+
+		// Return a message to update the status
+		return struct {
+			Entry   history.HistoryEntry
+			Success bool
+		}{
+			Entry:   *replayEntry,
+			Success: replayEntry.Success,
+		}
+	}
 }
 
 // Run starts the dashboard

@@ -8,10 +8,11 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/Dicklesworthstone/ntm/internal/config"
-	"github.com/Dicklesworthstone/ntm/internal/output"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
+
+	"github.com/Dicklesworthstone/ntm/internal/config"
+	"github.com/Dicklesworthstone/ntm/internal/output"
 )
 
 // ValidationResult represents the outcome of validating a config file or section.
@@ -284,6 +285,16 @@ func validateMainConfigReferences(cfg *config.Config, result *ValidationResult, 
 
 	// Check agent executables
 	validateAgentExecutables(cfg, result)
+
+	// Check DCG integration availability when enabled
+	if cfg.Integrations.DCG.Enabled && cfg.Integrations.DCG.BinaryPath == "" {
+		if _, err := exec.LookPath("dcg"); err != nil {
+			result.Warnings = append(result.Warnings, ValidationIssue{
+				Field:   "integrations.dcg.binary_path",
+				Message: "dcg binary not found on PATH (set integrations.dcg.binary_path or install dcg)",
+			})
+		}
+	}
 }
 
 // validateAgentExecutables checks that agent commands are valid.

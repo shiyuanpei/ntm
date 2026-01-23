@@ -200,8 +200,8 @@ func TestInitProjectConfigForce(t *testing.T) {
 		t.Fatalf("writing config: %v", err)
 	}
 
-	if err := InitProjectConfig(false); err == nil {
-		t.Fatalf("expected InitProjectConfig to fail without force when config exists")
+	if err := InitProjectConfig(false); err != nil {
+		t.Fatalf("expected InitProjectConfig to succeed without force when config exists: %v", err)
 	}
 
 	if err := InitProjectConfig(true); err != nil {
@@ -214,6 +214,21 @@ func TestInitProjectConfigForce(t *testing.T) {
 	}
 	if strings.TrimSpace(string(configContent)) == "custom config" {
 		t.Fatalf("expected config.toml to be overwritten when force=true")
+	}
+
+	// Ensure non-force run preserved the custom config before force overwrite.
+	if err := os.WriteFile(configPath, []byte("custom config\n"), 0644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+	if err := InitProjectConfig(false); err != nil {
+		t.Fatalf("expected InitProjectConfig to succeed without force when config exists: %v", err)
+	}
+	configContent, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	if strings.TrimSpace(string(configContent)) != "custom config" {
+		t.Fatalf("expected config.toml to be preserved when force=false")
 	}
 
 	paletteContent, err := os.ReadFile(palettePath)
@@ -264,6 +279,17 @@ func TestInitProjectConfigScaffolding(t *testing.T) {
 		}
 	})
 
+	t.Run("creates pipelines subdirectory", func(t *testing.T) {
+		pipelinesDir := filepath.Join(tmpDir, ".ntm", "pipelines")
+		info, err := os.Stat(pipelinesDir)
+		if err != nil {
+			t.Fatalf("expected pipelines directory: %v", err)
+		}
+		if !info.IsDir() {
+			t.Fatal("expected pipelines to be a directory")
+		}
+	})
+
 	t.Run("creates valid TOML config", func(t *testing.T) {
 		configPath := filepath.Join(tmpDir, ".ntm", "config.toml")
 		content, err := os.ReadFile(configPath)
@@ -298,6 +324,17 @@ func TestInitProjectConfigScaffolding(t *testing.T) {
 		}
 	})
 
+	t.Run("creates personas.toml scaffold", func(t *testing.T) {
+		personaPath := filepath.Join(tmpDir, ".ntm", "personas.toml")
+		content, err := os.ReadFile(personaPath)
+		if err != nil {
+			t.Fatalf("reading personas.toml: %v", err)
+		}
+		if !strings.Contains(string(content), "Project personas for NTM") {
+			t.Error("personas.toml missing header")
+		}
+	})
+
 	t.Run("config contains expected sections", func(t *testing.T) {
 		configPath := filepath.Join(tmpDir, ".ntm", "config.toml")
 		content, err := os.ReadFile(configPath)
@@ -306,7 +343,7 @@ func TestInitProjectConfigScaffolding(t *testing.T) {
 		}
 
 		contentStr := string(content)
-		expectedSections := []string{"[defaults]", "[palette]", "[palette_state]", "[templates]", "[agents]"}
+		expectedSections := []string{"[project]", "[integrations]", "[defaults]", "[palette]", "[palette_state]", "[templates]", "[agents]"}
 		for _, section := range expectedSections {
 			if !strings.Contains(contentStr, section) {
 				t.Errorf("config missing section: %s", section)
@@ -512,9 +549,12 @@ claude = "claude --project-override"
 			t.Fatalf("LoadMerged failed: %v", err)
 		}
 
-		// Project should override claude
-		if cfg.Agents.Claude != "claude --project-override" {
-			t.Errorf("expected project claude override, got=%s", cfg.Agents.Claude)
+		// SECURITY: Project should NOT override agent commands (RCE prevention)
+		// Agent commands are only loaded from global/user config, never from
+		// project repos to prevent malicious repositories from executing
+		// arbitrary commands.
+		if cfg.Agents.Claude != "claude --global" {
+			t.Errorf("expected global claude (agent override disabled for security), got=%s", cfg.Agents.Claude)
 		}
 
 		// Global codex should be preserved
@@ -522,7 +562,7 @@ claude = "claude --project-override"
 			t.Errorf("expected global codex, got=%s", cfg.Agents.Codex)
 		}
 
-		// Project defaults should be set
+		// Project defaults (agent counts) SHOULD still be set - this is safe
 		if cfg.ProjectDefaults["cc"] != 4 {
 			t.Errorf("expected cc=4, got=%d", cfg.ProjectDefaults["cc"])
 		}
@@ -533,9 +573,17 @@ claude = "claude --project-override"
 		if err != nil {
 			t.Fatalf("LoadMerged failed: %v", err)
 		}
-		// Should still merge project config
-		if cfg.Agents.Claude != "claude --project-override" {
-			t.Errorf("expected project claude override even without global, got=%s", cfg.Agents.Claude)
+		// SECURITY: Project should NOT override agent commands (RCE prevention)
+		// When global config is missing, default agent commands are used,
+		// NOT project-specified commands. This prevents malicious repositories
+		// from specifying arbitrary agent commands.
+		defaultCfg := Default()
+		if cfg.Agents.Claude != defaultCfg.Agents.Claude {
+			t.Errorf("expected default claude command, got=%s", cfg.Agents.Claude)
+		}
+		// But project defaults (agent counts) should still be merged
+		if cfg.ProjectDefaults["cc"] != 4 {
+			t.Errorf("expected project defaults cc=4, got=%d", cfg.ProjectDefaults["cc"])
 		}
 	})
 
@@ -556,7 +604,10 @@ claude = "claude --project-override"
 }
 
 func TestMergeConfig(t *testing.T) {
-	t.Run("project overrides global agents", func(t *testing.T) {
+	t.Run("project does NOT override global agents for security", func(t *testing.T) {
+		// SECURITY: Agent command overrides from project configs are disabled
+		// to prevent RCE from malicious repositories. Project configs can
+		// specify agent COUNTS (defaults.agents) but NOT agent COMMANDS.
 		global := &Config{
 			Agents: AgentConfig{
 				Claude: "claude-global",
@@ -566,13 +617,14 @@ func TestMergeConfig(t *testing.T) {
 		}
 		project := &ProjectConfig{
 			Agents: AgentConfig{
-				Claude: "claude-project",
+				Claude: "claude-project", // This SHOULD be ignored for security
 			},
 		}
 
 		result := MergeConfig(global, project, "/project")
-		if result.Agents.Claude != "claude-project" {
-			t.Errorf("expected claude-project, got=%s", result.Agents.Claude)
+		// Agent commands should NOT be overridden (security feature)
+		if result.Agents.Claude != "claude-global" {
+			t.Errorf("expected claude-global (agent override disabled), got=%s", result.Agents.Claude)
 		}
 		if result.Agents.Codex != "codex-global" {
 			t.Errorf("expected codex-global to be preserved, got=%s", result.Agents.Codex)

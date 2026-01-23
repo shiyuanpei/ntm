@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Dicklesworthstone/ntm/internal/tmux"
 	"github.com/Dicklesworthstone/ntm/tests/testutil"
 )
 
@@ -54,7 +55,7 @@ scrollback = 500
 	// Cleanup session on test completion
 	t.Cleanup(func() {
 		logger.LogSection("Teardown: Killing test session")
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	})
 
 	// Step 1: Spawn session with agents (may have non-zero exit due to terminal issues in test env)
@@ -220,7 +221,7 @@ codex = "bash"
 	}
 
 	t.Cleanup(func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	})
 
 	// Spawn with multiple agent types (may have non-zero exit due to terminal issues)
@@ -254,6 +255,35 @@ codex = "bash"
 		logger.Log("WARNING: broadcast marker not found in any pane - send may have failed")
 	} else {
 		logger.Log("PASS: Broadcast delivery verified in %d panes", markerCount)
+	}
+}
+
+// TestSpawnAssignE2E validates the spawn --assign combined workflow.
+func TestSpawnAssignE2E(t *testing.T) {
+	testutil.E2ETestPrecheck(t)
+	requireBr(t)
+	ensureBDShim(t)
+
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not installed, skipping spawn --assign E2E test")
+	}
+
+	projectRoot := findProjectRoot(t)
+	scriptPath := filepath.Join(projectRoot, "tests", "e2e", "test_spawn_assign.sh")
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("spawn --assign E2E script not found at %s", scriptPath)
+	}
+
+	cmd := exec.Command(scriptPath)
+	cmd.Dir = projectRoot
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("spawn --assign E2E script failed with exit code %d", exitErr.ExitCode())
+		}
+		t.Fatalf("spawn --assign E2E script failed: %v", err)
 	}
 }
 
@@ -366,7 +396,7 @@ codex = "bash"
 	}
 
 	t.Cleanup(func() {
-		exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		exec.Command(tmux.BinaryPath(), "kill-session", "-t", sessionName).Run()
 	})
 
 	// Spawn with variants (may have non-zero exit due to terminal issues)

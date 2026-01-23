@@ -20,7 +20,7 @@ import (
 //	session__cc_1
 //	session__cc_1[frontend]
 //	session__cc_1_opus[backend,api]
-var paneNameRegex = regexp.MustCompile(`^.+__(\w+)_\d+(?:_([A-Za-z0-9._/@:+-]+))?(?:\[([^\]]*)\])?$`)
+var paneNameRegex = regexp.MustCompile(`^.+__([\w-]+)_(\d+)(?:_([A-Za-z0-9._/@:+-]+))?(?:\[([^\]]*)\])?$`)
 
 // sessionNameRegex validates session names (allowed: a-z, A-Z, 0-9, _, -)
 var sessionNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -37,6 +37,10 @@ const (
 	AgentAider    AgentType = "aider"
 	AgentUser     AgentType = "user"
 )
+
+// FieldSeparator is used to separate fields in tmux format strings.
+// It uses a unique sequence unlikely to appear in user input (e.g. pane titles).
+const FieldSeparator = "|#~NTM~#|"
 
 // ProfileName returns the friendly display name for the agent type.
 // This is used in the dashboard to show profile names prominently.
@@ -57,22 +61,28 @@ func (a AgentType) ProfileName() string {
 	case AgentUser:
 		return "User"
 	default:
+		// Capitalize first letter for unknown types
+		if len(a) > 0 {
+			return strings.ToUpper(string(a)[:1]) + string(a)[1:]
+		}
 		return string(a)
 	}
 }
 
 // Pane represents a tmux pane
 type Pane struct {
-	ID      string
-	Index   int
-	Title   string
-	Type    AgentType
-	Variant string   // Model alias or persona name (from pane title)
-	Tags    []string // User-defined tags (from pane title, e.g., [frontend,api])
-	Command string
-	Width   int
-	Height  int
-	Active  bool
+	ID       string
+	Index    int
+	NTMIndex int // The NTM-specific index parsed from the title (e.g., 1 for cc_1)
+	Title    string
+	Type     AgentType
+	Variant  string   // Model alias or persona name (from pane title)
+	Tags     []string // User-defined tags (from pane title, e.g., [frontend,api])
+	Command  string
+	Width    int
+	Height   int
+	Active   bool
+	PID      int // Shell PID
 }
 
 // Session represents a tmux session
@@ -85,33 +95,33 @@ type Session struct {
 	Created   string
 }
 
-// parseAgentFromTitle extracts agent type, variant, and tags from a pane title.
+// parseAgentFromTitle extracts agent type, index, variant, and tags from a pane title.
 // Title format: {session}__{type}_{index}[tags] or {session}__{type}_{index}_{variant}[tags]
-// Returns AgentUser, empty variant, and nil tags if title doesn't match NTM format.
-func parseAgentFromTitle(title string) (AgentType, string, []string) {
+// Returns AgentUser, 0, empty variant, and nil tags if title doesn't match NTM format.
+func parseAgentFromTitle(title string) (AgentType, int, string, []string) {
 	matches := paneNameRegex.FindStringSubmatch(title)
 	if matches == nil {
 		// Not an NTM-formatted title, default to user
-		return AgentUser, "", nil
+		return AgentUser, 0, "", nil
 	}
 
-	// matches[1] = type (cc, cod, gmi)
-	// matches[2] = variant (may be empty)
-	// matches[3] = tags string (may be empty, may be absent if regex didn't capture)
+	// matches[1] = type (cc, cod, gmi, cursor, etc.)
+	// matches[2] = index (1, 2, 3...)
+	// matches[3] = variant (may be empty)
+	// matches[4] = tags string (may be empty, may be absent if regex didn't capture)
 	agentType := AgentType(matches[1])
-	variant := matches[2]
+	idx, _ := strconv.Atoi(matches[2])
+	variant := matches[3]
 	var tags []string
-	if len(matches) >= 4 {
-		tags = parseTags(matches[3])
+	if len(matches) >= 5 {
+		tags = parseTags(matches[4])
 	}
 
-	// Validate agent type
-	switch agentType {
-	case AgentClaude, AgentCodex, AgentGemini, AgentCursor, AgentWindsurf, AgentAider:
-		return agentType, variant, tags
-	default:
-		return AgentUser, "", nil
+	// Allow any non-empty agent type that matched the regex
+	if agentType != "" {
+		return agentType, idx, variant, tags
 	}
+	return AgentUser, 0, "", nil
 }
 
 // detectAgentFromCommand checks the running command for known agent process names.
@@ -219,6 +229,45 @@ func FormatTags(tags []string) string {
 	return "[" + strings.Join(tags, ",") + "]"
 }
 
+// detectAgentFromCommand attempts to identify the agent type from the process command.
+// This is a fallback when the pane title doesn't match the NTM format (e.g., when
+// shell prompts or tmux hooks change the title dynamically).
+func detectAgentFromCommand(command string) AgentType {
+	cmd := strings.ToLower(command)
+
+	// Claude Code variants
+	if strings.Contains(cmd, "claude") {
+		return AgentClaude
+	}
+
+	// Codex CLI
+	if cmd == "codex" || strings.HasPrefix(cmd, "codex ") || strings.Contains(cmd, "/codex") {
+		return AgentCodex
+	}
+
+	// Gemini CLI
+	if cmd == "gemini" || strings.HasPrefix(cmd, "gemini ") || strings.Contains(cmd, "/gemini") {
+		return AgentGemini
+	}
+
+	// Cursor
+	if strings.Contains(cmd, "cursor") {
+		return AgentCursor
+	}
+
+	// Windsurf
+	if strings.Contains(cmd, "windsurf") {
+		return AgentWindsurf
+	}
+
+	// Aider
+	if cmd == "aider" || strings.HasPrefix(cmd, "aider ") || strings.Contains(cmd, "/aider") {
+		return AgentAider
+	}
+
+	return AgentUser
+}
+
 // IsInstalled checks if tmux is available
 func IsInstalled() bool {
 	return DefaultClient.IsInstalled()
@@ -250,7 +299,7 @@ func SessionExists(name string) bool {
 
 // ListSessions returns all tmux sessions
 func (c *Client) ListSessions() ([]Session, error) {
-	sep := "|===|"
+	sep := FieldSeparator
 	format := fmt.Sprintf("#{session_name}%[1]s#{session_windows}%[1]s#{session_attached}%[1]s#{session_created_string}", sep)
 	output, err := c.Run("list-sessions", "-F", format)
 	if err != nil {
@@ -302,7 +351,7 @@ func (c *Client) GetSession(name string) (*Session, error) {
 	}
 
 	// Get session info
-	sep := "|===|"
+	sep := FieldSeparator
 	format := fmt.Sprintf("#{session_name}%[1]s#{session_windows}%[1]s#{session_attached}", sep)
 	output, err := c.Run("list-sessions", "-F", format, "-f", fmt.Sprintf("#{==:#{session_name},%s}", name))
 	if err != nil {
@@ -355,8 +404,8 @@ func (c *Client) GetPanes(session string) ([]Pane, error) {
 
 // GetPanesContext returns all panes in a session with cancellation support.
 func (c *Client) GetPanesContext(ctx context.Context, session string) ([]Pane, error) {
-	sep := "|===|"
-	format := fmt.Sprintf("#{pane_id}%[1]s#{pane_index}%[1]s#{pane_title}%[1]s#{pane_current_command}%[1]s#{pane_width}%[1]s#{pane_height}%[1]s#{pane_active}", sep)
+	sep := FieldSeparator
+	format := fmt.Sprintf("#{pane_id}%[1]s#{pane_index}%[1]s#{pane_title}%[1]s#{pane_current_command}%[1]s#{pane_width}%[1]s#{pane_height}%[1]s#{pane_active}%[1]s#{pane_pid}", sep)
 	output, err := c.RunContext(ctx, "list-panes", "-s", "-t", session, "-F", format)
 	if err != nil {
 		return nil, err
@@ -369,7 +418,7 @@ func (c *Client) GetPanesContext(ctx context.Context, session string) ([]Pane, e
 		}
 
 		parts := strings.Split(line, sep)
-		if len(parts) < 7 {
+		if len(parts) < 8 {
 			continue
 		}
 
@@ -377,6 +426,7 @@ func (c *Client) GetPanesContext(ctx context.Context, session string) ([]Pane, e
 		width, _ := strconv.Atoi(parts[4])
 		height, _ := strconv.Atoi(parts[5])
 		active := parts[6] == "1"
+		pid, _ := strconv.Atoi(parts[7])
 
 		pane := Pane{
 			ID:      parts[0],
@@ -386,11 +436,12 @@ func (c *Client) GetPanesContext(ctx context.Context, session string) ([]Pane, e
 			Width:   width,
 			Height:  height,
 			Active:  active,
+			PID:     pid,
 		}
 
-		// Parse pane title using regex to extract type, variant, and tags
+		// Parse pane title using regex to extract type, index, variant, and tags
 		// Format: {session}__{type}_{index} or {session}__{type}_{index}_{variant}
-		pane.Type, pane.Variant, pane.Tags = parseAgentFromTitle(pane.Title)
+		pane.Type, pane.NTMIndex, pane.Variant, pane.Tags = parseAgentFromTitle(pane.Title)
 
 		// Fallback chain for agent detection when NTM title format doesn't match:
 		// 1. Try process-based detection (checks command for "claude", "codex", "gemini")
@@ -526,7 +577,7 @@ func (c *Client) GetPaneTags(paneID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, _, tags := parseAgentFromTitle(title)
+	_, _, _, tags := parseAgentFromTitle(title)
 	return tags, nil
 }
 
@@ -678,8 +729,26 @@ func stripTags(title string) string {
 	return title
 }
 
-// SendKeys sends keys to a pane
+// Default delays before sending Enter key (milliseconds)
+const (
+	// DefaultEnterDelay is for AI agent TUIs (Claude, Codex, Gemini) which have
+	// their own input buffering and process pasted text quickly.
+	DefaultEnterDelay = 50 * time.Millisecond
+
+	// ShellEnterDelay is for shell panes (bash, zsh, etc.) which may need more
+	// time to process pasted text before receiving Enter. Shell input handling
+	// can vary based on readline, prompt configuration, and system load.
+	ShellEnterDelay = 150 * time.Millisecond
+)
+
+// SendKeys sends keys to a pane with the default Enter delay (50ms for agent TUIs)
 func (c *Client) SendKeys(target, keys string, enter bool) error {
+	return c.SendKeysWithDelay(target, keys, enter, DefaultEnterDelay)
+}
+
+// SendKeysWithDelay sends keys to a pane with a configurable delay before Enter.
+// Use ShellEnterDelay for shell panes (bash, zsh) or DefaultEnterDelay for agent TUIs.
+func (c *Client) SendKeysWithDelay(target, keys string, enter bool, enterDelay time.Duration) error {
 	// Send large payloads in chunks to avoid ARG_MAX limits or tmux buffer issues
 	const chunkSize = 4096
 
@@ -713,9 +782,10 @@ func (c *Client) SendKeys(target, keys string, enter bool) error {
 	}
 
 	if enter {
-		// Brief delay before Enter to ensure agent CLIs (Codex, Gemini) have time to
-		// process the pasted text. Without this, Enter can be lost due to input buffering.
-		time.Sleep(50 * time.Millisecond)
+		// Delay before Enter to ensure the target has time to process the pasted text.
+		// Without this, Enter can be lost due to input buffering.
+		// Agent TUIs (Codex, Gemini) need ~50ms; shells may need 150ms or more.
+		time.Sleep(enterDelay)
 		// Use "Enter" instead of "C-m" (Ctrl+M) because some TUIs (e.g., Codex)
 		// distinguish between the Enter key and the carriage return control character.
 		return c.RunSilent("send-keys", "-t", target, "Enter")
@@ -735,6 +805,11 @@ func FormatPaneName(session string, agentType string, index int, variant string)
 // SendKeys sends keys to a pane (default client)
 func SendKeys(target, keys string, enter bool) error {
 	return DefaultClient.SendKeys(target, keys, enter)
+}
+
+// SendKeysWithDelay sends keys to a pane with a configurable Enter delay (default client)
+func SendKeysWithDelay(target, keys string, enter bool, enterDelay time.Duration) error {
+	return DefaultClient.SendKeysWithDelay(target, keys, enter, enterDelay)
 }
 
 // PasteKeys pastes content to a pane using tmux's paste mechanism.
@@ -810,7 +885,7 @@ func (c *Client) AttachOrSwitch(session string) error {
 			return c.RunSilent("switch-client", "-t", session)
 		}
 		// Interactive attach needs stdin/stdout, so use exec directly for local
-		cmd := exec.Command("tmux", "attach", "-t", session)
+		cmd := exec.Command(BinaryPath(), "attach", "-t", session)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -1008,8 +1083,8 @@ type PaneActivity struct {
 
 // GetPanesWithActivityContext returns all panes in a session with their activity times with cancellation support.
 func (c *Client) GetPanesWithActivityContext(ctx context.Context, session string) ([]PaneActivity, error) {
-	sep := "|===|"
-	format := fmt.Sprintf("#{pane_id}%[1]s#{pane_index}%[1]s#{pane_title}%[1]s#{pane_current_command}%[1]s#{pane_width}%[1]s#{pane_height}%[1]s#{pane_active}%[1]s#{pane_last_activity}", sep)
+	sep := FieldSeparator
+	format := fmt.Sprintf("#{pane_id}%[1]s#{pane_index}%[1]s#{pane_title}%[1]s#{pane_current_command}%[1]s#{pane_width}%[1]s#{pane_height}%[1]s#{pane_active}%[1]s#{pane_last_activity}%[1]s#{pane_pid}", sep)
 	output, err := c.RunContext(ctx, "list-panes", "-s", "-t", session, "-F", format)
 	if err != nil {
 		return nil, err
@@ -1022,7 +1097,7 @@ func (c *Client) GetPanesWithActivityContext(ctx context.Context, session string
 		}
 
 		parts := strings.Split(line, sep)
-		if len(parts) < 8 {
+		if len(parts) < 9 {
 			continue
 		}
 
@@ -1031,6 +1106,7 @@ func (c *Client) GetPanesWithActivityContext(ctx context.Context, session string
 		height, _ := strconv.Atoi(parts[5])
 		active := parts[6] == "1"
 		timestamp, _ := strconv.ParseInt(parts[7], 10, 64)
+		pid, _ := strconv.Atoi(parts[8])
 
 		pane := Pane{
 			ID:      parts[0],
@@ -1040,10 +1116,11 @@ func (c *Client) GetPanesWithActivityContext(ctx context.Context, session string
 			Width:   width,
 			Height:  height,
 			Active:  active,
+			PID:     pid,
 		}
 
-		// Parse pane title using regex to extract type, variant, and tags
-		pane.Type, pane.Variant, pane.Tags = parseAgentFromTitle(pane.Title)
+		// Parse pane title using regex to extract type, index, variant, and tags
+		pane.Type, pane.NTMIndex, pane.Variant, pane.Tags = parseAgentFromTitle(pane.Title)
 
 		// Fallback chain for agent detection when NTM title format doesn't match:
 		// 1. Try process-based detection (checks command for "claude", "codex", "gemini")
