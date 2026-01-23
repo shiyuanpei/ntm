@@ -5,11 +5,13 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
 )
@@ -51,14 +53,25 @@ type BulkAssignSummary struct {
 }
 
 // runBulkAssignCmd executes ntm --robot-bulk-assign with the given flags.
+// Uses a 30-second timeout to prevent test hangs.
 func runBulkAssignCmd(t *testing.T, suite *TestSuite, session string, flags ...string) (*BulkAssignOutput, []byte, error) {
 	t.Helper()
 
 	args := []string{fmt.Sprintf("--robot-bulk-assign=%s", session)}
 	args = append(args, flags...)
 
-	cmd := exec.Command("/tmp/ntm-test", args...)
+	// Use context with timeout to prevent indefinite hangs (bd-brzap fix)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "/tmp/ntm-test", args...)
 	output, err := cmd.CombinedOutput()
+
+	// Check for timeout
+	if ctx.Err() == context.DeadlineExceeded {
+		suite.Logger().Log("[E2E-BULK-ASSIGN] Command timed out after 30s: args=%v", args)
+		return nil, output, fmt.Errorf("command timed out after 30s")
+	}
 
 	suite.Logger().Log("[E2E-BULK-ASSIGN] args=%v bytes=%d", args, len(output))
 

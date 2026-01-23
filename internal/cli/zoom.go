@@ -49,6 +49,8 @@ Examples:
 		},
 	}
 
+	cmd.ValidArgsFunction = completeSessionThenPane
+
 	return cmd
 }
 

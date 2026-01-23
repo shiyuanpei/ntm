@@ -13,7 +13,7 @@ import (
 )
 
 func newViewCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "view [session-name]",
 		Aliases: []string{"v", "tile"},
 		Short:   "View all panes in a session (unzoom, tile, attach)",
@@ -39,6 +39,10 @@ Examples:
 			return runView(cmd.OutOrStdout(), session)
 		},
 	}
+
+	cmd.ValidArgsFunction = completeSessionArgs
+
+	return cmd
 }
 
 func runView(w io.Writer, session string) error {

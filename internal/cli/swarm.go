@@ -22,6 +22,7 @@ func newSwarmCmd() *cobra.Command {
 		remote          string
 		jsonOutput      bool
 		sessionsPerType int
+		panesPerSession int
 		outputPath      string
 	)
 
@@ -49,6 +50,7 @@ Examples:
 				Remote:          remote,
 				JSONOutput:      jsonOutput,
 				SessionsPerType: sessionsPerType,
+				PanesPerSession: panesPerSession,
 				OutputPath:      outputPath,
 			})
 		},
@@ -70,6 +72,7 @@ Examples:
 	cmd.Flags().StringVar(&remote, "remote", "", "Remote host for SSH execution (user@host)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output plan as JSON")
 	cmd.Flags().IntVar(&sessionsPerType, "sessions-per-type", defaultSessionsPerType, "Number of tmux sessions per agent type (default: 3)")
+	cmd.Flags().IntVar(&panesPerSession, "panes-per-session", 0, "Max panes per session (0 = auto-calculate from total agents)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "Write swarm plan to JSON file (optional)")
 
 	// Add subcommands
@@ -87,6 +90,7 @@ type swarmOptions struct {
 	Remote          string
 	JSONOutput      bool
 	SessionsPerType int
+	PanesPerSession int
 	OutputPath      string
 }
 
@@ -144,8 +148,20 @@ func runSwarm(opts swarmOptions) error {
 	if opts.SessionsPerType > 10 {
 		logger.Warn("high sessions-per-type may impact performance", "value", opts.SessionsPerType)
 	}
-	logger.Info("session configuration", "sessions_per_type", opts.SessionsPerType)
 	swarmCfg.SessionsPerType = opts.SessionsPerType
+
+	if opts.PanesPerSession < 0 {
+		return fmt.Errorf("--panes-per-session cannot be negative, got %d", opts.PanesPerSession)
+	}
+	if opts.PanesPerSession > 20 {
+		logger.Warn("high panes-per-session may impact performance", "value", opts.PanesPerSession)
+	}
+	swarmCfg.PanesPerSession = opts.PanesPerSession
+	if opts.PanesPerSession > 0 {
+		logger.Info("session configuration", "sessions_per_type", opts.SessionsPerType, "panes_per_session", opts.PanesPerSession, "mode", "manual")
+	} else {
+		logger.Info("session configuration", "sessions_per_type", opts.SessionsPerType, "panes_per_session", "auto", "mode", "auto-calculate")
+	}
 
 	// Discover projects
 	projects, err := discoverProjects(opts.ScanDir, opts.Projects)

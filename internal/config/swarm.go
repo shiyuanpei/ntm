@@ -27,6 +27,11 @@ type SwarmConfig struct {
 	// Session structure
 	SessionsPerType int `toml:"sessions_per_type"` // Default: 3
 
+	// PanesPerSession overrides auto-calculated panes per session.
+	// 0 means auto-calculate: ceil(maxAgentsOfAnyType / sessionsPerType)
+	// Values > 0 are used as manual override.
+	PanesPerSession int `toml:"panes_per_session"` // Default: 0 (auto)
+
 	// Timing
 	StaggerDelayMs int `toml:"stagger_delay_ms"` // Default: 300
 

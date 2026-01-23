@@ -66,6 +66,7 @@ Examples:
 	cmd.Flags().BoolVar(&ccFlag, "cc", false, "Save from Claude panes")
 	cmd.Flags().BoolVar(&codFlag, "cod", false, "Save from Codex panes")
 	cmd.Flags().BoolVar(&gmiFlag, "gmi", false, "Save from Gemini panes")
+	cmd.ValidArgsFunction = completeSessionArgs
 
 	return cmd
 }

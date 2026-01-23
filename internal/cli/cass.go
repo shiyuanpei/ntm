@@ -32,6 +32,33 @@ func newCassCmd() *cobra.Command {
 	return cmd
 }
 
+func newSearchCmd() *cobra.Command {
+	var (
+		session string
+		agent   string
+		since   string
+		limit   int
+		offset  int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Search archived agent output",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCassSearch(args[0], agent, session, since, limit, offset)
+		},
+	}
+
+	cmd.Flags().StringVar(&session, "session", "", "Filter by session/project")
+	cmd.Flags().StringVar(&agent, "agent", "", "Filter by agent type")
+	cmd.Flags().StringVar(&since, "since", "", "Filter by time (e.g. 7d)")
+	cmd.Flags().IntVar(&limit, "limit", 20, "Max results")
+	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
+
+	return cmd
+}
+
 func handleCassError(err error) error {
 	if err == cass.ErrNotInstalled {
 		if IsJSONOutput() {

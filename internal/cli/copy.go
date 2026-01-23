@@ -94,6 +94,7 @@ Examples:
 	cmd.Flags().BoolVar(&gmiFlag, "gmi", false, "Copy from Gemini panes")
 	cmd.Flags().StringVarP(&outFile, "output", "o", "", "Write output to file instead of clipboard")
 	cmd.Flags().BoolVar(&quiet, "quiet", false, "Suppress confirmation output")
+	cmd.ValidArgsFunction = completeSessionColonPane
 
 	return cmd
 }

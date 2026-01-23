@@ -91,6 +91,7 @@ Examples:
 	cmd.Flags().BoolVar(&noTUI, "no-tui", false, "Plain text output (no interactive UI)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "JSON output (implies --no-tui)")
 	cmd.Flags().BoolVar(&debug, "debug", false, "Enable debug mode with state inspection")
+	cmd.ValidArgsFunction = completeSessionArgs
 
 	return cmd
 }

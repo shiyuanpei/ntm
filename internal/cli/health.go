@@ -54,6 +54,8 @@ Examples:
 	cmd.Flags().BoolVarP(&healthVerbose, "verbose", "v", false, "Show full error details")
 	cmd.Flags().IntVar(&healthPane, "pane", -1, "Filter to specific pane index")
 	cmd.Flags().StringVar(&healthStatus, "status", "", "Filter by status (ok, warning, error)")
+	cmd.ValidArgsFunction = completeSessionArgs
+	_ = cmd.RegisterFlagCompletionFunc("pane", completePaneIndexes)
 
 	return cmd
 }

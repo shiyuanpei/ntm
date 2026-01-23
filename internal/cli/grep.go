@@ -173,6 +173,7 @@ Examples:
 	cmd.Flags().BoolVar(&ccFlag, "cc", false, "Search Claude panes only")
 	cmd.Flags().BoolVar(&codFlag, "cod", false, "Search Codex panes only")
 	cmd.Flags().BoolVar(&gmiFlag, "gmi", false, "Search Gemini panes only")
+	cmd.ValidArgsFunction = completeSessionSecondArg
 
 	return cmd
 }

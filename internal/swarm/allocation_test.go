@@ -430,3 +430,41 @@ func TestAllocationCalculator_CustomAllocations(t *testing.T) {
 		t.Errorf("TotalAgents = %d, want 18", alloc.TotalAgents)
 	}
 }
+
+func TestAllocationCalculator_PanesPerSessionOverride(t *testing.T) {
+	// Test that PanesPerSession > 0 uses manual override
+	cfg := testSwarmConfig()
+	cfg.SessionsPerType = 3
+	cfg.PanesPerSession = 5 // Manual override
+	ac := NewAllocationCalculator(cfg)
+
+	projects := []ProjectBeadCount{
+		{Path: "/dp/proj1", Name: "proj1", OpenBeads: 500}, // tier1: 4+4+2
+	}
+
+	plan := ac.GenerateSwarmPlan("/dp", projects)
+
+	if plan.PanesPerSession != 5 {
+		t.Errorf("PanesPerSession = %d, want 5 (manual override)", plan.PanesPerSession)
+	}
+}
+
+func TestAllocationCalculator_PanesPerSessionAutoCalculate(t *testing.T) {
+	// Test that PanesPerSession = 0 triggers auto-calculation
+	cfg := testSwarmConfig()
+	cfg.SessionsPerType = 2
+	cfg.PanesPerSession = 0 // Auto-calculate
+	ac := NewAllocationCalculator(cfg)
+
+	// Tier1 has 4 CC, 4 Cod, 2 Gmi
+	// Max is 4, with 2 sessions: ceil(4/2) = 2 panes per session
+	projects := []ProjectBeadCount{
+		{Path: "/dp/proj1", Name: "proj1", OpenBeads: 500},
+	}
+
+	plan := ac.GenerateSwarmPlan("/dp", projects)
+
+	if plan.PanesPerSession != 2 {
+		t.Errorf("PanesPerSession = %d, want 2 (auto-calculated: ceil(4/2))", plan.PanesPerSession)
+	}
+}

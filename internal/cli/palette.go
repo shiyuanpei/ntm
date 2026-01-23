@@ -16,7 +16,7 @@ import (
 )
 
 func newPaletteCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "palette [session]",
 		Short: "Open the interactive command palette",
 		Long: `Open an interactive TUI to select and send pre-configured prompts to agents.
@@ -38,6 +38,10 @@ Examples:
 			return runPalette(cmd.OutOrStdout(), cmd.ErrOrStderr(), session)
 		},
 	}
+
+	cmd.ValidArgsFunction = completeSessionArgs
+
+	return cmd
 }
 
 func runPalette(w io.Writer, errW io.Writer, session string) error {

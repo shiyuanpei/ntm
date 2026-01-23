@@ -81,6 +81,8 @@ Examples:
 	cmd.Flags().StringVar(&filterPane, "pane", "", "Show specific pane (by name or index)")
 	cmd.Flags().BoolVarP(&watchMode, "watch", "w", false, "Auto-refresh display")
 	cmd.Flags().IntVar(&interval, "interval", 2000, "Refresh interval in milliseconds (with --watch)")
+	cmd.ValidArgsFunction = completeSessionArgs
+	_ = cmd.RegisterFlagCompletionFunc("pane", completePaneIndexes)
 
 	return cmd
 }

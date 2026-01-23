@@ -215,6 +215,108 @@ func TestCheckOutputMatch(t *testing.T) {
 	}
 }
 
+func TestCheckOutputPatternsByAgent(t *testing.T) {
+	detector := NewLimitDetector()
+
+	tests := []struct {
+		name        string
+		agentType   string
+		output      string
+		wantMatch   bool
+		wantPattern string
+	}{
+		{
+			name:        "cc_rate_limit_exceeded",
+			agentType:   "cc",
+			output:      "Error: rate limit exceeded. Please wait before trying again.",
+			wantMatch:   true,
+			wantPattern: "rate limit exceeded",
+		},
+		{
+			name:        "cc_hit_limit",
+			agentType:   "claude",
+			output:      "You've hit your limit for now.",
+			wantMatch:   true,
+			wantPattern: "you've hit your limit",
+		},
+		{
+			name:        "cc_too_many_requests",
+			agentType:   "claude-code",
+			output:      "API Error: Too many requests. Try again later.",
+			wantMatch:   true,
+			wantPattern: "too many requests",
+		},
+		{
+			name:        "cod_usage_limit",
+			agentType:   "cod",
+			output:      "You've reached your usage limit for this period.",
+			wantMatch:   true,
+			wantPattern: "you've reached your usage limit",
+		},
+		{
+			name:        "cod_quota_exceeded",
+			agentType:   "codex",
+			output:      "OpenAI error: quota exceeded on your account.",
+			wantMatch:   true,
+			wantPattern: "quota exceeded",
+		},
+		{
+			name:        "gmi_resource_exhausted",
+			agentType:   "gmi",
+			output:      "google.api_core.exceptions.ResourceExhausted: 429 Resource exhausted",
+			wantMatch:   true,
+			wantPattern: "resource exhausted",
+		},
+		{
+			name:        "gmi_limit_reached",
+			agentType:   "gemini",
+			output:      "Limit reached for this model. Please try again.",
+			wantMatch:   true,
+			wantPattern: "limit reached",
+		},
+		{
+			name:        "unknown_agent_default_patterns",
+			agentType:   "unknown",
+			output:      "Rate limit exceeded by upstream provider.",
+			wantMatch:   true,
+			wantPattern: "rate limit",
+		},
+		{
+			name:      "partial_match_no_limit",
+			agentType: "cc",
+			output:    "The word rate appears but limit does not follow immediately.",
+			wantMatch: false,
+		},
+		{
+			name:      "empty_output",
+			agentType: "cc",
+			output:    "",
+			wantMatch: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Logf("AgentType=%s Output=%q", tt.agentType, tt.output)
+			event := detector.checkOutput("test:1.1", tt.agentType, tt.output)
+
+			if tt.wantMatch {
+				if event == nil {
+					t.Fatalf("expected match, got nil event")
+				}
+				if tt.wantPattern != "" && event.Pattern != tt.wantPattern {
+					t.Fatalf("unexpected pattern: got %q want %q", event.Pattern, tt.wantPattern)
+				}
+				if event.RawOutput != tt.output {
+					t.Fatalf("raw output mismatch: got %q want %q", event.RawOutput, tt.output)
+				}
+			} else if event != nil {
+				t.Fatalf("expected no match, got pattern %q", event.Pattern)
+			}
+		})
+	}
+}
+
 func TestCheckOutputCaseInsensitive(t *testing.T) {
 	detector := NewLimitDetector()
 

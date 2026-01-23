@@ -548,6 +548,30 @@ Shell Integration:
 			}
 			return
 		}
+		if robotErrors != "" {
+			// Parse pane filter
+			var paneFilter []string
+			if robotPanes != "" {
+				paneFilter = strings.Split(robotPanes, ",")
+			}
+			// Parse agent type filter
+			agentType := ""
+			if robotSendType != "" {
+				agentType = robotSendType
+			}
+			opts := robot.ErrorsOptions{
+				Session:   robotErrors,
+				Since:     robotErrorsSince,
+				Panes:     paneFilter,
+				Lines:     robotLines,
+				AgentType: agentType,
+			}
+			if err := robot.PrintErrors(opts); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
 		if robotIsWorking != "" {
 			// Parse pane filter
 			panes, err := robot.ParsePanesArg(robotPanes)
@@ -1301,6 +1325,8 @@ var (
 	robotSnapshot     bool   // unified state query
 	robotSince        string // ISO8601 timestamp for delta snapshot
 	robotTail         string // session name for tail
+	robotErrors       string // session name for errors
+	robotErrorsSince  string // duration for errors filter (e.g., 5m, 1h)
 	robotLines        int    // number of lines to capture
 	robotPanes        string // comma-separated pane filter
 	robotGraph        bool   // bv insights passthrough
@@ -1630,8 +1656,10 @@ func init() {
 	rootCmd.Flags().BoolVar(&robotSnapshot, "robot-snapshot", false, "Unified state: sessions + beads + alerts + mail. Use --since for delta. Example: ntm --robot-snapshot")
 	rootCmd.Flags().StringVar(&robotSince, "since", "", "RFC3339 timestamp for delta snapshot. Optional with --robot-snapshot. Example: --since=2025-12-15T10:00:00Z")
 	rootCmd.Flags().StringVar(&robotTail, "robot-tail", "", "Capture recent pane output. Required: SESSION. Example: ntm --robot-tail=myproject --lines=50")
-	rootCmd.Flags().IntVar(&robotLines, "lines", 20, "Lines to capture per pane. Optional with --robot-tail. Example: --lines=100")
-	rootCmd.Flags().StringVar(&robotPanes, "panes", "", "Filter to specific pane indices. Optional with --robot-tail, --robot-send, --robot-ack, --robot-interrupt, --robot-is-working. Example: --panes=1,2")
+	rootCmd.Flags().StringVar(&robotErrors, "robot-errors", "", "Filter pane output to show only errors. Required: SESSION. Example: ntm --robot-errors=myproject --lines=100")
+	rootCmd.Flags().StringVar(&robotErrorsSince, "errors-since", "", "Filter to errors from last duration. Optional with --robot-errors. Example: --errors-since=5m")
+	rootCmd.Flags().IntVar(&robotLines, "lines", 20, "Lines to capture per pane. Optional with --robot-tail, --robot-errors. Example: --lines=100")
+	rootCmd.Flags().StringVar(&robotPanes, "panes", "", "Filter to specific pane indices. Optional with --robot-tail, --robot-errors, --robot-send, --robot-ack, --robot-interrupt, --robot-is-working. Example: --panes=1,2")
 	rootCmd.Flags().StringVar(&robotIsWorking, "robot-is-working", "", "Check if agents are working. Returns work state with recommendations. Required: SESSION. Example: ntm --robot-is-working=myproject --panes=2,3")
 	rootCmd.Flags().BoolVar(&robotIsWorkingVerbose, "is-working-verbose", false, "Include raw sample output in --robot-is-working response. Example: --is-working-verbose")
 	rootCmd.Flags().StringVar(&robotAgentHealth, "robot-agent-health", "", "Comprehensive agent health check combining local state and provider usage. Required: SESSION. Example: ntm --robot-agent-health=myproject --panes=2,3")
@@ -2237,6 +2265,7 @@ func init() {
 		newCopyCmd(),
 		newSaveCmd(),
 		newGrepCmd(),
+		newErrorsCmd(),
 		newExtractCmd(),
 		newDiffCmd(),
 		newChangesCmd(),

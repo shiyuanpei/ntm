@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +25,10 @@ type AccountRotatorI interface {
 	// CurrentAccount returns the current account for the agent type.
 	CurrentAccount(agentType string) string
 }
+
+// ProjectPathLookup is a callback to resolve project path from session:pane.
+// Returns the project directory path, or empty string if not found.
+type ProjectPathLookup func(sessionPane string) string
 
 // RespawnResult tracks the result of a single respawn attempt.
 type RespawnResult struct {
@@ -69,6 +76,11 @@ type AutoRespawnerConfig struct {
 	// AutoRotateAccounts enables automatic account rotation on limit hit.
 	// Default: false
 	AutoRotateAccounts bool
+
+	// MarchingOrders contains agent-specific prompt templates for post-respawn injection.
+	// Keys are agent types (cc, cod, gmi) or "default" for fallback.
+	// If nil or agent type not found, falls back to PromptInjector.GetTemplate("default").
+	MarchingOrders map[string]string
 }
 
 // DefaultAutoRespawnerConfig returns sensible defaults.
@@ -111,6 +123,10 @@ type AutoRespawner struct {
 	// TmuxClient for direct tmux operations.
 	// If nil, the default tmux client is used.
 	TmuxClient *tmux.Client
+
+	// ProjectPathLookup resolves project path from session:pane (optional).
+	// If provided, respawn will cd to the project directory before launching.
+	ProjectPathLookup ProjectPathLookup
 
 	// Logger for structured logging.
 	Logger *slog.Logger
@@ -176,6 +192,12 @@ func (r *AutoRespawner) WithTmuxClient(client *tmux.Client) *AutoRespawner {
 	return r
 }
 
+// WithProjectPathLookup sets the project path lookup callback.
+func (r *AutoRespawner) WithProjectPathLookup(lookup ProjectPathLookup) *AutoRespawner {
+	r.ProjectPathLookup = lookup
+	return r
+}
+
 // WithLogger sets a custom logger.
 func (r *AutoRespawner) WithLogger(logger *slog.Logger) *AutoRespawner {
 	r.Logger = logger
@@ -185,6 +207,13 @@ func (r *AutoRespawner) WithLogger(logger *slog.Logger) *AutoRespawner {
 // WithConfig sets the configuration.
 func (r *AutoRespawner) WithConfig(cfg AutoRespawnerConfig) *AutoRespawner {
 	r.Config = cfg
+	return r
+}
+
+// WithMarchingOrders sets agent-specific marching orders templates.
+// Keys should be agent types (cc, cod, gmi) or "default" for fallback.
+func (r *AutoRespawner) WithMarchingOrders(orders map[string]string) *AutoRespawner {
+	r.Config.MarchingOrders = orders
 	return r
 }
 
@@ -326,7 +355,7 @@ func (r *AutoRespawner) Respawn(sessionPane, agentType string) *RespawnResult {
 		"agent_type", agentType)
 
 	// Step 1: Kill the stuck agent
-	if err := r.killAgent(sessionPane, agentType); err != nil {
+	if err := r.killWithFallback(sessionPane, agentType); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("kill agent failed: %v", err)
 		result.Duration = time.Since(start)
@@ -340,16 +369,7 @@ func (r *AutoRespawner) Respawn(sessionPane, agentType string) *RespawnResult {
 		return result
 	}
 
-	// Step 2: Wait for graceful exit with verification
-	if !r.waitForExit(sessionPane) {
-		// Agent didn't exit cleanly within timeout, wait a bit more
-		r.logger().Warn("[AutoRespawner] agent_exit_not_verified",
-			"session_pane", sessionPane,
-			"continuing", true)
-		time.Sleep(r.Config.GracefulExitDelay)
-	}
-
-	// Step 3: (Optional) Rotate account
+	// Step 2: (Optional) Rotate account
 	if r.Config.AutoRotateAccounts && r.AccountRotator != nil {
 		previousAccount := r.AccountRotator.CurrentAccount(agentType)
 		newAccount, err := r.AccountRotator.RotateAccount(agentType)
@@ -371,12 +391,20 @@ func (r *AutoRespawner) Respawn(sessionPane, agentType string) *RespawnResult {
 		}
 	}
 
-	// Step 4: Clear the pane
+	// Step 3: Clear the pane
 	if err := r.clearPane(sessionPane); err != nil {
 		r.logger().Warn("[AutoRespawner] clear_pane_failed",
 			"session_pane", sessionPane,
 			"error", err)
 		// Continue anyway - not fatal
+	}
+
+	// Step 4: Change to project directory (if configured)
+	if err := r.cdToProject(sessionPane); err != nil {
+		r.logger().Warn("[AutoRespawner] cd_project_failed",
+			"session_pane", sessionPane,
+			"error", err)
+		// Continue anyway - agent may work from wrong directory
 	}
 
 	// Step 5: Respawn the agent
@@ -395,18 +423,30 @@ func (r *AutoRespawner) Respawn(sessionPane, agentType string) *RespawnResult {
 	}
 
 	// Step 6: Wait for agent to be ready
-	time.Sleep(r.Config.AgentReadyDelay)
+	if err := r.waitForAgentReady(sessionPane, agentType); err != nil {
+		r.logger().Warn("[AutoRespawner] ready_timeout",
+			"session_pane", sessionPane,
+			"agent_type", agentType,
+			"error", err)
+		// Continue anyway - agent might still be starting
+	}
 
 	// Step 7: Re-inject marching orders
 	if r.PromptInjector != nil {
-		prompt := r.PromptInjector.GetTemplate("default")
+		prompt, source := r.getMarchingOrders(agentType)
+		r.logger().Info("[AutoRespawner] marching_orders_selected",
+			"session_pane", sessionPane,
+			"agent_type", agentType,
+			"source", source,
+			"prompt_len", len(prompt))
+
 		if _, err := r.PromptInjector.InjectPrompt(sessionPane, agentType, prompt); err != nil {
-			r.logger().Warn("[AutoRespawner] injecting_prompt_failed",
+			r.logger().Warn("[AutoRespawner] marching_orders_failed",
 				"session_pane", sessionPane,
 				"error", err)
 			// Continue - agent is running, just without marching orders
 		} else {
-			r.logger().Info("[AutoRespawner] injecting_prompt",
+			r.logger().Info("[AutoRespawner] marching_orders_injected",
 				"session_pane", sessionPane,
 				"prompt_len", len(prompt))
 		}
@@ -475,6 +515,77 @@ func (r *AutoRespawner) killAgent(sessionPane, agentType string) error {
 	}
 
 	return nil
+}
+
+// killWithFallback tries graceful kill first, then force kill if needed.
+func (r *AutoRespawner) killWithFallback(sessionPane, agentType string) error {
+	if err := r.killAgent(sessionPane, agentType); err != nil {
+		r.logger().Warn("[AutoRespawner] graceful_kill_failed",
+			"session_pane", sessionPane,
+			"error", err)
+	}
+
+	if r.waitForExit(sessionPane) {
+		return nil
+	}
+
+	if err := r.forceKill(sessionPane); err != nil {
+		return err
+	}
+
+	time.Sleep(500 * time.Millisecond)
+	return nil
+}
+
+// forceKill sends SIGKILL to the process in the pane.
+func (r *AutoRespawner) forceKill(sessionPane string) error {
+	r.logger().Warn("[AutoRespawner] force_kill_start",
+		"session_pane", sessionPane)
+
+	pid, err := r.getPanePID(sessionPane)
+	if err != nil {
+		r.logger().Warn("[AutoRespawner] force_kill_failed",
+			"session_pane", sessionPane,
+			"error", err)
+		return fmt.Errorf("get pane pid: %w", err)
+	}
+
+	// Kill the process group first for thorough cleanup.
+	if err := exec.Command("kill", "-9", fmt.Sprintf("-%d", pid)).Run(); err != nil {
+		// Fall back to killing just the process.
+		if err := exec.Command("kill", "-9", strconv.Itoa(pid)).Run(); err != nil {
+			r.logger().Warn("[AutoRespawner] force_kill_failed",
+				"session_pane", sessionPane,
+				"error", err)
+			return fmt.Errorf("kill -9 failed: %w", err)
+		}
+	}
+
+	r.logger().Info("[AutoRespawner] force_kill_complete",
+		"session_pane", sessionPane,
+		"pid", pid)
+	return nil
+}
+
+// getPanePID gets the foreground process PID from tmux.
+func (r *AutoRespawner) getPanePID(sessionPane string) (int, error) {
+	client := r.tmuxClient()
+
+	output, err := client.Run("display-message", "-p", "-t", sessionPane, "#{pane_pid}")
+	if err != nil {
+		return 0, fmt.Errorf("display-message: %w", err)
+	}
+
+	pidStr := strings.TrimSpace(output)
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return 0, fmt.Errorf("parse pid %q: %w", pidStr, err)
+	}
+
+	r.logger().Info("[AutoRespawner] pid_lookup",
+		"session_pane", sessionPane,
+		"pid", pid)
+	return pid, nil
 }
 
 // waitForExit waits for agent to terminate, returns true if exited.
@@ -617,6 +728,35 @@ func (r *AutoRespawner) clearPane(sessionPane string) error {
 	return nil
 }
 
+// cdToProject changes to the project directory if a path is available.
+func (r *AutoRespawner) cdToProject(sessionPane string) error {
+	if r.ProjectPathLookup == nil {
+		return nil // No lookup configured, skip
+	}
+
+	projectPath := r.ProjectPathLookup(sessionPane)
+	if projectPath == "" {
+		r.logger().Debug("[AutoRespawner] no_project_path",
+			"session_pane", sessionPane)
+		return nil // No project path found, skip
+	}
+
+	client := r.tmuxClient()
+
+	// Use shell escaping for paths with spaces
+	cdCmd := fmt.Sprintf("cd %q", projectPath)
+	if err := client.SendKeys(sessionPane, cdCmd, true); err != nil {
+		return fmt.Errorf("cd to project: %w", err)
+	}
+
+	r.logger().Info("[AutoRespawner] directory_changed",
+		"session_pane", sessionPane,
+		"path", projectPath)
+
+	time.Sleep(r.Config.ClearPaneDelay) // Wait for cd to complete
+	return nil
+}
+
 // spawnAgent launches the agent command in the pane.
 func (r *AutoRespawner) spawnAgent(sessionPane, agentType string) error {
 	r.logger().Info("[AutoRespawner] spawning_agent",
@@ -647,6 +787,93 @@ func (r *AutoRespawner) getAgentCommand(agentType string) string {
 	default:
 		return agentType
 	}
+}
+
+// getMarchingOrders returns the appropriate marching orders for the agent type.
+// Returns the prompt text and a source indicator ("config/<type>", "config/default", or "injector").
+func (r *AutoRespawner) getMarchingOrders(agentType string) (string, string) {
+	// Normalize agent type for lookup
+	normalizedType := r.normalizeAgentType(agentType)
+
+	// Check config for agent-specific template
+	if r.Config.MarchingOrders != nil {
+		if tmpl, ok := r.Config.MarchingOrders[normalizedType]; ok && tmpl != "" {
+			return tmpl, "config/" + normalizedType
+		}
+		if tmpl, ok := r.Config.MarchingOrders["default"]; ok && tmpl != "" {
+			return tmpl, "config/default"
+		}
+	}
+
+	// Fallback to PromptInjector's default template
+	if r.PromptInjector != nil {
+		return r.PromptInjector.GetTemplate("default"), "injector"
+	}
+
+	// Ultimate fallback if no injector configured
+	return DefaultMarchingOrders, "builtin"
+}
+
+// normalizeAgentType converts agent type aliases to canonical forms.
+func (r *AutoRespawner) normalizeAgentType(agentType string) string {
+	switch agentType {
+	case "cc", "claude", "claude-code":
+		return "cc"
+	case "cod", "codex":
+		return "cod"
+	case "gmi", "gemini":
+		return "gmi"
+	default:
+		return agentType
+	}
+}
+
+// agentReadyPatterns returns the patterns that indicate an agent is ready.
+func agentReadyPatterns(agentType string) []string {
+	switch agentType {
+	case "cc", "claude", "claude-code":
+		return []string{"Claude", "Opus", "Sonnet", "Haiku", ">"}
+	case "cod", "codex":
+		return []string{"Codex", "codex>", "?"}
+	case "gmi", "gemini":
+		return []string{"Gemini", ">"}
+	default:
+		return []string{">", "$", "%"} // Generic shell/agent prompts
+	}
+}
+
+// waitForAgentReady waits for agent startup indicators in pane output.
+func (r *AutoRespawner) waitForAgentReady(sessionPane, agentType string) error {
+	timeout := r.Config.AgentReadyDelay
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	patterns := agentReadyPatterns(agentType)
+
+	for time.Now().Before(deadline) {
+		<-ticker.C
+
+		output := r.capturePaneOutput(sessionPane, 20)
+		if output == "" {
+			continue
+		}
+
+		for _, pattern := range patterns {
+			if strings.Contains(output, pattern) {
+				r.logger().Info("[AutoRespawner] agent_ready",
+					"session_pane", sessionPane,
+					"pattern", pattern)
+				return nil
+			}
+		}
+	}
+
+	return fmt.Errorf("agent not ready after %v", timeout)
 }
 
 // emitEvent sends a respawn event to the event channel.

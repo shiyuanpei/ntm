@@ -126,11 +126,15 @@ func (ac *AllocationCalculator) GenerateSwarmPlan(scanDir string, projects []Pro
 	result := ac.Calculate(projects)
 
 	// Calculate panes per session
-	maxAgentsPerType := max(result.Totals.TotalCC, result.Totals.TotalCod, result.Totals.TotalGmi)
+	// If PanesPerSession is set (> 0), use it as manual override
+	// Otherwise, auto-calculate: ceil(maxAgentsOfAnyType / sessionsPerType)
 	sessionsPerType := ac.Config.SessionsPerType
-	panesPerSession := 0
-	if sessionsPerType > 0 && maxAgentsPerType > 0 {
-		panesPerSession = (maxAgentsPerType + sessionsPerType - 1) / sessionsPerType // Ceiling division
+	panesPerSession := ac.Config.PanesPerSession
+	if panesPerSession == 0 {
+		maxAgentsPerType := max(result.Totals.TotalCC, result.Totals.TotalCod, result.Totals.TotalGmi)
+		if sessionsPerType > 0 && maxAgentsPerType > 0 {
+			panesPerSession = (maxAgentsPerType + sessionsPerType - 1) / sessionsPerType // Ceiling division
+		}
 	}
 
 	// Generate session specifications

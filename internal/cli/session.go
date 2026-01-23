@@ -82,7 +82,7 @@ func filterAssignments(assignments []*assignment.Assignment, filterStatus, filte
 }
 
 func newAttachCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "attach <session-name>",
 		Aliases: []string{"a"},
 		Short:   "Attach to a tmux session",
@@ -102,6 +102,10 @@ Examples:
 			return runAttach(args[0])
 		},
 	}
+
+	cmd.ValidArgsFunction = completeSessionArgs
+
+	return cmd
 }
 
 func runAttach(session string) error {
@@ -362,6 +366,7 @@ Examples:
 	cmd.Flags().BoolVar(&showSummary, "summary", false, "show assignment summary statistics only")
 	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "auto-refresh display")
 	cmd.Flags().IntVar(&interval, "interval", 2000, "refresh interval in milliseconds (with --watch)")
+	cmd.ValidArgsFunction = completeSessionArgs
 	return cmd
 }
 

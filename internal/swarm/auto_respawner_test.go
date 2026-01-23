@@ -653,3 +653,204 @@ func TestDefaultAutoRespawnerConfigExitWait(t *testing.T) {
 		t.Errorf("expected ExitPollInterval 500ms, got %v", cfg.ExitPollInterval)
 	}
 }
+
+func TestWithProjectPathLookup(t *testing.T) {
+	r := NewAutoRespawner()
+
+	lookup := func(sessionPane string) string {
+		return "/test/project"
+	}
+
+	r.WithProjectPathLookup(lookup)
+
+	if r.ProjectPathLookup == nil {
+		t.Error("ProjectPathLookup not set")
+	}
+
+	result := r.ProjectPathLookup("test:1.1")
+	if result != "/test/project" {
+		t.Errorf("expected /test/project, got %s", result)
+	}
+}
+
+func TestAgentReadyPatterns(t *testing.T) {
+	tests := []struct {
+		agentType       string
+		expectedCount   int
+		expectedPattern string
+	}{
+		{"cc", 5, "Claude"},
+		{"claude", 5, "Claude"},
+		{"claude-code", 5, "Claude"},
+		{"cod", 3, "Codex"},
+		{"codex", 3, "Codex"},
+		{"gmi", 2, "Gemini"},
+		{"gemini", 2, "Gemini"},
+		{"unknown", 3, ">"}, // generic patterns
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.agentType, func(t *testing.T) {
+			patterns := agentReadyPatterns(tt.agentType)
+
+			if len(patterns) != tt.expectedCount {
+				t.Errorf("expected %d patterns for %s, got %d", tt.expectedCount, tt.agentType, len(patterns))
+			}
+
+			found := false
+			for _, p := range patterns {
+				if p == tt.expectedPattern {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected pattern %q in %v", tt.expectedPattern, patterns)
+			}
+		})
+	}
+}
+
+func TestCdToProjectNoLookup(t *testing.T) {
+	r := NewAutoRespawner()
+	// No ProjectPathLookup set
+
+	err := r.cdToProject("test:1.1")
+
+	if err != nil {
+		t.Errorf("expected nil error when no lookup configured, got %v", err)
+	}
+}
+
+func TestCdToProjectEmptyPath(t *testing.T) {
+	r := NewAutoRespawner()
+
+	r.WithProjectPathLookup(func(sessionPane string) string {
+		return "" // Empty path
+	})
+
+	err := r.cdToProject("test:1.1")
+
+	if err != nil {
+		t.Errorf("expected nil error for empty path, got %v", err)
+	}
+}
+
+func TestWithMarchingOrders(t *testing.T) {
+	r := NewAutoRespawner()
+
+	orders := map[string]string{
+		"cc":      "Claude-specific instructions",
+		"cod":     "Codex-specific instructions",
+		"default": "Default instructions",
+	}
+
+	r.WithMarchingOrders(orders)
+
+	if r.Config.MarchingOrders == nil {
+		t.Fatal("MarchingOrders not set")
+	}
+
+	if r.Config.MarchingOrders["cc"] != "Claude-specific instructions" {
+		t.Error("cc marching orders not set correctly")
+	}
+}
+
+func TestGetMarchingOrdersAgentSpecific(t *testing.T) {
+	r := NewAutoRespawner()
+
+	orders := map[string]string{
+		"cc":      "Claude prompt",
+		"cod":     "Codex prompt",
+		"default": "Default prompt",
+	}
+
+	r.WithMarchingOrders(orders)
+
+	tests := []struct {
+		agentType      string
+		expectedPrompt string
+		expectedSource string
+	}{
+		{"cc", "Claude prompt", "config/cc"},
+		{"claude", "Claude prompt", "config/cc"},
+		{"claude-code", "Claude prompt", "config/cc"},
+		{"cod", "Codex prompt", "config/cod"},
+		{"codex", "Codex prompt", "config/cod"},
+		{"gmi", "Default prompt", "config/default"},  // Not in config, fallback to default
+		{"unknown", "Default prompt", "config/default"}, // Not in config, fallback to default
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.agentType, func(t *testing.T) {
+			prompt, source := r.getMarchingOrders(tt.agentType)
+			if prompt != tt.expectedPrompt {
+				t.Errorf("expected prompt %q, got %q", tt.expectedPrompt, prompt)
+			}
+			if source != tt.expectedSource {
+				t.Errorf("expected source %q, got %q", tt.expectedSource, source)
+			}
+		})
+	}
+}
+
+func TestGetMarchingOrdersFallbackToInjector(t *testing.T) {
+	r := NewAutoRespawner()
+	pi := NewPromptInjector()
+	r.WithPromptInjector(pi)
+
+	// No config marching orders set - should fall back to injector
+	prompt, source := r.getMarchingOrders("cc")
+
+	if source != "injector" {
+		t.Errorf("expected source 'injector', got %q", source)
+	}
+
+	// Should be the default marching orders from prompt injector
+	expected := pi.GetTemplate("default")
+	if prompt != expected {
+		t.Errorf("expected injector default template, got different prompt")
+	}
+}
+
+func TestGetMarchingOrdersBuiltinFallback(t *testing.T) {
+	r := NewAutoRespawner()
+	// No config and no injector
+
+	prompt, source := r.getMarchingOrders("cc")
+
+	if source != "builtin" {
+		t.Errorf("expected source 'builtin', got %q", source)
+	}
+
+	if prompt != DefaultMarchingOrders {
+		t.Errorf("expected DefaultMarchingOrders, got different prompt")
+	}
+}
+
+func TestNormalizeAgentType(t *testing.T) {
+	r := NewAutoRespawner()
+
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"cc", "cc"},
+		{"claude", "cc"},
+		{"claude-code", "cc"},
+		{"cod", "cod"},
+		{"codex", "cod"},
+		{"gmi", "gmi"},
+		{"gemini", "gmi"},
+		{"unknown", "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := r.normalizeAgentType(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeAgentType(%q) = %q, expected %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}

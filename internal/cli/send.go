@@ -458,6 +458,10 @@ func newSendCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&batchBroadcast, "broadcast", false, "Send same prompt to all agents simultaneously")
 	cmd.Flags().IntVar(&batchAgentIndex, "agent", -1, "Send to specific agent index only (-1 = round-robin)")
 
+	cmd.ValidArgsFunction = completeSessionArgs
+	_ = cmd.RegisterFlagCompletionFunc("pane", completePaneIndexes)
+	_ = cmd.RegisterFlagCompletionFunc("panes", completePaneIndexes)
+
 	return cmd
 }
 
@@ -1104,6 +1108,7 @@ Examples:
 	}
 
 	cmd.Flags().StringSliceVar(&tags, "tag", nil, "filter panes by tag (OR logic)")
+	cmd.ValidArgsFunction = completeSessionArgs
 
 	return cmd
 }

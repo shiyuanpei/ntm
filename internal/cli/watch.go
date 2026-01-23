@@ -85,6 +85,8 @@ Examples:
 	cmd.Flags().IntVar(&pollInterval, "interval", 250, "Poll interval in milliseconds")
 	cmd.Flags().StringVar(&watchPattern, "pattern", "", "File pattern to watch (e.g. '*.go')")
 	cmd.Flags().StringVar(&watchCommand, "command", "", "Command to send to agent on change")
+	cmd.ValidArgsFunction = completeSessionArgs
+	_ = cmd.RegisterFlagCompletionFunc("pane", completePaneIndexes)
 
 	return cmd
 }

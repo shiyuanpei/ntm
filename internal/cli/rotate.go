@@ -121,6 +121,8 @@ Examples:
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print action without executing")
 	cmd.Flags().IntVar(&timeout, "timeout", 300, "Timeout in seconds for auth completion")
 	cmd.Flags().BoolVar(&allLimited, "all-limited", false, "Rotate all rate-limited panes in the session")
+	cmd.ValidArgsFunction = completeSessionArgs
+	_ = cmd.RegisterFlagCompletionFunc("pane", completePaneIndexes)
 
 	// Add context rotation management subcommand
 	cmd.AddCommand(newRotateContextCmd())
