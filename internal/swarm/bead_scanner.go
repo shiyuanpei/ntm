@@ -137,6 +137,18 @@ func (bs *BeadScanner) Scan(ctx context.Context) (*ScanResult, error) {
 
 // ScanProject counts beads for a single project.
 func (bs *BeadScanner) ScanProject(ctx context.Context, projectPath string) (ProjectBeadCount, error) {
+	result := ProjectBeadCountFromPath(projectPath, 0)
+
+	if _, err := os.Stat(projectPath); err != nil {
+		return result, fmt.Errorf("project not found: %s", projectPath)
+	}
+
+	if !hasBeads(projectPath) {
+		bs.Logger.Debug("[BeadScanner] no_beads_dir",
+			"project", projectPath)
+		return result, nil
+	}
+
 	bs.Logger.Debug("[BeadScanner] Scanning project",
 		"project", projectPath)
 
@@ -146,14 +158,15 @@ func (bs *BeadScanner) ScanProject(ctx context.Context, projectPath string) (Pro
 			"project", projectPath,
 			"error", err)
 		// Return zero beads on error (not fatal)
-		return ProjectBeadCountFromPath(projectPath, 0), nil
+		return result, nil
 	}
 
 	bs.Logger.Debug("[BeadScanner] Bead count",
 		"project", projectPath,
 		"beads", count)
 
-	return ProjectBeadCountFromPath(projectPath, count), nil
+	result.OpenBeads = count
+	return result, nil
 }
 
 // discoverProjects finds all projects to scan.
@@ -167,14 +180,24 @@ func (bs *BeadScanner) discoverProjects() ([]string, error) {
 				path = filepath.Join(bs.BaseDir, p)
 			}
 			// Verify it exists
-			if _, err := os.Stat(path); err == nil {
-				paths = append(paths, path)
-			} else {
-				bs.Logger.Warn("[BeadScanner] Explicit project not found",
-					"project", p,
-					"path", path)
+			if _, err := os.Stat(path); err != nil {
+				bs.Logger.Debug("[BeadScanner] project_skipped",
+					"path", path,
+					"reason", "not_found")
+				continue
 			}
+			if !isProject(path) {
+				bs.Logger.Debug("[BeadScanner] project_skipped",
+					"path", path,
+					"reason", "missing_markers")
+				continue
+			}
+			bs.Logger.Debug("[BeadScanner] project_discovered",
+				"path", path)
+			paths = append(paths, path)
 		}
+		bs.Logger.Info("[BeadScanner] discovery_complete",
+			"count", len(paths))
 		return paths, nil
 	}
 
@@ -187,11 +210,17 @@ func (bs *BeadScanner) discoverProjects() ([]string, error) {
 	var paths []string
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			bs.Logger.Debug("[BeadScanner] project_skipped",
+				"path", filepath.Join(bs.BaseDir, entry.Name()),
+				"reason", "not_directory")
 			continue
 		}
 
 		// Skip hidden directories
 		if strings.HasPrefix(entry.Name(), ".") {
+			bs.Logger.Debug("[BeadScanner] project_skipped",
+				"path", filepath.Join(bs.BaseDir, entry.Name()),
+				"reason", "hidden")
 			continue
 		}
 
@@ -199,12 +228,19 @@ func (bs *BeadScanner) discoverProjects() ([]string, error) {
 
 		// Check if it looks like a project
 		if !isProject(projectPath) {
+			bs.Logger.Debug("[BeadScanner] project_skipped",
+				"path", projectPath,
+				"reason", "missing_markers")
 			continue
 		}
 
+		bs.Logger.Debug("[BeadScanner] project_discovered",
+			"path", projectPath)
 		paths = append(paths, projectPath)
 	}
 
+	bs.Logger.Info("[BeadScanner] discovery_complete",
+		"count", len(paths))
 	return paths, nil
 }
 
@@ -219,6 +255,18 @@ func isProject(path string) bool {
 		return true
 	}
 	return false
+}
+
+// hasBeads checks if a project has bead tracking enabled.
+func hasBeads(path string) bool {
+	beadsPath := filepath.Join(path, ".beads")
+	if _, err := os.Stat(beadsPath); err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(beadsPath, "issues.jsonl")); err != nil {
+		return false
+	}
+	return true
 }
 
 // scanProjectsConcurrently scans all projects with bounded parallelism.
@@ -294,9 +342,8 @@ func (bs *BeadScanner) scanProjectsConcurrently(ctx context.Context, projectPath
 // countBeads runs `br list --status open --json` and parses the output.
 func (bs *BeadScanner) countBeads(ctx context.Context, projectPath string) (int, error) {
 	// Check if .beads directory exists
-	beadsDir := filepath.Join(projectPath, ".beads")
-	if _, err := os.Stat(beadsDir); os.IsNotExist(err) {
-		// No .beads directory means no beads
+	if !hasBeads(projectPath) {
+		// No beads directory or issues.jsonl means no beads
 		return 0, nil
 	}
 

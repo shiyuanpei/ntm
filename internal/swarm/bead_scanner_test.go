@@ -73,6 +73,32 @@ func TestIsProject(t *testing.T) {
 	}
 }
 
+func TestHasBeads(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Missing .beads
+	if hasBeads(tmpDir) {
+		t.Error("expected hasBeads false without .beads")
+	}
+
+	// .beads without issues.jsonl
+	projDir := filepath.Join(tmpDir, "project")
+	if err := os.MkdirAll(filepath.Join(projDir, ".beads"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if hasBeads(projDir) {
+		t.Error("expected hasBeads false without issues.jsonl")
+	}
+
+	// .beads with issues.jsonl
+	if err := os.WriteFile(filepath.Join(projDir, ".beads", "issues.jsonl"), []byte("[]"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if !hasBeads(projDir) {
+		t.Error("expected hasBeads true with issues.jsonl")
+	}
+}
+
 func TestDiscoverProjects(t *testing.T) {
 	// Create temp directory structure
 	tmpDir := t.TempDir()
