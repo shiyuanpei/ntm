@@ -602,7 +602,7 @@ scrollback = 500
 
 	// Step 4: Run diagnose with fix (if available)
 	logger.LogSection("Step 4: Diagnose with fix")
-	out, err = logger.Exec("ntm", "--config", configPath, "--robot-diagnose", sessionName, "--diagnose-fix")
+	out, err = logger.Exec("ntm", "--config", configPath, "--robot-diagnose", sessionName, "--fix")
 	if err != nil {
 		logger.Log("[E2E-FIX] Diagnose with fix error: %v", err)
 	}
