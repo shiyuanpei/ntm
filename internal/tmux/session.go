@@ -29,10 +29,13 @@ var sessionNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 type AgentType string
 
 const (
-	AgentClaude AgentType = "cc"
-	AgentCodex  AgentType = "cod"
-	AgentGemini AgentType = "gmi"
-	AgentUser   AgentType = "user"
+	AgentClaude   AgentType = "cc"
+	AgentCodex    AgentType = "cod"
+	AgentGemini   AgentType = "gmi"
+	AgentCursor   AgentType = "cursor"
+	AgentWindsurf AgentType = "windsurf"
+	AgentAider    AgentType = "aider"
+	AgentUser     AgentType = "user"
 )
 
 // ProfileName returns the friendly display name for the agent type.
@@ -45,6 +48,12 @@ func (a AgentType) ProfileName() string {
 		return "Codex"
 	case AgentGemini:
 		return "Gemini"
+	case AgentCursor:
+		return "Cursor"
+	case AgentWindsurf:
+		return "Windsurf"
+	case AgentAider:
+		return "Aider"
 	case AgentUser:
 		return "User"
 	default:
@@ -98,7 +107,7 @@ func parseAgentFromTitle(title string) (AgentType, string, []string) {
 
 	// Validate agent type
 	switch agentType {
-	case AgentClaude, AgentCodex, AgentGemini:
+	case AgentClaude, AgentCodex, AgentGemini, AgentCursor, AgentWindsurf, AgentAider:
 		return agentType, variant, tags
 	default:
 		return AgentUser, "", nil
@@ -106,17 +115,41 @@ func parseAgentFromTitle(title string) (AgentType, string, []string) {
 }
 
 // detectAgentFromCommand checks the running command for known agent process names.
+// This is a fallback when the pane title doesn't match the NTM format.
 // Returns AgentUser if no agent is detected.
 func detectAgentFromCommand(command string) AgentType {
-	command = strings.ToLower(command)
-	switch {
-	case strings.Contains(command, "claude"):
+	cmd := strings.ToLower(command)
+
+	// Claude Code variants
+	if strings.Contains(cmd, "claude") {
 		return AgentClaude
-	case strings.Contains(command, "codex"):
+	}
+
+	// Codex CLI
+	if cmd == "codex" || strings.HasPrefix(cmd, "codex ") || strings.Contains(cmd, "/codex") {
 		return AgentCodex
-	case strings.Contains(command, "gemini"):
+	}
+
+	// Gemini CLI
+	if cmd == "gemini" || strings.HasPrefix(cmd, "gemini ") || strings.Contains(cmd, "/gemini") {
 		return AgentGemini
 	}
+
+	// Cursor
+	if strings.Contains(cmd, "cursor") {
+		return AgentCursor
+	}
+
+	// Windsurf
+	if strings.Contains(cmd, "windsurf") {
+		return AgentWindsurf
+	}
+
+	// Aider
+	if cmd == "aider" || strings.HasPrefix(cmd, "aider ") || strings.Contains(cmd, "/aider") {
+		return AgentAider
+	}
+
 	return AgentUser
 }
 
@@ -125,15 +158,38 @@ func detectAgentFromCommand(command string) AgentType {
 // where the process name doesn't reveal the agent type.
 // Returns AgentUser if no agent keyword is found.
 func detectAgentFromTitleKeywords(title string) AgentType {
-	title = strings.ToLower(title)
-	switch {
-	case strings.Contains(title, "claude"):
+	t := strings.ToLower(title)
+
+	// Claude Code variants
+	if strings.Contains(t, "claude") {
 		return AgentClaude
-	case strings.Contains(title, "codex"):
+	}
+
+	// Codex CLI
+	if strings.Contains(t, "codex") {
 		return AgentCodex
-	case strings.Contains(title, "gemini"):
+	}
+
+	// Gemini CLI
+	if strings.Contains(t, "gemini") {
 		return AgentGemini
 	}
+
+	// Cursor
+	if strings.Contains(t, "cursor") {
+		return AgentCursor
+	}
+
+	// Windsurf
+	if strings.Contains(t, "windsurf") {
+		return AgentWindsurf
+	}
+
+	// Aider
+	if strings.Contains(t, "aider") {
+		return AgentAider
+	}
+
 	return AgentUser
 }
 
