@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Dicklesworthstone/ntm/internal/tokens"
 )
 
 func TestNewPreambleEngine(t *testing.T) {
@@ -232,6 +234,17 @@ func TestGetSchemaContract(t *testing.T) {
 	}
 }
 
+func TestGetSchemaContract_ConfidenceLikelihoodGuidance(t *testing.T) {
+	schema := GetSchemaContract()
+
+	if !hasGuidanceLine(schema, "confidence:") {
+		t.Error("schema contract missing confidence guidance for numeric or high|medium|low")
+	}
+	if !hasGuidanceLine(schema, "likelihood:") {
+		t.Error("schema contract missing likelihood guidance for numeric or high|medium|low")
+	}
+}
+
 func TestPreambleEngine_Render_AllModes(t *testing.T) {
 	engine := NewPreambleEngine()
 
@@ -251,6 +264,30 @@ func TestPreambleEngine_Render_AllModes(t *testing.T) {
 
 		if !strings.Contains(result, mode.Name) {
 			t.Errorf("Render() missing mode name for %s (%s)", mode.ID, mode.Code)
+		}
+	}
+}
+
+func TestPreambleEngine_Render_AllModes_TokenBudget(t *testing.T) {
+	engine := NewPreambleEngine()
+
+	for _, mode := range EmbeddedModes {
+		mode := mode
+		data := &PreambleData{
+			Problem:  "Test problem",
+			TokenCap: 2000,
+			Mode:     &mode,
+		}
+
+		result, err := engine.Render(data)
+		if err != nil {
+			t.Errorf("Render() failed for mode %s (%s, %s): %v", mode.ID, mode.Code, mode.Tier, err)
+			continue
+		}
+
+		tokenCount := tokens.EstimateTokensWithLanguageHint(result, tokens.ContentMarkdown)
+		if tokenCount >= 2000 {
+			t.Errorf("preamble for %s exceeds token budget: %d", mode.ID, tokenCount)
 		}
 	}
 }
@@ -404,4 +441,14 @@ func TestPreambleEngine_Render_ModeMetadata(t *testing.T) {
 			t.Errorf("Render() missing mode metadata: %q", check)
 		}
 	}
+}
+
+func hasGuidanceLine(schema, key string) bool {
+	for _, line := range strings.Split(schema, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, key) && strings.Contains(trimmed, "high|medium|low") {
+			return true
+		}
+	}
+	return false
 }

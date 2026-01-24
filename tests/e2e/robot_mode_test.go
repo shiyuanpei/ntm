@@ -1846,6 +1846,10 @@ claude = "bash"
 
 // Skip tests if ntm binary is missing.
 func TestMain(m *testing.M) {
+	if os.Getenv("NTM_E2E_TESTS") == "" {
+		// E2E tests are opt-in to avoid long-running tmux workflows in default runs.
+		return
+	}
 	if _, err := exec.LookPath("ntm"); err != nil {
 		// ntm binary not on PATH; skip suite gracefully
 		return

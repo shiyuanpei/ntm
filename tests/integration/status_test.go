@@ -13,6 +13,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("NTM_INTEGRATION_TESTS") == "" {
+		// Integration tests are opt-in to avoid long-running tmux workflows in default runs.
+		return
+	}
 	if !tmux.DefaultClient.IsInstalled() {
 		// tmux is required for these integration tests
 		return

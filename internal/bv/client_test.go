@@ -1,9 +1,17 @@
 package bv
 
 import (
+	"os"
 	"testing"
 	"time"
 )
+
+func requireBVIntegration(t *testing.T) {
+	t.Helper()
+	if os.Getenv("NTM_BV_TESTS") == "" {
+		t.Skip("bv integration tests disabled, set NTM_BV_TESTS=1 to enable")
+	}
+}
 
 func TestNewBVClient(t *testing.T) {
 	client := NewBVClient()
@@ -79,6 +87,7 @@ func TestBVClientIsAvailable(t *testing.T) {
 }
 
 func TestBVClientGetRecommendations(t *testing.T) {
+	requireBVIntegration(t)
 	if !IsInstalled() {
 		t.Skip("bv not installed")
 	}
@@ -111,6 +120,7 @@ func TestBVClientGetRecommendations(t *testing.T) {
 }
 
 func TestBVClientGetRecommendationsWithLimit(t *testing.T) {
+	requireBVIntegration(t)
 	if !IsInstalled() {
 		t.Skip("bv not installed")
 	}
@@ -133,6 +143,7 @@ func TestBVClientGetRecommendationsWithLimit(t *testing.T) {
 }
 
 func TestBVClientGetRecommendationsFilterReady(t *testing.T) {
+	requireBVIntegration(t)
 	if !IsInstalled() {
 		t.Skip("bv not installed")
 	}
@@ -161,6 +172,7 @@ func TestBVClientGetRecommendationsFilterReady(t *testing.T) {
 }
 
 func TestBVClientGetInsights(t *testing.T) {
+	requireBVIntegration(t)
 	if !IsInstalled() {
 		t.Skip("bv not installed")
 	}
@@ -193,6 +205,7 @@ func TestBVClientGetInsights(t *testing.T) {
 }
 
 func TestBVClientGetQuickWins(t *testing.T) {
+	requireBVIntegration(t)
 	if !IsInstalled() {
 		t.Skip("bv not installed")
 	}
@@ -219,6 +232,7 @@ func TestBVClientGetQuickWins(t *testing.T) {
 }
 
 func TestBVClientGetBlockersToClear(t *testing.T) {
+	requireBVIntegration(t)
 	if !IsInstalled() {
 		t.Skip("bv not installed")
 	}
@@ -245,6 +259,7 @@ func TestBVClientGetBlockersToClear(t *testing.T) {
 }
 
 func TestBVClientCaching(t *testing.T) {
+	requireBVIntegration(t)
 	if !IsInstalled() {
 		t.Skip("bv not installed")
 	}

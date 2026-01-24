@@ -274,7 +274,7 @@ top_findings:
 risks:
   - risk: Description of the risk
     impact: critical|high|medium|low
-    likelihood: 0.0-1.0
+    likelihood: 0.0-1.0       # Likelihood (numeric or high|medium|low)
     mitigation: Suggested mitigation approach
     affected_areas:
       - area1
