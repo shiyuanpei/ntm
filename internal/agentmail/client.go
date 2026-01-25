@@ -320,7 +320,12 @@ func (c *Client) callTool(ctx context.Context, toolName string, args map[string]
 
 	// MCP tools/call responses are wrapped in a content envelope.
 	// Extract the actual data from structuredContent or content[0].text.
-	return extractMCPContent(rpcResp.Result), nil
+	// Extract actual data from MCP envelope
+	data, err := extractMCPContent(rpcResp.Result)
+	if err != nil {
+		return nil, NewAPIError(toolName, 0, err)
+	}
+	return data, nil
 }
 
 // mcpContentItem represents an item in the MCP content array.
@@ -339,29 +344,39 @@ type mcpResultEnvelope struct {
 // extractMCPContent extracts the actual payload from an MCP response envelope.
 // MCP wraps tool results in {"content":[...], "structuredContent":{...}, "isError":bool}.
 // This function returns the unwrapped data for direct JSON unmarshaling.
-func extractMCPContent(result json.RawMessage) json.RawMessage {
+// Returns an error if isError is true in the envelope.
+func extractMCPContent(result json.RawMessage) (json.RawMessage, error) {
 	if len(result) == 0 {
-		return result
+		return result, nil
 	}
 
 	var envelope mcpResultEnvelope
 	if err := json.Unmarshal(result, &envelope); err != nil {
 		// Not an MCP envelope, return as-is
-		return result
+		return result, nil
+	}
+
+	// Check for tool-level error
+	if envelope.IsError {
+		// Try to extract error message from content
+		if len(envelope.Content) > 0 && envelope.Content[0].Text != "" {
+			return nil, fmt.Errorf("tool error: %s", envelope.Content[0].Text)
+		}
+		return nil, fmt.Errorf("tool returned error")
 	}
 
 	// Prefer structuredContent if available (most reliable)
 	if len(envelope.StructuredContent) > 0 && string(envelope.StructuredContent) != "null" {
-		return envelope.StructuredContent
+		return envelope.StructuredContent, nil
 	}
 
 	// Fall back to content[0].text if structuredContent is missing
 	if len(envelope.Content) > 0 && envelope.Content[0].Type == "text" && envelope.Content[0].Text != "" {
-		return json.RawMessage(envelope.Content[0].Text)
+		return json.RawMessage(envelope.Content[0].Text), nil
 	}
 
 	// Neither found, return original (may be raw data without envelope)
-	return result
+	return result, nil
 }
 
 // callToolWithTimeout calls a tool with a specific timeout.

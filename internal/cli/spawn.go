@@ -1015,6 +1015,34 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		}
 	}
 
+	// Initialize Agent Mail client and registry for pre-registration
+	// This allows us to pass AGENT_NAME to agents so they use the same identity
+	var amClient *agentmail.Client
+	var amRegistry *agentmail.SessionAgentRegistry
+	if cfg == nil || cfg.AgentMail.Enabled {
+		var amOpts []agentmail.Option
+		if cfg != nil {
+			if cfg.AgentMail.URL != "" {
+				amOpts = append(amOpts, agentmail.WithBaseURL(cfg.AgentMail.URL))
+			}
+			if cfg.AgentMail.Token != "" {
+				amOpts = append(amOpts, agentmail.WithToken(cfg.AgentMail.Token))
+			}
+		}
+		amClient = agentmail.NewClient(amOpts...)
+		if amClient.IsAvailable() {
+			// Load existing registry or create new one
+			amRegistry, _ = agentmail.LoadSessionAgentRegistry(opts.Session, dir)
+			if amRegistry == nil {
+				amRegistry = agentmail.NewSessionAgentRegistry(opts.Session, dir)
+			}
+			// Ensure project exists
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			amClient.EnsureProject(ctx, dir)
+			cancel()
+		}
+	}
+
 	// Launch agents using flattened specs (preserves model info for pane naming)
 	for _, agent := range opts.Agents {
 		if agentNum >= len(panes) {
@@ -1144,6 +1172,50 @@ func spawnSessionLogic(opts SpawnOptions) error {
 		})
 		if err != nil {
 			return outputError(fmt.Errorf("generating command for %s agent: %w", agent.Type, err))
+		}
+
+		// Pre-register agent with Agent Mail to get/reuse identity
+		// Pass AGENT_NAME env var so the agent uses the same identity
+		if amClient != nil && amClient.IsAvailable() && amRegistry != nil {
+			if envVars == nil {
+				envVars = make(map[string]string)
+			}
+			program := agentTypeToProgram(string(agent.Type))
+			model := resolvedModel
+
+			regCtx, regCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			var registered *agentmail.Agent
+			var regErr error
+
+			// Check if we have an existing identity for this pane
+			if existingName, ok := amRegistry.GetAgent(title, pane.ID); ok && existingName != "" {
+				// Reuse existing identity
+				registered, regErr = amClient.RegisterAgent(regCtx, agentmail.RegisterAgentOptions{
+					ProjectKey: dir,
+					Program:    program,
+					Model:      model,
+					Name:       existingName,
+				})
+			} else {
+				// Create new identity
+				registered, regErr = amClient.CreateAgentIdentity(regCtx, agentmail.RegisterAgentOptions{
+					ProjectKey: dir,
+					Program:    program,
+					Model:      model,
+				})
+			}
+			regCancel()
+
+			if regErr == nil && registered != nil {
+				envVars["AGENT_NAME"] = registered.Name
+				amRegistry.AddAgent(title, pane.ID, registered.Name)
+			}
+		}
+
+		if agent.Type == AgentTypeCodex {
+			if name, ok := envVars["AGENT_NAME"]; ok && name != "" {
+				agentCmd = appendCodexAgentNameHint(agentCmd, name)
+			}
 		}
 
 		// Apply plugin env vars if any
@@ -1405,6 +1477,15 @@ func spawnSessionLogic(opts SpawnOptions) error {
 						}
 					}
 				}
+			}
+		}
+	}
+
+	// Save Agent Mail registry after all agents are launched
+	if amRegistry != nil && amRegistry.Count() > 0 {
+		if err := agentmail.SaveSessionAgentRegistry(amRegistry); err != nil {
+			if !IsJSONOutput() {
+				output.PrintWarningf("Failed to persist agent registry: %v", err)
 			}
 		}
 	}
@@ -1778,8 +1859,11 @@ func registerSpawnedAgents(workingDir, sessionName string, agents []spawnedAgent
 		AgentMap:  make(map[string]string),
 	}
 
-	// Create registry for persistence
-	registry := agentmail.NewSessionAgentRegistry(sessionName, workingDir)
+	// Load existing registry or create new one for persistence
+	registry, _ := agentmail.LoadSessionAgentRegistry(sessionName, workingDir)
+	if registry == nil {
+		registry = agentmail.NewSessionAgentRegistry(sessionName, workingDir)
+	}
 
 	// Ensure project exists
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1806,11 +1890,26 @@ func registerSpawnedAgents(workingDir, sessionName string, agents []spawnedAgent
 		}
 
 		regCtx, regCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		registered, err := client.CreateAgentIdentity(regCtx, agentmail.RegisterAgentOptions{
-			ProjectKey: workingDir,
-			Program:    program,
-			Model:      model,
-		})
+		var registered *agentmail.Agent
+		var err error
+
+		// Check if we have an existing identity for this pane
+		if existingName, ok := registry.GetAgent(agent.paneTitle, agent.paneID); ok && existingName != "" {
+			// Reuse existing identity
+			registered, err = client.RegisterAgent(regCtx, agentmail.RegisterAgentOptions{
+				ProjectKey: workingDir,
+				Program:    program,
+				Model:      model,
+				Name:       existingName,
+			})
+		} else {
+			// Create new identity
+			registered, err = client.CreateAgentIdentity(regCtx, agentmail.RegisterAgentOptions{
+				ProjectKey: workingDir,
+				Program:    program,
+				Model:      model,
+			})
+		}
 		regCancel()
 
 		if err != nil {
@@ -2711,6 +2810,17 @@ func sendInitPromptToReadyAgents(session, prompt string) (int, error) {
 	}
 
 	return agentsReached, nil
+}
+
+func appendCodexAgentNameHint(cmd, agentName string) string {
+	if agentName == "" {
+		return cmd
+	}
+	if strings.Contains(cmd, "developer_instructions") {
+		return cmd
+	}
+	instruction := fmt.Sprintf("Your Agent Mail name is %s. Always use this exact name when calling Agent Mail tools or reporting your identity. Do not create or adopt a different name.", agentName)
+	return cmd + " -c " + tmux.ShellQuote(fmt.Sprintf("developer_instructions=%q", instruction))
 }
 
 // runAssignmentPhase executes the assignment phase after spawn.
