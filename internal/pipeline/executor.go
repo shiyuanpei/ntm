@@ -1157,7 +1157,8 @@ func (e *Executor) selectAndMarkPane(step *Step, usedPanes map[string]bool, pane
 		targetType := normalizeAgentType(step.Agent)
 		filtered := make([]robot.ScoredAgent, 0, len(agents))
 		for _, a := range agents {
-			if a.AgentType == targetType {
+			// Compare normalized types to handle both short (cc/cod/gmi) and long (claude/codex/gemini) forms
+			if normalizeAgentType(a.AgentType) == targetType {
 				filtered = append(filtered, a)
 			}
 		}
@@ -1251,7 +1252,8 @@ func (e *Executor) selectPane(step *Step) (paneID string, agentType string, err 
 		targetType := normalizeAgentType(step.Agent)
 		filtered := make([]robot.ScoredAgent, 0, len(agents))
 		for _, a := range agents {
-			if a.AgentType == targetType {
+			// Compare normalized types to handle both short (cc/cod/gmi) and long (claude/codex/gemini) forms
+			if normalizeAgentType(a.AgentType) == targetType {
 				filtered = append(filtered, a)
 			}
 		}

@@ -497,6 +497,10 @@ func (s *AgentScorer) ScoreAgents(session string, prompt string) ([]ScoredAgent,
 		// Skip user pane
 		// Use detectAgentType which maps short forms (cc->claude, cod->codex, gmi->gemini)
 		agentType := detectAgentType(pane.Title)
+		// Fall back to pane.Type if title-based detection fails (e.g., custom titles like "✳ Code Analysis")
+		if agentType == "" || agentType == "unknown" {
+			agentType = agentTypeFromPaneType(pane.Type)
+		}
 		if agentType == "" || agentType == "unknown" {
 			continue
 		}
