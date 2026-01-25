@@ -6,25 +6,47 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/Dicklesworthstone/ntm/internal/config"
 	"github.com/Dicklesworthstone/ntm/internal/tmux"
 )
 
 // WorktreeService provides high-level git worktree isolation services
 type WorktreeService struct {
-	managers map[string]*WorktreeManager // project path -> manager
-	config   *config.Config
+	managers     map[string]*WorktreeManager // project path -> manager
+	projectsBase string                      // base directory for projects
 }
 
 // NewWorktreeService creates a new worktree service
-func NewWorktreeService(cfg *config.Config) *WorktreeService {
+func NewWorktreeService(projectsBase string) *WorktreeService {
 	return &WorktreeService{
-		managers: make(map[string]*WorktreeManager),
-		config:   cfg,
+		managers:     make(map[string]*WorktreeManager),
+		projectsBase: projectsBase,
 	}
+}
+
+// expandHome expands ~ to home directory
+func expandHome(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+		return path
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
+// getProjectDir returns the project directory for a session
+func (ws *WorktreeService) getProjectDir(session string) string {
+	base := expandHome(ws.projectsBase)
+	return filepath.Join(base, session)
 }
 
 // AutoProvisionRequest represents a request for automatic worktree provisioning
@@ -83,7 +105,7 @@ func (ws *WorktreeService) AutoProvisionSession(ctx context.Context, sessionName
 	startTime := time.Now()
 
 	// Get project directory for this session
-	projectDir := ws.config.GetProjectDir(sessionName)
+	projectDir := ws.getProjectDir(sessionName)
 	if projectDir == "" {
 		// Try to detect from current working directory
 		if cwd, err := os.Getwd(); err == nil && IsGitRepository(cwd) {
@@ -167,7 +189,7 @@ func (ws *WorktreeService) AutoProvisionSession(ctx context.Context, sessionName
 
 // CleanupSessionWorktrees removes worktrees associated with a specific session
 func (ws *WorktreeService) CleanupSessionWorktrees(ctx context.Context, sessionName string) error {
-	projectDir := ws.config.GetProjectDir(sessionName)
+	projectDir := ws.getProjectDir(sessionName)
 	if projectDir == "" || !IsGitRepository(projectDir) {
 		return nil // Nothing to clean up
 	}
@@ -209,7 +231,7 @@ func (ws *WorktreeService) CleanupSessionWorktrees(ctx context.Context, sessionN
 
 // GetSessionWorktreeStatus returns the status of worktrees for a session
 func (ws *WorktreeService) GetSessionWorktreeStatus(ctx context.Context, sessionName string) (map[string]*WorktreeInfo, error) {
-	projectDir := ws.config.GetProjectDir(sessionName)
+	projectDir := ws.getProjectDir(sessionName)
 	if projectDir == "" || !IsGitRepository(projectDir) {
 		return make(map[string]*WorktreeInfo), nil
 	}

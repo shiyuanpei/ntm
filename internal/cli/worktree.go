@@ -397,7 +397,7 @@ func runWorktreeAutoProvision(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	service := git.NewWorktreeService(cfg)
+	service := git.NewWorktreeService(cfg.ProjectsBase)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -468,7 +468,7 @@ func runWorktreeStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	service := git.NewWorktreeService(cfg)
+	service := git.NewWorktreeService(cfg.ProjectsBase)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -518,7 +518,7 @@ func runWorktreeCleanSession(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	service := git.NewWorktreeService(cfg)
+	service := git.NewWorktreeService(cfg.ProjectsBase)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
