@@ -318,7 +318,50 @@ func (c *Client) callTool(ctx context.Context, toolName string, args map[string]
 		return nil, NewAPIError(toolName, 0, mapJSONRPCError(rpcResp.Error))
 	}
 
-	return rpcResp.Result, nil
+	// MCP tools/call responses are wrapped in a content envelope.
+	// Extract the actual data from structuredContent or content[0].text.
+	return extractMCPContent(rpcResp.Result), nil
+}
+
+// mcpContentItem represents an item in the MCP content array.
+type mcpContentItem struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// mcpResultEnvelope represents the MCP tools/call result wrapper.
+type mcpResultEnvelope struct {
+	Content           []mcpContentItem `json:"content"`
+	StructuredContent json.RawMessage  `json:"structuredContent"`
+	IsError           bool             `json:"isError"`
+}
+
+// extractMCPContent extracts the actual payload from an MCP response envelope.
+// MCP wraps tool results in {"content":[...], "structuredContent":{...}, "isError":bool}.
+// This function returns the unwrapped data for direct JSON unmarshaling.
+func extractMCPContent(result json.RawMessage) json.RawMessage {
+	if len(result) == 0 {
+		return result
+	}
+
+	var envelope mcpResultEnvelope
+	if err := json.Unmarshal(result, &envelope); err != nil {
+		// Not an MCP envelope, return as-is
+		return result
+	}
+
+	// Prefer structuredContent if available (most reliable)
+	if len(envelope.StructuredContent) > 0 && string(envelope.StructuredContent) != "null" {
+		return envelope.StructuredContent
+	}
+
+	// Fall back to content[0].text if structuredContent is missing
+	if len(envelope.Content) > 0 && envelope.Content[0].Type == "text" && envelope.Content[0].Text != "" {
+		return json.RawMessage(envelope.Content[0].Text)
+	}
+
+	// Neither found, return original (may be raw data without envelope)
+	return result
 }
 
 // callToolWithTimeout calls a tool with a specific timeout.
