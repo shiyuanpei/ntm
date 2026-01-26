@@ -1218,6 +1218,13 @@ func spawnSessionLogic(opts SpawnOptions) error {
 			}
 		}
 
+		// Inject agent name into Claude Code via --append-system-prompt
+		if agent.Type == AgentTypeClaude {
+			if name, ok := envVars["AGENT_NAME"]; ok && name != "" {
+				agentCmd = appendClaudeAgentNameHint(agentCmd, name)
+			}
+		}
+
 		// Apply plugin env vars if any
 		if len(envVars) > 0 {
 			var envPrefix string
@@ -2821,6 +2828,17 @@ func appendCodexAgentNameHint(cmd, agentName string) string {
 	}
 	instruction := fmt.Sprintf("Your Agent Mail name is %s. Always use this exact name when calling Agent Mail tools or reporting your identity. Do not create or adopt a different name.", agentName)
 	return cmd + " -c " + tmux.ShellQuote(fmt.Sprintf("developer_instructions=%q", instruction))
+}
+
+func appendClaudeAgentNameHint(cmd, agentName string) string {
+	if agentName == "" {
+		return cmd
+	}
+	if strings.Contains(cmd, "--append-system-prompt") {
+		return cmd
+	}
+	instruction := fmt.Sprintf("Your Agent Mail name is %s. When calling macro_start_session or any Agent Mail registration tools, you MUST pass agent_name=\"%s\" to reuse this identity. Do not create or adopt a different name.", agentName, agentName)
+	return cmd + " --append-system-prompt " + tmux.ShellQuote(instruction)
 }
 
 // runAssignmentPhase executes the assignment phase after spawn.

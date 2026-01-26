@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 )
 
 // EnsureProject ensures a project exists for the given path.
@@ -432,7 +433,9 @@ func (c *Client) ListReservations(ctx context.Context, projectKey, agentName str
 }
 
 // StartSession is a macro that starts a project session (ensure project, register agent, fetch inbox).
-func (c *Client) StartSession(ctx context.Context, projectKey, program, model, taskDescription string) (*SessionStartResult, error) {
+// If agentName is provided, it reuses that identity instead of creating a new one.
+// If agentName is empty, it automatically checks the AGENT_NAME environment variable.
+func (c *Client) StartSession(ctx context.Context, projectKey, program, model, taskDescription, agentName string) (*SessionStartResult, error) {
 	args := map[string]interface{}{
 		"human_key": projectKey,
 		"program":   program,
@@ -440,6 +443,13 @@ func (c *Client) StartSession(ctx context.Context, projectKey, program, model, t
 	}
 	if taskDescription != "" {
 		args["task_description"] = taskDescription
+	}
+	// Use provided agentName, or fall back to AGENT_NAME env var
+	if agentName == "" {
+		agentName = os.Getenv("AGENT_NAME")
+	}
+	if agentName != "" {
+		args["agent_name"] = agentName
 	}
 
 	result, err := c.callTool(ctx, "macro_start_session", args)
