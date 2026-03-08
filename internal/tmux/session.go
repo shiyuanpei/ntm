@@ -176,6 +176,34 @@ func detectAgentFromCommand(command string) AgentType {
 	return AgentUser
 }
 
+// detectAgentFromTitleKeywords checks pane title for agent type keywords.
+// This is a fallback for agents that run via interpreters where the process name
+// doesn't reliably reveal the agent type.
+func detectAgentFromTitleKeywords(title string) AgentType {
+	t := strings.ToLower(title)
+
+	if strings.Contains(t, "claude") {
+		return AgentClaude
+	}
+	if strings.Contains(t, "codex") {
+		return AgentCodex
+	}
+	if strings.Contains(t, "gemini") {
+		return AgentGemini
+	}
+	if strings.Contains(t, "cursor") {
+		return AgentCursor
+	}
+	if strings.Contains(t, "windsurf") {
+		return AgentWindsurf
+	}
+	if strings.Contains(t, "aider") {
+		return AgentAider
+	}
+
+	return AgentUser
+}
+
 // IsInstalled checks if tmux is available
 func IsInstalled() bool {
 	return DefaultClient.IsInstalled()
@@ -397,12 +425,14 @@ func (c *Client) GetPanesContext(ctx context.Context, session string) ([]Pane, e
 		// Format: {session}__{type}_{index} or {session}__{type}_{index}_{variant}
 		pane.Type, pane.NTMIndex, pane.Variant, pane.Tags = parseAgentFromTitle(pane.Title)
 
-		// Fallback: if title didn't match NTM format, try detecting from process command
-		// This handles cases where shell prompts or tmux hooks change the pane title
-		if pane.Type == AgentUser && pane.Command != "" {
-			if detected := detectAgentFromCommand(pane.Command); detected != AgentUser {
-				pane.Type = detected
-			}
+		// Fallback chain for agent detection when NTM title format doesn't match:
+		// 1. Try process-based detection (checks command for "claude", "codex", "gemini")
+		// 2. Try title keyword detection (for agents like Gemini that run via bun)
+		if pane.Type == AgentUser {
+			pane.Type = detectAgentFromCommand(pane.Command)
+		}
+		if pane.Type == AgentUser {
+			pane.Type = detectAgentFromTitleKeywords(pane.Title)
 		}
 
 		panes = append(panes, pane)
@@ -1355,6 +1385,16 @@ func (c *Client) GetPanesWithActivityContext(ctx context.Context, session string
 
 		// Parse pane title using regex to extract type, index, variant, and tags
 		pane.Type, pane.NTMIndex, pane.Variant, pane.Tags = parseAgentFromTitle(pane.Title)
+
+		// Fallback chain for agent detection when NTM title format doesn't match:
+		// 1. Try process-based detection (checks command for "claude", "codex", "gemini")
+		// 2. Try title keyword detection (for agents like Gemini that run via bun)
+		if pane.Type == AgentUser {
+			pane.Type = detectAgentFromCommand(pane.Command)
+		}
+		if pane.Type == AgentUser {
+			pane.Type = detectAgentFromTitleKeywords(pane.Title)
+		}
 
 		panes = append(panes, PaneActivity{
 			Pane:         pane,
